@@ -63,6 +63,9 @@ import type {
   TaxonomyBehavior,
   Transaction,
   TransactionKind,
+  TrendMode,
+  TrendPoint,
+  TrendReport,
   UserProfile
 } from "./types";
 import { AUTOPAY_DURATION_MONTH_OPTIONS, AUTOPAY_SUBCATEGORY_ID } from "../shared/finance";
@@ -429,7 +432,9 @@ export default function App() {
               requestConfirm={requestConfirm}
             />
           )}
-          {activePage === "reports" && <ReportsPage selectedAccountId={selectedAccountId} refreshKey={refreshKey} />}
+          {activePage === "reports" && (
+            <ReportsPage selectedAccountId={selectedAccountId} categoryTypes={categoryTypes} refreshKey={refreshKey} />
+          )}
           {activePage === "budgets" && (
             <BudgetPlannerPage
               refreshKey={refreshKey}
@@ -1847,9 +1852,11 @@ function ImportTransactionsModal({
 
 function ReportsPage({
   selectedAccountId,
+  categoryTypes,
   refreshKey
 }: {
   selectedAccountId: string;
+  categoryTypes: CategoryType[];
   refreshKey: number;
 }) {
   const initialMonth = currentMonth();
@@ -1860,6 +1867,39 @@ function ReportsPage({
   const [reportRetryKey, setReportRetryKey] = useState(0);
   const [selectedTypeId, setSelectedTypeId] = useState("");
   const rangeIsValid = from <= to;
+  const trendTypes = categoryTypes.filter((type) => type.behavior !== "card_payment");
+  const [trendMode, setTrendMode] = useState<TrendMode>("month");
+  const [trendStyle, setTrendStyle] = useState<"bar" | "line">("bar");
+  const [trendTypeId, setTrendTypeId] = useState(
+    () => trendTypes.find((type) => type.behavior === "expense")?.id ?? trendTypes[0]?.id ?? ""
+  );
+  const [trend, setTrend] = useState<TrendReport | null>(null);
+  const [trendError, setTrendError] = useState("");
+
+  useEffect(() => {
+    if (trendTypeId && trendTypes.some((type) => type.id === trendTypeId)) return;
+    setTrendTypeId(trendTypes[0]?.id ?? "");
+  }, [trendTypes, trendTypeId]);
+
+  useEffect(() => {
+    if (!trendTypeId) {
+      setTrend(null);
+      return;
+    }
+    let active = true;
+    setTrend(null);
+    setTrendError("");
+    Api.trendReport(trendTypeId, trendMode, selectedAccountId || undefined)
+      .then((next) => {
+        if (active) setTrend(next);
+      })
+      .catch((error: unknown) => {
+        if (active) setTrendError(error instanceof Error ? error.message : "Could not load the trend.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [trendTypeId, trendMode, selectedAccountId, refreshKey]);
 
   useEffect(() => {
     if (!rangeIsValid) {
@@ -1951,7 +1991,153 @@ function ReportsPage({
           </>
         )}
       </Panel>
+
+      <Panel title="Trends">
+        <div className="trend-controls">
+          <div className="segmented-control">
+            <button type="button" className={trendMode === "month" ? "active" : ""} onClick={() => setTrendMode("month")}>
+              Month on month
+            </button>
+            <button type="button" className={trendMode === "year" ? "active" : ""} onClick={() => setTrendMode("year")}>
+              Year on year
+            </button>
+          </div>
+          <div className="segmented-control">
+            <button type="button" className={trendStyle === "bar" ? "active" : ""} onClick={() => setTrendStyle("bar")}>
+              Bar
+            </button>
+            <button type="button" className={trendStyle === "line" ? "active" : ""} onClick={() => setTrendStyle("line")}>
+              Line
+            </button>
+          </div>
+          <label className="control-field toolbar-control trend-type-control">
+            <span className="control-label">Type</span>
+            <select value={trendTypeId} onChange={(event) => setTrendTypeId(event.target.value)}>
+              {trendTypes.map((type) => (
+                <option key={type.id} value={type.id}>
+                  {type.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {trendError ? (
+          <EmptyState text={trendError} />
+        ) : !trendTypeId ? (
+          <EmptyState text="Add a Type in Categories to see trends." />
+        ) : !trend ? (
+          <PanelLoader label="Loading trend" />
+        ) : trend.points.every((point) => point.amountPaise === 0) ? (
+          <EmptyState
+            text={`No ${trend.typeName} recorded ${trendMode === "month" ? "this year" : "yet"}.`}
+          />
+        ) : (
+          <>
+            <p className="helper-text trend-caption">
+              {trend.typeName} · {trendMode === "month" ? `${new Date().getFullYear()}, January to date` : "by year"}
+            </p>
+            <TrendChart points={trend.points} variant={trendStyle} color={trend.color} />
+          </>
+        )}
+      </Panel>
     </div>
+  );
+}
+
+function compactINR(paise: number) {
+  const rupees = paise / 100;
+  if (rupees >= 10000000) return `₹${(rupees / 10000000).toFixed(1).replace(/\.0$/, "")}Cr`;
+  if (rupees >= 100000) return `₹${(rupees / 100000).toFixed(1).replace(/\.0$/, "")}L`;
+  if (rupees >= 1000) return `₹${(rupees / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  return `₹${Math.round(rupees)}`;
+}
+
+function TrendChart({
+  points,
+  variant,
+  color
+}: {
+  points: TrendPoint[];
+  variant: "bar" | "line";
+  color: string;
+}) {
+  const width = 760;
+  const height = 300;
+  const pad = { top: 30, right: 14, bottom: 32, left: 14 };
+  const innerWidth = width - pad.left - pad.right;
+  const innerHeight = height - pad.top - pad.bottom;
+  const max = Math.max(...points.map((point) => point.amountPaise), 1);
+  const step = innerWidth / points.length;
+  const baseline = pad.top + innerHeight;
+
+  const centers = points.map((point, index) => ({
+    ...point,
+    x: pad.left + step * index + step / 2,
+    y: baseline - (point.amountPaise / max) * innerHeight
+  }));
+
+  return (
+    <svg className="trend-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Trend chart">
+      {[0.25, 0.5, 0.75].map((fraction) => (
+        <line
+          key={fraction}
+          className="trend-gridline"
+          x1={pad.left}
+          x2={width - pad.right}
+          y1={baseline - innerHeight * fraction}
+          y2={baseline - innerHeight * fraction}
+        />
+      ))}
+      <line className="trend-axis" x1={pad.left} x2={width - pad.right} y1={baseline} y2={baseline} />
+
+      {variant === "bar" ? (
+        centers.map((point) => {
+          const barWidth = Math.min(step * 0.55, 52);
+          const barHeight = Math.max(baseline - point.y, point.amountPaise > 0 ? 2 : 0);
+          return (
+            <g key={point.label}>
+              <title>{`${point.label}: ${formatINR(point.amountPaise)}`}</title>
+              <rect
+                x={point.x - barWidth / 2}
+                y={baseline - barHeight}
+                width={barWidth}
+                height={barHeight}
+                rx={5}
+                fill={color}
+              />
+            </g>
+          );
+        })
+      ) : (
+        <>
+          <polyline
+            className="trend-line"
+            stroke={color}
+            points={centers.map((point) => `${point.x},${point.y}`).join(" ")}
+          />
+          {centers.map((point) => (
+            <g key={point.label}>
+              <title>{`${point.label}: ${formatINR(point.amountPaise)}`}</title>
+              <circle cx={point.x} cy={point.y} r={4.5} fill={color} />
+            </g>
+          ))}
+        </>
+      )}
+
+      {centers.map((point) => (
+        <g key={`labels-${point.label}`}>
+          {point.amountPaise > 0 && (
+            <text className="trend-value" x={point.x} y={point.y - 9} textAnchor="middle">
+              {compactINR(point.amountPaise)}
+            </text>
+          )}
+          <text className="trend-label" x={point.x} y={height - 10} textAnchor="middle">
+            {point.label}
+          </text>
+        </g>
+      ))}
+    </svg>
   );
 }
 

@@ -30,6 +30,7 @@ import {
   getCurrentBatch,
   getMonthlyReport,
   getOverview,
+  getTrendReport,
   getProfile,
   getSettings,
   importTransactionsWorkbook,
@@ -253,6 +254,15 @@ app.get("/api/reports/monthly", async (request) => {
     query.month,
     blankToUndefined(query.from),
     blankToUndefined(query.to)
+  );
+});
+
+app.get("/api/reports/trends", async (request) => {
+  const query = request.query as { accountId?: string; typeId?: string; mode?: string };
+  return getTrendReport(
+    blankToUndefined(query.accountId),
+    query.typeId ?? "",
+    query.mode === "year" ? "year" : "month"
   );
 });
 

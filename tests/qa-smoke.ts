@@ -1147,6 +1147,69 @@ test("rolls back Excel-created records when transaction insertion fails", async 
   );
 });
 
+test("builds month-on-month and year-on-year trend reports per Type", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Trend Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 500_000_00
+  });
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const currentMonth = `${year}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+  services.createTransaction({
+    date: `${year}-01-15`,
+    accountId: bank.id,
+    method: "upi",
+    merchant: "Trend groceries Jan",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 3_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+  services.createTransaction({
+    date: `${currentMonth}-10`,
+    accountId: bank.id,
+    method: "upi",
+    merchant: "Trend groceries now",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 2_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  const monthly = services.getTrendReport(bank.id, typeId("Expense"), "month");
+  assert(monthly.points.length === now.getMonth() + 1, "Month trend should span January through the current month.");
+  assert(monthly.points[0].amountPaise === 3_000_00, "January bucket should hold the January expense.");
+  assert(
+    monthly.points[monthly.points.length - 1].amountPaise === 2_000_00,
+    "The current month bucket should hold this month's expense."
+  );
+  assert(
+    monthly.points.slice(1, -1).every((point) => point.amountPaise === 0),
+    "Months without expenses should be zero."
+  );
+
+  const yearly = services.getTrendReport(bank.id, typeId("Expense"), "year");
+  assert(yearly.points.length >= 1, "Year trend should include at least the current year.");
+  assert(
+    yearly.points[yearly.points.length - 1].amountPaise === 5_000_00,
+    "The current year bucket should total both expenses."
+  );
+
+  const income = services.getTrendReport(bank.id, typeId("Income"), "month");
+  assert(
+    income.points.every((point) => point.amountPaise === 0),
+    "Income trend for this account should be zero when only expenses exist."
+  );
+
+  await assertRejects("unknown trend type", () => services.getTrendReport(undefined, "type_missing", "month"));
+});
+
 let failed = 0;
 
 for (const item of tests) {

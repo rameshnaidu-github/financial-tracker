@@ -862,6 +862,58 @@ a {
   justify-content: flex-end;
 }
 
+.trend-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.trend-type-control {
+  min-width: 190px;
+}
+
+.trend-caption {
+  margin-bottom: 10px;
+}
+
+.trend-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.trend-gridline {
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
+}
+
+.trend-axis {
+  stroke: var(--line-strong);
+  stroke-width: 1.4;
+}
+
+.trend-line {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.trend-value {
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.trend-label {
+  fill: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .faq-intro {
   margin-bottom: 14px;
 }

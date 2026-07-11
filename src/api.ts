@@ -13,6 +13,7 @@ import type {
   Subcategory,
   Overview,
   Transaction,
+  TrendReport,
   UserProfile
 } from "./types";
 
@@ -154,6 +155,11 @@ export const Api = {
     if (from) params.set("from", from);
     if (to) params.set("to", to);
     return api<MonthlyReport>(`/api/reports/monthly?${params}`);
+  },
+  trendReport: (typeId: string, mode: "month" | "year", accountId?: string) => {
+    const params = new URLSearchParams({ typeId, mode });
+    if (accountId) params.set("accountId", accountId);
+    return api<TrendReport>(`/api/reports/trends?${params}`);
   },
   budgetPlan: (month?: string) => {
     const params = new URLSearchParams();

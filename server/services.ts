@@ -1346,6 +1346,58 @@ export function deleteBudgetLine(id: string) {
   return { ok: true };
 }
 
+export type TrendMode = "month" | "year";
+
+export type TrendPoint = {
+  label: string;
+  amountPaise: number;
+};
+
+export type TrendReport = {
+  mode: TrendMode;
+  typeId: string;
+  typeName: string;
+  color: string;
+  points: TrendPoint[];
+};
+
+export function getTrendReport(
+  accountId: string | undefined,
+  typeId: string,
+  mode: TrendMode
+): TrendReport {
+  const type = requireCategoryType(typeId);
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const points: TrendPoint[] = [];
+
+  const amountForType = (report: ReturnType<typeof getMonthlyReport>) =>
+    report.types.find((item) => item.typeId === typeId)?.amountPaise ?? 0;
+
+  if (mode === "month") {
+    for (let index = 0; index <= now.getMonth(); index += 1) {
+      const month = `${currentYear}-${String(index + 1).padStart(2, "0")}`;
+      points.push({
+        label: new Date(currentYear, index, 1).toLocaleDateString("en-IN", { month: "short" }),
+        amountPaise: amountForType(getMonthlyReport(accountId, month))
+      });
+    }
+  } else {
+    const firstRow = asRecord<{ first: string | null }>(
+      db.prepare("SELECT MIN(date) AS first FROM transactions").get()
+    );
+    const firstYear = firstRow?.first ? Number(firstRow.first.slice(0, 4)) : currentYear;
+    for (let year = Math.min(firstYear, currentYear); year <= currentYear; year += 1) {
+      points.push({
+        label: String(year),
+        amountPaise: amountForType(getMonthlyReport(accountId, `${year}-01`, `${year}-01-01`, `${year}-12-31`))
+      });
+    }
+  }
+
+  return { mode, typeId, typeName: type.name, color: type.color, points };
+}
+
 export function getMonthlyReport(
   accountId?: string,
   month = currentMonth(),
