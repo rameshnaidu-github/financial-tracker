@@ -411,7 +411,8 @@ a {
 }
 
 .control-field select,
-.control-field input[type="date"] {
+.control-field input[type="date"],
+.control-field input[type="month"] {
   appearance: none;
   width: 100%;
   min-height: 24px;
@@ -423,7 +424,8 @@ a {
   box-shadow: none;
 }
 
-.control-field input[type="date"] {
+.control-field input[type="date"],
+.control-field input[type="month"] {
   padding-right: 0;
 }
 
@@ -568,6 +570,72 @@ a {
 
 .overview-report-section {
   display: grid;
+}
+
+.overview-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.collapse-all-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.collapse-all-icon {
+  transition: transform 160ms ease;
+}
+
+.collapse-all-icon.expanded {
+  transform: rotate(180deg);
+}
+
+.overview-budget-alert {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(220, 38, 38, 0.28);
+  border-radius: 8px;
+  background: rgba(220, 38, 38, 0.07);
+  padding: 14px 16px;
+}
+
+.budget-alert-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+  font-weight: 900;
+}
+
+.budget-alert-link {
+  margin-left: auto;
+  background: transparent;
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.overview-budget-alert ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.overview-budget-alert li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.budget-alert-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 850;
 }
 
 .overview-disclosure {
@@ -792,6 +860,80 @@ a {
 .account-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+.faq-intro {
+  margin-bottom: 14px;
+}
+
+.faq-list {
+  display: grid;
+  gap: 10px;
+}
+
+.faq-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  overflow: hidden;
+}
+
+.faq-item.open {
+  border-color: var(--line-strong);
+}
+
+.faq-question {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 14px 16px;
+  font-size: 0.94rem;
+  font-weight: 850;
+}
+
+.faq-chevron {
+  flex: 0 0 auto;
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+
+.faq-chevron.expanded {
+  transform: rotate(180deg);
+}
+
+.faq-answer {
+  margin: 0;
+  padding: 0 16px 15px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.account-card-primary {
+  text-align: right;
+}
+
+.account-card-primary strong {
+  display: block;
+  white-space: nowrap;
+}
+
+.account-card-primary span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.account-card .account-actions {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
 }
 
 .danger-action {
@@ -1357,21 +1499,21 @@ a {
   min-width: 0;
 }
 
-.loan-title strong,
-.loan-title span,
+.loan-title > div strong,
+.loan-title > div span,
 .loan-detail-grid span,
 .loan-detail-grid strong {
   display: block;
 }
 
-.loan-title strong,
-.loan-title span {
+.loan-title > div strong,
+.loan-title > div span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.loan-title span,
+.loan-title > div span,
 .loan-detail-grid span {
   color: var(--muted);
   font-size: 0.76rem;
@@ -1471,6 +1613,192 @@ a {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, #14b8a6, #2563eb);
+}
+
+.budget-page {
+  align-items: start;
+}
+
+.budget-month-control {
+  min-width: 190px;
+}
+
+.budget-range {
+  margin-bottom: 12px;
+}
+
+.budget-add-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+  margin: 4px 0 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+.budget-add-form label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.budget-add-form select,
+.budget-add-form input,
+.budget-line-actions input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 12px;
+  font: inherit;
+  font-weight: 800;
+}
+
+.budget-line-list {
+  display: grid;
+  gap: 14px;
+}
+
+.budget-line-card {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--panel) 0%, var(--panel-soft) 100%);
+  padding: 15px;
+  box-shadow: var(--shadow-soft);
+}
+
+.budget-line-card.safe {
+  border-color: rgba(22, 163, 74, 0.24);
+}
+
+.budget-line-card.watch {
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+.budget-line-card.critical,
+.budget-line-card.over {
+  border-color: rgba(220, 38, 38, 0.28);
+}
+
+.budget-line-header,
+.budget-progress > div,
+.budget-line-actions,
+.budget-unplanned {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.budget-status {
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 0.72rem;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.budget-status.safe {
+  border: 1px solid rgba(22, 163, 74, 0.28);
+  background: rgba(22, 163, 74, 0.1);
+  color: var(--good);
+}
+
+.budget-status.watch {
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--warning);
+}
+
+.budget-status.critical,
+.budget-status.over {
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  background: rgba(220, 38, 38, 0.1);
+  color: var(--danger);
+}
+
+.budget-progress {
+  display: grid;
+  gap: 8px;
+}
+
+.budget-progress span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.budget-progress strong {
+  white-space: nowrap;
+}
+
+.budget-progress-bar {
+  height: 11px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.12);
+}
+
+.budget-progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.budget-progress-bar span.safe {
+  background: linear-gradient(90deg, #16a34a, #14b8a6);
+}
+
+.budget-progress-bar span.watch {
+  background: linear-gradient(90deg, #f59e0b, #f97316);
+}
+
+.budget-progress-bar span.critical,
+.budget-progress-bar span.over {
+  background: linear-gradient(90deg, #dc2626, #f97316);
+}
+
+.budget-line-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.budget-line-actions {
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.budget-line-actions input {
+  max-width: 180px;
+}
+
+.danger-action {
+  color: var(--danger);
+}
+
+.budget-unplanned {
+  margin-top: 14px;
+  justify-content: start;
+  border: 1px dashed rgba(245, 158, 11, 0.45);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.08);
+  padding: 12px;
+  color: var(--warning);
+  font-weight: 900;
+}
+
+.budget-unplanned strong {
+  margin-left: auto;
+  color: var(--text);
 }
 
 .loan-metrics {
@@ -2525,6 +2853,8 @@ a {
   .summary-grid.mini,
   .summary-grid.report-summary,
   .entry-form,
+  .budget-add-form,
+  .budget-line-metrics,
   .report-filters,
   .setup-screen {
     grid-template-columns: 1fr;
@@ -2599,9 +2929,21 @@ a {
   }
 
   .account-actions,
+  .budget-line-actions,
   .row-actions,
   .confirm-actions {
     justify-content: flex-start;
+  }
+
+  .budget-line-header,
+  .budget-progress > div,
+  .budget-unplanned {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .budget-unplanned strong {
+    margin-left: 0;
   }
 
   .card-limit-grid {

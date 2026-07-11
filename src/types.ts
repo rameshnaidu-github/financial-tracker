@@ -19,6 +19,7 @@ export type TaxonomyBehavior =
   | "transfer"
   | "card_payment"
   | "refund";
+export type BudgetScopeType = "type" | "subcategory";
 
 export type Account = {
   id: string;
@@ -232,6 +233,59 @@ export type MonthlyReport = {
   investmentPaise: number;
   categories: ReportCategory[];
   types: ReportType[];
+};
+
+export type BudgetStatus = "safe" | "watch" | "critical" | "over";
+
+export type BudgetScope = {
+  scopeType: BudgetScopeType;
+  scopeId: string;
+  typeId: string;
+  subcategoryId: string | null;
+  name: string;
+  typeName: string;
+  behavior: TaxonomyBehavior;
+  icon: string;
+  color: string;
+};
+
+export type BudgetLine = BudgetScope & {
+  id: string;
+  month: string;
+  amountPaise: number;
+  actualPaise: number;
+  remainingPaise: number;
+  usedPercent: number;
+  expectedPercent: number;
+  paceDeltaPercent: number;
+  projectedPaise: number;
+  status: BudgetStatus;
+  statusLabel: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BudgetPlan = {
+  month: string;
+  start: string;
+  end: string;
+  asOfDate: string;
+  dayOfMonth: number;
+  daysInMonth: number;
+  elapsedPercent: number;
+  totals: {
+    amountPaise: number;
+    actualPaise: number;
+    remainingPaise: number;
+    projectedPaise: number;
+    safeCount: number;
+    watchCount: number;
+    criticalCount: number;
+    overCount: number;
+    unplannedActualPaise: number;
+  };
+  lines: BudgetLine[];
+  availableScopes: BudgetScope[];
 };
 
 export type CreateTransactionPayload = {

@@ -4,6 +4,8 @@ import type {
   BackupStatus,
   Batch,
   Bootstrap,
+  BudgetLine,
+  BudgetPlan,
   CategoryType,
   CreateTransactionPayload,
   Loan,
@@ -153,6 +155,16 @@ export const Api = {
     if (to) params.set("to", to);
     return api<MonthlyReport>(`/api/reports/monthly?${params}`);
   },
+  budgetPlan: (month?: string) => {
+    const params = new URLSearchParams();
+    if (month) params.set("month", month);
+    return api<BudgetPlan>(`/api/budgets?${params}`);
+  },
+  createBudgetLine: (body: { month: string; scopeType: "type" | "subcategory"; scopeId: string; amountPaise: number }) =>
+    api<BudgetLine>("/api/budgets", { method: "POST", body }),
+  updateBudgetLine: (id: string, body: { amountPaise: number }) =>
+    api<BudgetLine>(`/api/budgets/${id}`, { method: "PATCH", body }),
+  deleteBudgetLine: (id: string) => api<{ ok: true }>(`/api/budgets/${id}`, { method: "DELETE" }),
   backupStatus: () => api<BackupStatus>("/api/backup/status"),
   backup: () => api<{ path: string; mode: "manual" | "auto" | "shutdown"; createdAt: string }>("/api/backup", { method: "POST" }),
   importTemplateUrl: () => "/api/import/template.xlsx",

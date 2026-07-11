@@ -163,6 +163,7 @@ export const transactionKindSchema = z.enum([
   "emi"
 ]);
 export const taxonomyBehaviorSchema = z.enum(TAXONOMY_BEHAVIORS);
+export const budgetScopeTypeSchema = z.enum(["type", "subcategory"]);
 
 const idSchema = z.string().min(1);
 const dateSchema = z
@@ -285,6 +286,19 @@ export const updateAutopaySubscriptionSchema = z
     isArchived: z.boolean().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "No subscription changes provided.");
+
+export const createBudgetLineSchema = z.object({
+  month: monthSchema,
+  scopeType: budgetScopeTypeSchema,
+  scopeId: idSchema,
+  amountPaise: positivePaiseSchema
+});
+
+export const updateBudgetLineSchema = z
+  .object({
+    amountPaise: positivePaiseSchema.optional()
+  })
+  .refine((value) => Object.keys(value).length > 0, "No budget changes provided.");
 
 export const updateProfileSchema = z.object({
   name: z.string().trim().max(80).optional(),
@@ -427,6 +441,7 @@ export type Direction = z.infer<typeof directionSchema>;
 export type LoanPaymentType = z.infer<typeof loanPaymentTypeSchema>;
 export type TransactionKind = z.infer<typeof transactionKindSchema>;
 export type TaxonomyBehavior = z.infer<typeof taxonomyBehaviorSchema>;
+export type BudgetScopeType = z.infer<typeof budgetScopeTypeSchema>;
 export type CreateAccountInput = z.infer<typeof createAccountSchema>;
 export type UpdateAccountInput = z.infer<typeof updateAccountSchema>;
 export type CreateCategoryTypeInput = z.infer<typeof createCategoryTypeSchema>;
@@ -435,6 +450,8 @@ export type CreateLoanInput = z.infer<typeof createLoanSchema>;
 export type UpdateLoanInput = z.infer<typeof updateLoanSchema>;
 export type CreateAutopaySubscriptionInput = z.infer<typeof createAutopaySubscriptionSchema>;
 export type UpdateAutopaySubscriptionInput = z.infer<typeof updateAutopaySubscriptionSchema>;
+export type CreateBudgetLineInput = z.infer<typeof createBudgetLineSchema>;
+export type UpdateBudgetLineInput = z.infer<typeof updateBudgetLineSchema>;
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;

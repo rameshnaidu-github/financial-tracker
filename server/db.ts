@@ -136,6 +136,17 @@ export function initDatabase() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS budget_lines (
+      id TEXT PRIMARY KEY,
+      month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
+      scope_type TEXT NOT NULL CHECK (scope_type IN ('type', 'subcategory')),
+      scope_id TEXT NOT NULL,
+      amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(month, scope_type, scope_id)
+    );
+
   `);
 
   migrateAccountNameConstraint();
@@ -149,6 +160,7 @@ export function initDatabase() {
   ensureTransactionIndexes();
   ensureLoanIndexes();
   ensureAutopayIndexes();
+  ensureBudgetIndexes();
   ensureTaxonomyIndexes();
   seedSettings();
   pruneBackupFiles();
@@ -168,6 +180,13 @@ function ensureAutopayIndexes() {
     CREATE INDEX IF NOT EXISTS idx_autopay_subscriptions_archived ON autopay_subscriptions(is_archived);
     CREATE INDEX IF NOT EXISTS idx_autopay_payments_subscription ON autopay_payments(subscription_id);
     CREATE INDEX IF NOT EXISTS idx_autopay_payments_transaction ON autopay_payments(transaction_id);
+  `);
+}
+
+function ensureBudgetIndexes() {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_budget_lines_month ON budget_lines(month);
+    CREATE INDEX IF NOT EXISTS idx_budget_lines_scope ON budget_lines(scope_type, scope_id);
   `);
 }
 

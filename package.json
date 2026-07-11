@@ -5,13 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"pnpm:server:dev\" \"pnpm:client:dev\"",
-    "server:dev": "NODE_NO_WARNINGS=1 node --watch server/index.ts",
+    "server:dev": "node --no-warnings --watch server/index.ts",
     "client:dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
-    "start": "NODE_NO_WARNINGS=1 node server/index.ts",
+    "start": "node --no-warnings server/index.ts",
     "app:start": "bash scripts/start.sh",
     "app:stop": "bash scripts/stop.sh",
-    "test:qa": "NODE_NO_WARNINGS=1 node tests/qa-smoke.ts",
+    "test:qa": "node --no-warnings tests/qa-smoke.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

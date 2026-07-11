@@ -6,6 +6,7 @@ import {
   AUTOPAY_SUBCATEGORY_ID,
   createAccountSchema,
   createAutopaySubscriptionSchema,
+  createBudgetLineSchema,
   createBatchSchema,
   createCategoryTypeSchema,
   createLoanSchema,
@@ -13,12 +14,15 @@ import {
   createTransactionSchema,
   updateAccountSchema,
   updateAutopaySubscriptionSchema,
+  updateBudgetLineSchema,
   updateLoanSchema,
   updateProfileSchema,
   updateTransactionSchema,
   type AccountType,
+  type BudgetScopeType,
   type CreateAccountInput,
   type CreateAutopaySubscriptionInput,
+  type CreateBudgetLineInput,
   type CreateCategoryTypeInput,
   type CreateLoanInput,
   type CreateSubcategoryInput,
@@ -29,6 +33,7 @@ import {
   type TransactionKind,
   type UpdateAccountInput,
   type UpdateAutopaySubscriptionInput,
+  type UpdateBudgetLineInput,
   type UpdateLoanInput,
   type UpdateProfileInput,
   type UpdateTransactionInput
@@ -243,6 +248,69 @@ export type LoanSummary = {
   updatedAt: string;
 };
 
+type BudgetLineRow = {
+  id: string;
+  month: string;
+  scope_type: BudgetScopeType;
+  scope_id: string;
+  amount_paise: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BudgetStatus = "safe" | "watch" | "critical" | "over";
+
+export type BudgetScopeSummary = {
+  scopeType: BudgetScopeType;
+  scopeId: string;
+  typeId: string;
+  subcategoryId: string | null;
+  name: string;
+  typeName: string;
+  behavior: TaxonomyBehavior;
+  icon: string;
+  color: string;
+};
+
+export type BudgetLineSummary = BudgetScopeSummary & {
+  id: string;
+  month: string;
+  amountPaise: number;
+  actualPaise: number;
+  remainingPaise: number;
+  usedPercent: number;
+  expectedPercent: number;
+  paceDeltaPercent: number;
+  projectedPaise: number;
+  status: BudgetStatus;
+  statusLabel: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BudgetPlan = {
+  month: string;
+  start: string;
+  end: string;
+  asOfDate: string;
+  dayOfMonth: number;
+  daysInMonth: number;
+  elapsedPercent: number;
+  totals: {
+    amountPaise: number;
+    actualPaise: number;
+    remainingPaise: number;
+    projectedPaise: number;
+    safeCount: number;
+    watchCount: number;
+    criticalCount: number;
+    overCount: number;
+    unplannedActualPaise: number;
+  };
+  lines: BudgetLineSummary[];
+  availableScopes: BudgetScopeSummary[];
+};
+
 type TransactionQuery = {
   accountId?: string;
   categoryId?: string;
@@ -258,6 +326,7 @@ type TransactionQuery = {
 
 type SqlParam = string | number | null;
 type BackupMode = "manual" | "auto" | "shutdown";
+const BUDGETABLE_BEHAVIORS = new Set<TaxonomyBehavior>(["expense", "loan", "investment", "transfer"]);
 const AUTO_BACKUP_INTERVAL_MS = 30 * 60 * 1000;
 let autoBackupTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -654,6 +723,12 @@ export function deleteCategoryType(id: string) {
        WHERE subcategory_id IN (SELECT id FROM subcategories WHERE type_id = ?)`
     ).run(id);
 
+    db.prepare(
+      `DELETE FROM budget_lines
+       WHERE (scope_type = 'type' AND scope_id = ?)
+          OR (scope_type = 'subcategory' AND scope_id IN (SELECT id FROM subcategories WHERE type_id = ?))`
+    ).run(id, id);
+
     db.prepare("DELETE FROM category_types WHERE id = ?").run(id);
   });
 
@@ -684,6 +759,7 @@ export function deleteSubcategory(id: string) {
        WHERE subcategory_id = ?`
     ).run(id);
     db.prepare("UPDATE transaction_splits SET subcategory_id = NULL WHERE subcategory_id = ?").run(id);
+    db.prepare("DELETE FROM budget_lines WHERE scope_type = 'subcategory' AND scope_id = ?").run(id);
     db.prepare("DELETE FROM subcategories WHERE id = ?").run(id);
   });
 
@@ -1111,7 +1187,7 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
     }
 
     db.prepare("DELETE FROM autopay_payments WHERE transaction_id = ?").run(id);
-    syncAutopayPaymentForTransaction(id, merged);
+    syncAutopayPaymentForTransaction(id, merged, existingAutopayPayment?.subscription_id);
   });
 
   return {
@@ -1171,6 +1247,103 @@ export function getOverview(accountId?: string, month = currentMonth()) {
     recentTransactions: listTransactions({ accountId, limit: 8 }),
     categoryReport: monthly.categories.slice(0, 6)
   };
+}
+
+export function getBudgetPlan(month = currentMonth(), asOfDate = localIsoDate(new Date())): BudgetPlan {
+  const safeMonth = /^\d{4}-\d{2}$/.test(month) ? month : currentMonth();
+  const start = `${safeMonth}-01`;
+  const end = monthEndDate(safeMonth);
+  const pace = budgetPace(safeMonth, asOfDate);
+  const report = getMonthlyReport(undefined, safeMonth);
+  const actuals = budgetActualMaps(report);
+  const rows = listBudgetRows(safeMonth);
+  const lines = rows.map((row) => budgetLineFromRow(row, actuals, pace));
+  const covered = new Set(lines.map((line) => `${line.scopeType}:${line.scopeId}`));
+  const coveredTypeIds = new Set(lines.filter((line) => line.scopeType === "type").map((line) => line.typeId));
+  const coveredSubcategoryIds = new Set(
+    lines.filter((line) => line.scopeType === "subcategory" && line.subcategoryId).map((line) => line.subcategoryId)
+  );
+  const unplannedActualPaise = report.types.reduce((sum, type) => {
+    if (!BUDGETABLE_BEHAVIORS.has(type.behavior as TaxonomyBehavior) || coveredTypeIds.has(type.typeId)) {
+      return sum;
+    }
+    return (
+      sum +
+      type.subcategories.reduce(
+        (subSum, subcategory) =>
+          coveredSubcategoryIds.has(subcategory.subcategoryId) ? subSum : subSum + subcategory.amountPaise,
+        0
+      )
+    );
+  }, 0);
+
+  return {
+    month: safeMonth,
+    start,
+    end,
+    asOfDate: pace.asOfDate,
+    dayOfMonth: pace.dayOfMonth,
+    daysInMonth: pace.daysInMonth,
+    elapsedPercent: pace.elapsedPercent,
+    totals: {
+      amountPaise: lines.reduce((sum, line) => sum + line.amountPaise, 0),
+      actualPaise: lines.reduce((sum, line) => sum + line.actualPaise, 0),
+      remainingPaise: lines.reduce((sum, line) => sum + Math.max(0, line.remainingPaise), 0),
+      projectedPaise: lines.reduce((sum, line) => sum + line.projectedPaise, 0),
+      safeCount: lines.filter((line) => line.status === "safe").length,
+      watchCount: lines.filter((line) => line.status === "watch").length,
+      criticalCount: lines.filter((line) => line.status === "critical").length,
+      overCount: lines.filter((line) => line.status === "over").length,
+      unplannedActualPaise
+    },
+    lines,
+    availableScopes: listBudgetScopes(safeMonth).filter(
+      (scope) => !covered.has(`${scope.scopeType}:${scope.scopeId}`)
+    )
+  };
+}
+
+export function createBudgetLine(input: CreateBudgetLineInput): BudgetLineSummary {
+  const parsed = createBudgetLineSchema.parse(input);
+  const scope = resolveBudgetScope(parsed.scopeType, parsed.scopeId);
+  ensureNoBudgetOverlap(parsed.month, parsed.scopeType, parsed.scopeId);
+  const id = randomUUID();
+
+  try {
+    db.prepare(
+      `INSERT INTO budget_lines (id, month, scope_type, scope_id, amount_paise)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(id, parsed.month, parsed.scopeType, scope.scopeId, parsed.amountPaise);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("UNIQUE")) {
+      throw badRequest(`${scope.name} already has a budget for ${parsed.month}.`);
+    }
+    throw error;
+  }
+
+  return getBudgetLine(id);
+}
+
+export function updateBudgetLine(id: string, input: UpdateBudgetLineInput): BudgetLineSummary {
+  const parsed = updateBudgetLineSchema.parse(input);
+  const current = requireBudgetLineRow(id);
+
+  db.prepare(
+    `UPDATE budget_lines
+     SET amount_paise = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  ).run(parsed.amountPaise ?? current.amount_paise, id);
+
+  return getBudgetLine(id);
+}
+
+export function deleteBudgetLine(id: string) {
+  const result = db.prepare("DELETE FROM budget_lines WHERE id = ?").run(id);
+  if (result.changes === 0) {
+    throw notFound("Budget line not found.");
+  }
+  return { ok: true };
 }
 
 export function getMonthlyReport(
@@ -1525,6 +1698,261 @@ function reportSign(row: ReportSourceRow) {
   return 0;
 }
 
+function listBudgetRows(month: string) {
+  return asRecords<BudgetLineRow>(
+    db
+      .prepare(
+        `SELECT id, month, scope_type, scope_id, amount_paise, created_at, updated_at
+         FROM budget_lines
+         WHERE month = ?
+         ORDER BY created_at, id`
+      )
+      .all(month)
+  );
+}
+
+function requireBudgetLineRow(id: string) {
+  const row = asRecord<BudgetLineRow | undefined>(
+    db
+      .prepare(
+        `SELECT id, month, scope_type, scope_id, amount_paise, created_at, updated_at
+         FROM budget_lines
+         WHERE id = ?`
+      )
+      .get(id)
+  );
+  if (!row) {
+    throw notFound("Budget line not found.");
+  }
+  return row;
+}
+
+function getBudgetLine(id: string): BudgetLineSummary {
+  const row = requireBudgetLineRow(id);
+  const report = getMonthlyReport(undefined, row.month);
+  return budgetLineFromRow(row, budgetActualMaps(report), budgetPace(row.month, localIsoDate(new Date())));
+}
+
+function budgetActualMaps(report: ReturnType<typeof getMonthlyReport>) {
+  const typeActuals = new Map<string, number>();
+  const subcategoryActuals = new Map<string, number>();
+
+  for (const type of report.types) {
+    if (!BUDGETABLE_BEHAVIORS.has(type.behavior as TaxonomyBehavior)) {
+      continue;
+    }
+    typeActuals.set(type.typeId, type.amountPaise);
+    for (const subcategory of type.subcategories) {
+      subcategoryActuals.set(subcategory.subcategoryId, subcategory.amountPaise);
+    }
+  }
+
+  return { typeActuals, subcategoryActuals };
+}
+
+function budgetLineFromRow(
+  row: BudgetLineRow,
+  actuals: ReturnType<typeof budgetActualMaps>,
+  pace: ReturnType<typeof budgetPace>
+): BudgetLineSummary {
+  const scope = resolveBudgetScope(row.scope_type, row.scope_id);
+  const actualPaise =
+    row.scope_type === "type"
+      ? actuals.typeActuals.get(row.scope_id) ?? 0
+      : actuals.subcategoryActuals.get(row.scope_id) ?? 0;
+  const usedPercent = percent(actualPaise, row.amount_paise);
+  const projectedPaise =
+    pace.elapsedPercent > 0 ? Math.max(actualPaise, Math.round(actualPaise / (pace.elapsedPercent / 100))) : actualPaise;
+  const remainingPaise = row.amount_paise - actualPaise;
+  const status = budgetStatus(row.amount_paise, actualPaise, usedPercent, projectedPaise, pace.elapsedPercent);
+
+  return {
+    ...scope,
+    id: row.id,
+    month: row.month,
+    amountPaise: row.amount_paise,
+    actualPaise,
+    remainingPaise,
+    usedPercent,
+    expectedPercent: pace.elapsedPercent,
+    paceDeltaPercent: Math.round(usedPercent - pace.elapsedPercent),
+    projectedPaise,
+    status,
+    statusLabel: budgetStatusLabel(status),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function budgetStatus(
+  amountPaise: number,
+  actualPaise: number,
+  usedPercent: number,
+  projectedPaise: number,
+  elapsedPercent: number
+): BudgetStatus {
+  if (actualPaise > amountPaise) {
+    return "over";
+  }
+  if (usedPercent > 90 || projectedPaise > amountPaise) {
+    return "critical";
+  }
+  if (usedPercent >= 75 || usedPercent > elapsedPercent + 10) {
+    return "watch";
+  }
+  return "safe";
+}
+
+function budgetStatusLabel(status: BudgetStatus) {
+  switch (status) {
+    case "over":
+      return "Over budget";
+    case "critical":
+      return "Likely to exceed";
+    case "watch":
+      return "Watch";
+    case "safe":
+      return "On track";
+  }
+}
+
+function budgetPace(month: string, asOfDate: string) {
+  const start = `${month}-01`;
+  const end = monthEndDate(month);
+  const daysInMonth = Number(end.slice(8, 10));
+  const safeAsOfDate = isIsoDate(asOfDate) ? asOfDate : localIsoDate(new Date());
+  const dayOfMonth = safeAsOfDate < start ? 0 : safeAsOfDate > end ? daysInMonth : Number(safeAsOfDate.slice(8, 10));
+  const elapsedPercent = daysInMonth > 0 ? Math.round((dayOfMonth / daysInMonth) * 100) : 0;
+
+  return {
+    asOfDate: safeAsOfDate,
+    dayOfMonth,
+    daysInMonth,
+    elapsedPercent
+  };
+}
+
+function percent(value: number, total: number) {
+  return total > 0 ? Math.round((value / total) * 100) : 0;
+}
+
+function listBudgetScopes(month: string): BudgetScopeSummary[] {
+  const existing = listBudgetRows(month);
+  const typeBudgetIds = new Set<string>();
+  const subcategoryBudgetTypeIds = new Set<string>();
+  const blockedSubcategoryIds = new Set<string>();
+
+  for (const row of existing) {
+    const scope = resolveBudgetScope(row.scope_type, row.scope_id);
+    if (scope.scopeType === "type") {
+      typeBudgetIds.add(scope.typeId);
+    } else if (scope.subcategoryId) {
+      blockedSubcategoryIds.add(scope.subcategoryId);
+      subcategoryBudgetTypeIds.add(scope.typeId);
+    }
+  }
+
+  const scopes: BudgetScopeSummary[] = [];
+  for (const type of listCategoryTypes()) {
+    if (!BUDGETABLE_BEHAVIORS.has(type.behavior)) {
+      continue;
+    }
+    if (!typeBudgetIds.has(type.id) && !subcategoryBudgetTypeIds.has(type.id)) {
+      scopes.push({
+        scopeType: "type",
+        scopeId: type.id,
+        typeId: type.id,
+        subcategoryId: null,
+        name: type.name,
+        typeName: type.name,
+        behavior: type.behavior,
+        icon: type.icon,
+        color: type.color
+      });
+    }
+    if (!typeBudgetIds.has(type.id)) {
+      for (const subcategory of type.subcategories) {
+        if (blockedSubcategoryIds.has(subcategory.id)) {
+          continue;
+        }
+        scopes.push({
+          scopeType: "subcategory",
+          scopeId: subcategory.id,
+          typeId: type.id,
+          subcategoryId: subcategory.id,
+          name: `${type.name} / ${subcategory.name}`,
+          typeName: type.name,
+          behavior: type.behavior,
+          icon: subcategory.icon,
+          color: subcategory.color
+        });
+      }
+    }
+  }
+
+  return scopes;
+}
+
+function resolveBudgetScope(scopeType: BudgetScopeType, scopeId: string): BudgetScopeSummary {
+  if (scopeType === "type") {
+    const type = requireCategoryType(scopeId);
+    if (!BUDGETABLE_BEHAVIORS.has(type.behavior)) {
+      throw badRequest("Selected Type is not available for budgeting.");
+    }
+    return {
+      scopeType,
+      scopeId: type.id,
+      typeId: type.id,
+      subcategoryId: null,
+      name: type.name,
+      typeName: type.name,
+      behavior: type.behavior,
+      icon: type.icon,
+      color: type.color
+    };
+  }
+
+  const subcategory = getSubcategoryRow(scopeId);
+  if (!subcategory) {
+    throw badRequest("Selected SubType does not exist.");
+  }
+  const type = requireCategoryType(subcategory.type_id);
+  if (!BUDGETABLE_BEHAVIORS.has(type.behavior)) {
+    throw badRequest("Selected SubType is not available for budgeting.");
+  }
+  return {
+    scopeType,
+    scopeId: subcategory.id,
+    typeId: type.id,
+    subcategoryId: subcategory.id,
+    name: `${type.name} / ${subcategory.name}`,
+    typeName: type.name,
+    behavior: type.behavior,
+    icon: subcategory.icon,
+    color: subcategory.color
+  };
+}
+
+function ensureNoBudgetOverlap(
+  month: string,
+  scopeType: BudgetScopeType,
+  scopeId: string,
+  exceptId?: string
+) {
+  const nextScope = resolveBudgetScope(scopeType, scopeId);
+  const rows = listBudgetRows(month).filter((row) => row.id !== exceptId);
+
+  for (const row of rows) {
+    const existingScope = resolveBudgetScope(row.scope_type, row.scope_id);
+    if (existingScope.scopeType === nextScope.scopeType && existingScope.scopeId === nextScope.scopeId) {
+      throw badRequest(`${nextScope.name} already has a budget for ${month}.`);
+    }
+    if (existingScope.typeId === nextScope.typeId && (existingScope.scopeType === "type" || nextScope.scopeType === "type")) {
+      throw badRequest("Budget scopes overlap. Choose either the Type or its SubTypes for this month.");
+    }
+  }
+}
+
 export function createBackup(mode: BackupMode = "manual") {
   const backupDir = ensureBackupDir();
   const createdAt = new Date().toISOString();
@@ -1602,6 +2030,42 @@ export async function buildImportTemplate() {
   workbook.creator = "Financial Tracker";
   workbook.created = new Date();
 
+  const instructions = workbook.addWorksheet("Instructions");
+  instructions.columns = [
+    { header: "Topic", key: "topic", width: 26 },
+    { header: "Guidance", key: "guidance", width: 92 }
+  ];
+  instructions.getRow(1).font = { bold: true };
+  instructions.addRow({
+    topic: "How to use",
+    guidance:
+      "Fill rows in the Transactions sheet. Existing users can pick from dropdowns; new users can type a new Account, Type, or SubType."
+  });
+  instructions.addRow({
+    topic: "New accounts",
+    guidance:
+      "When you type a new Account, choose its Account Type. Credit-card accounts are created with a zero limit so you can update the limit later."
+  });
+  instructions.addRow({
+    topic: "New Types",
+    guidance:
+      "When you type a new Type, choose Type Behavior so the app knows whether it is Expense, Income, Loan, Investment, Transfer, or Refund."
+  });
+  instructions.addRow({
+    topic: "SubTypes",
+    guidance:
+      "Pick an existing SubType from the dropdown or type a new SubType. New SubTypes are created under the row's Type."
+  });
+  instructions.addRow({
+    topic: "Credit Card Payment",
+    guidance:
+      "For Credit Card Payment rows, Account should be the paying bank account and SubType should be the target credit-card name."
+  });
+  instructions.addRow({
+    topic: "Sample row",
+    guidance: "The sample row is valid for import, but delete it if you only want to import your own rows."
+  });
+
   const transactionSheet = workbook.addWorksheet("Transactions");
   transactionSheet.columns = [
     { header: "Date", key: "date", width: 14 },
@@ -1618,7 +2082,7 @@ export async function buildImportTemplate() {
   const sampleAccount = listAccounts().find((account) => !account.isArchived);
   transactionSheet.addRow({
     date: currentIsoDate(),
-    account: sampleAccount?.name ?? "",
+    account: sampleAccount?.name ?? "My Bank Account",
     accountType: sampleAccount ? importAccountTypeLabel(sampleAccount.type) : "Bank account",
     type: "Expense",
     typeBehavior: "Expense",
@@ -1630,10 +2094,10 @@ export async function buildImportTemplate() {
 
   const lookups = workbook.addWorksheet("Lookups");
   lookups.columns = [
+    { header: "Accounts", key: "accounts", width: 28 },
     { header: "Types", key: "types", width: 24 },
     { header: "SubTypes", key: "subtypes", width: 28 },
     { header: "Type for SubType", key: "typeForSubtype", width: 24 },
-    { header: "Accounts", key: "accounts", width: 28 },
     { header: "Account Types", key: "accountTypes", width: 18 },
     { header: "Type Behaviors", key: "typeBehaviors", width: 18 },
     { header: "Methods", key: "methods", width: 18 }
@@ -1646,43 +2110,34 @@ export async function buildImportTemplate() {
   const accountTypes = ["Bank account", "Credit card", "Food card"];
   const typeBehaviors = ["Expense", "Income", "Loan", "Investment", "Transfer", "Refund"];
   const methods = ["UPI", "Credit card", "Bank transfer", "Cash", "Other"];
-  const lookupRows: Array<Record<string, string>> = [];
-
-  taxonomy.forEach((type) => {
+  const typeNames = taxonomy.map((type) => type.name);
+  const subtypeRows = taxonomy.flatMap((type) => {
     if (type.behavior === "card_payment") {
-      cardAccounts.forEach((card) => {
-        lookupRows.push({
-          types: type.name,
-          subtypes: card.name,
-          typeForSubtype: type.name
-        });
-      });
-      if (cardAccounts.length === 0) {
-        lookupRows.push({ types: type.name, subtypes: "", typeForSubtype: type.name });
-      }
-      return;
+      return cardAccounts.map((card) => ({
+        subtypes: card.name,
+        typeForSubtype: type.name
+      }));
     }
 
-    type.subcategories.forEach((subcategory, index) => {
-      lookupRows.push({
-        types: index === 0 ? type.name : "",
-        subtypes: subcategory.name,
-        typeForSubtype: type.name
-      });
-    });
+    return type.subcategories.map((subcategory) => ({
+      subtypes: subcategory.name,
+      typeForSubtype: type.name
+    }));
   });
 
   const maxRows = Math.max(
-    lookupRows.length,
     accounts.length,
+    typeNames.length,
+    subtypeRows.length,
     accountTypes.length,
     typeBehaviors.length,
     methods.length
   );
   for (let index = 0; index < maxRows; index += 1) {
     lookups.addRow({
-      ...(lookupRows[index] ?? {}),
       accounts: accounts[index]?.name ?? "",
+      types: typeNames[index] ?? "",
+      ...(subtypeRows[index] ?? {}),
       accountTypes: accountTypes[index] ?? "",
       typeBehaviors: typeBehaviors[index] ?? "",
       methods: methods[index] ?? ""
@@ -1694,8 +2149,11 @@ export async function buildImportTemplate() {
     transactionSheet.getCell(`B${rowNumber}`).dataValidation = {
       type: "list",
       allowBlank: false,
+      showInputMessage: true,
+      promptTitle: "Account",
+      prompt: "Pick an existing account or type a new account name.",
       showErrorMessage: false,
-      formulae: [`Lookups!$D$2:$D$${Math.max(accounts.length + 1, 2)}`]
+      formulae: [`Lookups!$A$2:$A$${Math.max(accounts.length + 1, 2)}`]
     };
     transactionSheet.getCell(`C${rowNumber}`).dataValidation = {
       type: "list",
@@ -1705,14 +2163,20 @@ export async function buildImportTemplate() {
     transactionSheet.getCell(`D${rowNumber}`).dataValidation = {
       type: "list",
       allowBlank: false,
+      showInputMessage: true,
+      promptTitle: "Type",
+      prompt: "Pick an existing Type or type a new one. Choose Type Behavior when Type is new.",
       showErrorMessage: false,
-      formulae: [`Lookups!$A$2:$A$${Math.max(lookupRows.length + 1, 2)}`]
+      formulae: [`Lookups!$B$2:$B$${typeNames.length + 1}`]
     };
     transactionSheet.getCell(`F${rowNumber}`).dataValidation = {
       type: "list",
       allowBlank: false,
+      showInputMessage: true,
+      promptTitle: "SubType",
+      prompt: "Pick an existing SubType or type a new SubType for this row's Type.",
       showErrorMessage: false,
-      formulae: [`Lookups!$B$2:$B$${Math.max(lookupRows.length + 1, 2)}`]
+      formulae: [`Lookups!$C$2:$C$${Math.max(subtypeRows.length + 1, 2)}`]
     };
     transactionSheet.getCell(`E${rowNumber}`).dataValidation = {
       type: "list",
@@ -1726,7 +2190,7 @@ export async function buildImportTemplate() {
     };
   }
 
-  lookups.state = "veryHidden";
+  lookups.state = "hidden";
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
 }
@@ -2179,7 +2643,11 @@ function getAutopayPaymentForTransaction(transactionId: string) {
   );
 }
 
-function syncAutopayPaymentForTransaction(transactionId: string, input: CreateTransactionInput) {
+function syncAutopayPaymentForTransaction(
+  transactionId: string,
+  input: CreateTransactionInput,
+  existingSubscriptionId?: string
+) {
   if (!input.subscriptionId) {
     return;
   }
@@ -2187,7 +2655,10 @@ function syncAutopayPaymentForTransaction(transactionId: string, input: CreateTr
     throw badRequest("Only AutoPay transactions can be linked to a subscription.");
   }
 
-  const subscription = requireActiveAutopay(input.subscriptionId);
+  const subscription =
+    input.subscriptionId === existingSubscriptionId
+      ? requireAutopayRow(input.subscriptionId)
+      : requireActiveAutopay(input.subscriptionId);
   db.prepare(
     `INSERT INTO autopay_payments (id, subscription_id, transaction_id)
      VALUES (?, ?, ?)`

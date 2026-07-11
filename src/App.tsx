@@ -4,6 +4,7 @@ import {
   CalendarClock,
   CalendarDays,
   Check,
+  CircleHelp,
   ChevronDown,
   CircleAlert,
   CreditCard,
@@ -21,6 +22,7 @@ import {
   Search,
   Sun,
   Tags,
+  Target,
   Trash2,
   TrendingUp,
   Upload,
@@ -46,6 +48,9 @@ import type {
   AutopaySubscription,
   BackupStatus,
   Bootstrap,
+  BudgetLine,
+  BudgetPlan,
+  BudgetScope,
   Category,
   CategoryType,
   CreateTransactionPayload,
@@ -62,7 +67,7 @@ import type {
 } from "./types";
 import { AUTOPAY_DURATION_MONTH_OPTIONS, AUTOPAY_SUBCATEGORY_ID } from "../shared/finance";
 
-type Page = "overview" | "weekly" | "transactions" | "reports" | "accounts" | "loans" | "subscriptions" | "categories" | "profile";
+type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "subscriptions" | "categories" | "faq" | "profile";
 type Theme = "light" | "dark";
 type DonutSegment = {
   id: string;
@@ -90,10 +95,12 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home }> = [
   { page: "weekly", label: "Weekly Entry", icon: CalendarDays },
   { page: "transactions", label: "Transactions", icon: ArrowDownUp },
   { page: "reports", label: "Reports", icon: BarChart3 },
+  { page: "budgets", label: "Budget Planner", icon: Target },
   { page: "accounts", label: "Accounts", icon: WalletCards },
   { page: "loans", label: "Loans", icon: Landmark },
   { page: "subscriptions", label: "AutoPay", icon: CalendarClock },
   { page: "categories", label: "Categories", icon: Tags },
+  { page: "faq", label: "FAQ", icon: CircleHelp },
   { page: "profile", label: "Profile", icon: UserCircle }
 ];
 
@@ -102,10 +109,12 @@ const mobileLabels: Record<Page, string> = {
   weekly: "Week",
   transactions: "Txns",
   reports: "Rpt",
+  budgets: "Bdgt",
   accounts: "Accts",
   loans: "Loan",
   subscriptions: "Auto",
   categories: "Cats",
+  faq: "FAQ",
   profile: "Me"
 };
 
@@ -114,10 +123,12 @@ const pagePaths: Record<Page, string> = {
   weekly: "/weekly",
   transactions: "/transactions",
   reports: "/reports",
+  budgets: "/budgets",
   accounts: "/accounts",
   loans: "/loans",
   subscriptions: "/subscriptions",
   categories: "/categories",
+  faq: "/faq",
   profile: "/profile"
 };
 
@@ -293,9 +304,11 @@ export default function App() {
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const showAccountFilter =
     activePage !== "accounts" &&
+    activePage !== "budgets" &&
     activePage !== "loans" &&
     activePage !== "subscriptions" &&
     activePage !== "categories" &&
+    activePage !== "faq" &&
     activePage !== "profile";
 
   useEffect(() => {
@@ -408,7 +421,7 @@ export default function App() {
               selectedAccountId={selectedAccountId}
               accounts={activeAccounts}
               loans={loans.filter((loan) => !loan.isArchived)}
-              subscriptions={subscriptions.filter((subscription) => !subscription.isArchived)}
+              subscriptions={subscriptions}
               categoryTypes={categoryTypes}
               refresh={refresh}
               refreshKey={refreshKey}
@@ -417,6 +430,13 @@ export default function App() {
             />
           )}
           {activePage === "reports" && <ReportsPage selectedAccountId={selectedAccountId} refreshKey={refreshKey} />}
+          {activePage === "budgets" && (
+            <BudgetPlannerPage
+              refreshKey={refreshKey}
+              showNotice={showNotice}
+              requestConfirm={requestConfirm}
+            />
+          )}
           {activePage === "accounts" && (
             <AccountsPage
               accounts={accounts}
@@ -450,6 +470,7 @@ export default function App() {
               requestConfirm={requestConfirm}
             />
           )}
+          {activePage === "faq" && <FaqPage />}
           {activePage === "profile" && (
             <ProfilePage
               profile={profileDraft}
@@ -543,6 +564,8 @@ function OverviewPage({
   const [overview, setOverview] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [allExpanded, setAllExpanded] = useState(true);
+  const [budgetAlerts, setBudgetAlerts] = useState<BudgetLine[]>([]);
 
   useEffect(() => {
     setLoading(true);
@@ -556,6 +579,22 @@ function OverviewPage({
       .finally(() => setLoading(false));
   }, [selectedAccountId, refreshKey]);
 
+  useEffect(() => {
+    let active = true;
+    Api.budgetPlan()
+      .then((plan) => {
+        if (active) {
+          setBudgetAlerts(plan.lines.filter((line) => line.status === "critical" || line.status === "over"));
+        }
+      })
+      .catch(() => {
+        if (active) setBudgetAlerts([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [refreshKey]);
+
   if (loading) {
     return <PanelLoader label="Loading overview" />;
   }
@@ -564,9 +603,6 @@ function OverviewPage({
     return <EmptyState text={loadError || "Could not load the overview."} />;
   }
 
-  const monthlyNetPaise = overview.summary.incomePaise - overview.summary.totalSpendingPaise;
-  const savingsRate =
-    overview.summary.incomePaise > 0 ? Math.round((monthlyNetPaise / overview.summary.incomePaise) * 100) : null;
   const spendingSegments = consolidateDonutSegments(
     overview.categoryReport.map((category) => ({
       id: category.subcategoryId ?? category.categoryId ?? category.name,
@@ -578,7 +614,42 @@ function OverviewPage({
 
   return (
     <div className="page-grid">
-      <OverviewDisclosure title="Financial highlights" defaultExpanded>
+      <div className="overview-toolbar">
+        <button
+          type="button"
+          className="secondary-action collapse-all-button"
+          aria-expanded={allExpanded}
+          onClick={() => setAllExpanded((value) => !value)}
+        >
+          <ChevronDown size={16} className={allExpanded ? "collapse-all-icon expanded" : "collapse-all-icon"} />
+          {allExpanded ? "Collapse all" : "Expand all"}
+        </button>
+      </div>
+
+      {budgetAlerts.length > 0 && (
+        <section className="overview-budget-alert">
+          <div className="budget-alert-head">
+            <CircleAlert size={18} />
+            <strong>Budgets to watch</strong>
+            <button type="button" className="budget-alert-link" onClick={() => onNavigate("budgets")}>
+              Open budget planner
+            </button>
+          </div>
+          <ul>
+            {budgetAlerts.map((line) => (
+              <li key={line.id}>
+                <span className="budget-alert-name">{line.name}</span>
+                <span className={`budget-status ${line.status}`}>{line.statusLabel}</span>
+                <strong>
+                  {formatINR(line.actualPaise)} / {formatINR(line.amountPaise)}
+                </strong>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <OverviewDisclosure title="Financial highlights" expanded={allExpanded}>
       <section className="summary-grid overview-summary">
         <SummaryCard
           label={selectedAccount?.type === "credit_card" ? "Available card limit" : "Available cash"}
@@ -605,27 +676,15 @@ function OverviewPage({
           value={formatINR(overview.summary.incomePaise)}
           icon={<TrendingUp />}
         />
-        <SummaryCard
-          label="Monthly net cash flow"
-          value={signedImpact(monthlyNetPaise)}
-          icon={<ArrowDownUp />}
-          tone={monthlyNetPaise >= 0 ? "good" : "warning"}
-        />
-        <SummaryCard
-          label="Savings rate"
-          value={savingsRate === null ? "—" : `${savingsRate}%`}
-          icon={<PiggyBank />}
-          tone={savingsRate === null ? undefined : savingsRate >= 0 ? "good" : "warning"}
-        />
       </section>
       </OverviewDisclosure>
 
       <section className="two-column">
-        <CollapsiblePanel title={`Recent activity · ${overview.recentTransactions.length}`} action={<button onClick={() => onNavigate("transactions")}>View all</button>}>
+        <CollapsiblePanel title={`Recent activity · ${overview.recentTransactions.length}`} expanded={allExpanded} action={<button onClick={() => onNavigate("transactions")}>View all</button>}>
           <TransactionTable transactions={overview.recentTransactions} empty="No transactions yet." compact />
         </CollapsiblePanel>
 
-        <CollapsiblePanel title={`Account snapshot · ${overview.accounts.length}`} action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
+        <CollapsiblePanel title={`Account snapshot · ${overview.accounts.length}`} expanded={allExpanded} action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
           <div className="account-stack">
             {overview.accounts.map((account) => (
               <OverviewAccountLine key={account.id} account={account} />
@@ -637,6 +696,7 @@ function OverviewPage({
       <section className="two-column overview-analytics">
         <CollapsiblePanel
           title={`Spending mix · ${formatMonth(overview.month)}`}
+          expanded={allExpanded}
           action={<button onClick={() => onNavigate("reports")}>Open reports</button>}
         >
           {spendingSegments.length === 0 || overview.summary.totalSpendingPaise <= 0 ? (
@@ -652,7 +712,7 @@ function OverviewPage({
           )}
         </CollapsiblePanel>
 
-        <CollapsiblePanel title="Income vs spending">
+        <CollapsiblePanel title="Income vs spending" expanded={allExpanded}>
           <IncomeSpendingBars
             incomePaise={overview.summary.incomePaise}
             spendingPaise={overview.summary.totalSpendingPaise}
@@ -674,7 +734,6 @@ function IncomeSpendingBars({
     return <EmptyState text="No income or spending yet this month." />;
   }
 
-  const netPaise = incomePaise - spendingPaise;
   const max = Math.max(incomePaise, spendingPaise, 1);
   const rows = [
     { label: "Income", value: incomePaise, color: "var(--good)" },
@@ -692,10 +751,6 @@ function IncomeSpendingBars({
           <strong>{formatINR(row.value)}</strong>
         </div>
       ))}
-      <div className="compare-net">
-        <span>Net cash flow</span>
-        <strong className={netPaise >= 0 ? "amount-in" : "amount-out"}>{signedImpact(netPaise)}</strong>
-      </div>
     </div>
   );
 }
@@ -1882,18 +1937,12 @@ function ReportsPage({
               <SummaryCard label="Loan" value={formatINR(report.loanPaise ?? report.emiPaise)} icon={<CreditCard />} tone="warning" />
               <SummaryCard label="Investment" value={formatINR(report.investmentPaise)} icon={<ArrowDownUp />} />
               <SummaryCard label="Income" value={formatINR(report.incomePaise)} icon={<WalletCards />} />
-              <SummaryCard
-                label="Net"
-                value={formatINR(report.incomePaise - report.totalSpendingPaise)}
-                icon={<ArrowDownUp />}
-              />
             </div>
             <ReportTypeAnalytics
               types={report.types}
               selectedTypeId={selectedType?.typeId ?? ""}
               onSelect={setSelectedTypeId}
             />
-            <IncomeAllocationAnalytics report={report} />
             <CategoryBars categories={report.categories} />
             <a className="secondary-action export-link" href="/api/export/transactions.csv">
               <Download size={18} />
@@ -1904,6 +1953,364 @@ function ReportsPage({
       </Panel>
     </div>
   );
+}
+
+function BudgetPlannerPage({
+  refreshKey,
+  showNotice,
+  requestConfirm
+}: {
+  refreshKey: number;
+  showNotice: (message: string) => void;
+  requestConfirm: (request: ConfirmRequest) => void;
+}) {
+  const [month, setMonth] = useState(currentMonth());
+  const [plan, setPlan] = useState<BudgetPlan | null>(null);
+  const [error, setError] = useState("");
+  const [retryKey, setRetryKey] = useState(0);
+  const [typeId, setTypeId] = useState("");
+  const [subKey, setSubKey] = useState("");
+  const [amount, setAmount] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState("");
+  const [editAmount, setEditAmount] = useState("");
+
+  const budgetTypes = useMemo(() => budgetTypeOptions(plan?.availableScopes ?? []), [plan]);
+  const subScopes = useMemo(
+    () => (plan?.availableScopes ?? []).filter((scope) => scope.typeId === typeId),
+    [plan, typeId]
+  );
+
+  const loadPlan = useCallback(async () => {
+    setPlan(null);
+    setError("");
+    try {
+      setPlan(await Api.budgetPlan(month));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load budget plan.");
+    }
+  }, [month]);
+
+  useEffect(() => {
+    void loadPlan();
+  }, [loadPlan, retryKey, refreshKey]);
+
+  useEffect(() => {
+    if (!budgetTypes.length) {
+      setTypeId("");
+      return;
+    }
+    if (!budgetTypes.some((type) => type.typeId === typeId)) {
+      setTypeId(budgetTypes[0].typeId);
+    }
+  }, [budgetTypes, typeId]);
+
+  useEffect(() => {
+    if (!subScopes.length) {
+      setSubKey("");
+      return;
+    }
+    if (!subScopes.some((scope) => budgetScopeKey(scope) === subKey)) {
+      setSubKey(budgetScopeKey(subScopes[0]));
+    }
+  }, [subScopes, subKey]);
+
+  async function addBudget(event: FormEvent) {
+    event.preventDefault();
+    const scope = subScopes.find((item) => budgetScopeKey(item) === subKey);
+    if (!scope) {
+      showNotice("Choose a budget line.");
+      return;
+    }
+    const amountPaise = parseAmountToPaise(amount);
+    if (amountPaise <= 0) {
+      showNotice("Enter a budget amount.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await Api.createBudgetLine({ month, scopeType: scope.scopeType, scopeId: scope.scopeId, amountPaise });
+      setAmount("");
+      await loadPlan();
+      showNotice("Budget added.");
+    } catch (err) {
+      showNotice(err instanceof Error ? err.message : "Could not add budget.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveEdit(line: BudgetLine) {
+    const amountPaise = parseAmountToPaise(editAmount);
+    if (amountPaise <= 0) {
+      showNotice("Enter a budget amount.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await Api.updateBudgetLine(line.id, { amountPaise });
+      setEditingId("");
+      setEditAmount("");
+      await loadPlan();
+      showNotice("Budget updated.");
+    } catch (err) {
+      showNotice(err instanceof Error ? err.message : "Could not update budget.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function remove(line: BudgetLine) {
+    requestConfirm({
+      message: "Remove this budget line?",
+      detail: `${line.name} will be removed from ${formatMonth(line.month)}. Transactions and reports stay unchanged.`,
+      confirmLabel: "Remove",
+      tone: "danger",
+      onConfirm: async () => {
+        try {
+          await Api.deleteBudgetLine(line.id);
+          await loadPlan();
+          showNotice("Budget removed.");
+        } catch (err) {
+          showNotice(err instanceof Error ? err.message : "Could not remove budget.");
+        }
+      }
+    });
+  }
+
+  return (
+    <div className="page-grid budget-page">
+      <Panel
+        title="Monthly Budget"
+        action={
+          <label className="control-field budget-month-control">
+            <span className="control-label">Month</span>
+            <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
+          </label>
+        }
+      >
+        {error ? (
+          <div className="stacked-empty-state">
+            <EmptyState text={error} />
+            <button type="button" className="secondary-action" onClick={() => setRetryKey((key) => key + 1)}>
+              <RotateCcw size={17} />
+              Retry
+            </button>
+          </div>
+        ) : !plan ? (
+          <PanelLoader label="Loading budget" />
+        ) : (
+          <>
+            <p className="helper-text budget-range">
+              {formatShortDate(plan.start)} to {formatShortDate(plan.end)} · Day {plan.dayOfMonth} of {plan.daysInMonth}
+            </p>
+            <div className="summary-grid report-summary">
+              <SummaryCard label="Budgeted" value={formatINR(plan.totals.amountPaise)} icon={<PiggyBank />} />
+              <SummaryCard label="Used" value={formatINR(plan.totals.actualPaise)} icon={<BarChart3 />} tone={budgetSummaryTone(plan)} />
+              <SummaryCard label="Remaining" value={formatINR(plan.totals.remainingPaise)} icon={<WalletCards />} tone="good" />
+              <SummaryCard label="Projected" value={formatINR(plan.totals.projectedPaise)} icon={<TrendingUp />} tone={plan.totals.projectedPaise > plan.totals.amountPaise ? "warning" : "neutral"} />
+            </div>
+
+            <form className="budget-add-form" onSubmit={addBudget}>
+              <label>
+                Type
+                <select value={typeId} onChange={(event) => setTypeId(event.target.value)} disabled={!budgetTypes.length}>
+                  {budgetTypes.length === 0 && <option value="">No Types available</option>}
+                  {budgetTypes.map((type) => (
+                    <option key={type.typeId} value={type.typeId}>
+                      {type.typeName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                SubType
+                <select value={subKey} onChange={(event) => setSubKey(event.target.value)} disabled={!subScopes.length}>
+                  {subScopes.length === 0 && <option value="">No SubTypes available</option>}
+                  {subScopes.map((scope) => (
+                    <option key={budgetScopeKey(scope)} value={budgetScopeKey(scope)}>
+                      {budgetSubLabel(scope)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Amount
+                <input
+                  inputMode="decimal"
+                  value={amount}
+                  onChange={(event) => setAmount(event.target.value)}
+                  placeholder="25000"
+                />
+              </label>
+              <button className="primary-action" type="submit" disabled={saving || !subScopes.length}>
+                <Plus size={17} />
+                Add
+              </button>
+            </form>
+
+            {plan.lines.length === 0 ? (
+              <EmptyState text="No budget lines for this month." />
+            ) : (
+              <div className="budget-line-list">
+                {plan.lines.map((line) => (
+                  <BudgetLineCard
+                    key={line.id}
+                    line={line}
+                    isEditing={editingId === line.id}
+                    editAmount={editAmount}
+                    saving={saving}
+                    onEditAmount={setEditAmount}
+                    onStartEdit={() => {
+                      setEditingId(line.id);
+                      setEditAmount(String(line.amountPaise / 100));
+                    }}
+                    onCancelEdit={() => {
+                      setEditingId("");
+                      setEditAmount("");
+                    }}
+                    onSave={() => void saveEdit(line)}
+                    onDelete={() => remove(line)}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+function BudgetLineCard({
+  line,
+  isEditing,
+  editAmount,
+  saving,
+  onEditAmount,
+  onStartEdit,
+  onCancelEdit,
+  onSave,
+  onDelete
+}: {
+  line: BudgetLine;
+  isEditing: boolean;
+  editAmount: string;
+  saving: boolean;
+  onEditAmount: (value: string) => void;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSave: () => void;
+  onDelete: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const progress = Math.min(line.usedPercent, 100);
+  return (
+    <article className={`budget-line-card ${line.status}`}>
+      <div className="budget-line-header">
+        <div className="loan-title">
+          <span className="loan-icon" style={{ background: `${line.color}18`, color: line.color }}>
+            <IconGlyph name={line.icon} size={20} />
+          </span>
+          <div>
+            <strong>{line.name}</strong>
+            <span>{line.scopeType === "type" ? "Type budget" : "SubType budget"}</span>
+          </div>
+        </div>
+        <div className="loan-header-actions">
+          <span className={`budget-status ${line.status}`}>{line.statusLabel}</span>
+          <button
+            type="button"
+            className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
+            aria-label={expanded ? `Collapse ${line.name}` : `Expand ${line.name}`}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            <ChevronDown size={18} />
+          </button>
+        </div>
+      </div>
+
+      <div className="budget-progress">
+        <div>
+          <span>{line.usedPercent}% used</span>
+          <strong>{formatINR(line.actualPaise)} / {formatINR(line.amountPaise)}</strong>
+        </div>
+        <div className="budget-progress-bar" aria-label={`${line.name} budget usage`}>
+          <span className={line.status} style={{ width: `${progress}%` }} />
+        </div>
+      </div>
+
+      {expanded && <>
+      <div className="budget-line-metrics">
+        <Metric label="Remaining" value={formatINR(line.remainingPaise)} warning={line.remainingPaise < 0} />
+        <Metric label="Projection" value={formatINR(line.projectedPaise)} warning={line.projectedPaise > line.amountPaise} />
+      </div>
+
+      <div className="budget-line-actions">
+        {isEditing ? (
+          <>
+            <input
+              aria-label={`Budget amount for ${line.name}`}
+              inputMode="decimal"
+              value={editAmount}
+              onChange={(event) => onEditAmount(event.target.value)}
+            />
+            <button type="button" className="secondary-action" disabled={saving} onClick={onSave}>
+              <Check size={16} />
+              Save
+            </button>
+            <button type="button" className="secondary-action" onClick={onCancelEdit}>
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" className="secondary-action" onClick={onStartEdit}>
+              <Pencil size={16} />
+              Edit
+            </button>
+            <button type="button" className="secondary-action danger-action" onClick={onDelete}>
+              <Trash2 size={16} />
+              Remove
+            </button>
+          </>
+        )}
+      </div>
+      </>}
+    </article>
+  );
+}
+
+function budgetScopeKey(scope: BudgetScope) {
+  return `${scope.scopeType}:${scope.scopeId}`;
+}
+
+function budgetTypeOptions(scopes: BudgetScope[]): Array<{ typeId: string; typeName: string }> {
+  const seen = new Set<string>();
+  const types: Array<{ typeId: string; typeName: string }> = [];
+  for (const scope of scopes) {
+    if (!seen.has(scope.typeId)) {
+      seen.add(scope.typeId);
+      types.push({ typeId: scope.typeId, typeName: scope.typeName });
+    }
+  }
+  return types;
+}
+
+function budgetSubLabel(scope: BudgetScope) {
+  if (scope.scopeType === "type") {
+    return "All subtypes";
+  }
+  const prefix = `${scope.typeName} / `;
+  return scope.name.startsWith(prefix) ? scope.name.slice(prefix.length) : scope.name;
+}
+
+function budgetSummaryTone(plan: BudgetPlan): "neutral" | "warning" | "good" {
+  if (plan.totals.overCount > 0 || plan.totals.criticalCount > 0 || plan.totals.watchCount > 0) {
+    return "warning";
+  }
+  return plan.lines.length > 0 ? "good" : "neutral";
 }
 
 function AccountsPage({
@@ -2484,6 +2891,7 @@ function SubscriptionCard({
   onArchive?: (subscription: AutopaySubscription) => void;
   onRestore?: (subscription: AutopaySubscription) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const expired = subscription.status === "expired";
   return (
     <article className={`loan-card ${subscription.isArchived ? "archived" : ""}`}>
@@ -2497,11 +2905,29 @@ function SubscriptionCard({
             <span>{formatINR(subscription.amountPaise)} / cycle</span>
           </div>
         </div>
-        <span className={`subscription-status ${expired ? "expired" : "active"}`}>
-          {expired ? "Expired" : "Active"}
-        </span>
+        <div className="loan-header-actions">
+          <span className={`subscription-status ${expired ? "expired" : "active"}`}>
+            {expired ? "Expired" : "Active"}
+          </span>
+          <button
+            type="button"
+            className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
+            aria-label={expanded ? `Collapse ${subscription.name}` : `Expand ${subscription.name}`}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            <ChevronDown size={18} />
+          </button>
+        </div>
       </div>
 
+      <div className="loan-card-quick">
+        <span>Payments made</span>
+        <strong>{subscription.paymentCount}</strong>
+        <small>Renews until {formatDateWithYear(subscription.expiryDate)}</small>
+      </div>
+
+      {expanded && <>
       <div className="subscription-meta">
         <div>
           <span>Started</span>
@@ -2539,6 +2965,7 @@ function SubscriptionCard({
           </button>
         )}
       </div>
+      </>}
     </article>
   );
 }
@@ -3044,66 +3471,6 @@ function ReportTypeAnalytics({
   );
 }
 
-function IncomeAllocationAnalytics({ report }: { report: MonthlyReport }) {
-  const incomePaise = report.incomePaise;
-  const outflows = report.types
-    .filter((type) => type.behavior !== "income" && type.behavior !== "refund" && type.amountPaise > 0)
-    .map((type) => ({
-      id: type.typeId,
-      name: type.name,
-      color: type.color,
-      amountPaise: type.amountPaise,
-      labelShare: incomePaise > 0 ? (type.amountPaise / incomePaise) * 100 : 0
-    }));
-  const outflowTotal = outflows.reduce((sum, item) => sum + item.amountPaise, 0);
-  const unallocated = Math.max(incomePaise - outflowTotal, 0);
-  const visualTotal = Math.max(incomePaise, outflowTotal);
-  const segments: DonutSegment[] =
-    incomePaise > 0
-      ? [
-          ...outflows,
-          ...(unallocated > 0
-            ? [
-                {
-                  id: "unallocated-income",
-                  name: "Unallocated",
-                  color: "#64748b",
-                  amountPaise: unallocated,
-                  labelShare: (unallocated / incomePaise) * 100
-                }
-              ]
-            : [])
-        ]
-      : [];
-
-  return (
-    <div className="income-allocation">
-      <div className="income-allocation-header">
-        <div>
-          <p className="eyebrow">Income allocation</p>
-          <h3>Where the income went</h3>
-        </div>
-        <strong>{formatINR(incomePaise)}</strong>
-      </div>
-      {incomePaise <= 0 ? (
-        <EmptyState text="No income recorded for this period." />
-      ) : (
-        <div className="pie-panel">
-          <div className="pie-chart">
-            <DonutChart
-              segments={consolidateDonutSegments(segments)}
-              totalPaise={visualTotal}
-              ariaLabel="Income allocation percentage chart"
-              centerLabel="Income"
-              centerValue={formatINR(incomePaise)}
-            />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function DonutChart({
   segments,
   totalPaise,
@@ -3367,36 +3734,95 @@ function OverviewAccountLine({ account }: { account: Account }) {
   );
 }
 
-function AccountLine({ account, expanded = false }: { account: Account; expanded?: boolean }) {
-  const isCard = account.type === "credit_card";
+const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
+  {
+    question: "Where is my data stored? Is anything uploaded online?",
+    answer:
+      "Everything runs on this device. Your accounts, transactions, budgets and settings live in a local database on your computer — nothing is uploaded to any server. Backups are also saved locally."
+  },
+  {
+    question: "How is 'Available cash' calculated?",
+    answer:
+      "It's the money across your bank and food-card accounts: each account's starting balance, plus every income you recorded into it, minus every expense, transfer and card payment made from it."
+  },
+  {
+    question: "How is a credit card's 'Outstanding' and 'Available limit' calculated?",
+    answer:
+      "Outstanding is what you currently owe: the card's starting balance plus everything charged to it, minus the payments you've made toward it. Available limit is the card's total limit minus the outstanding."
+  },
+  {
+    question: "How is 'This month spending' calculated?",
+    answer:
+      "It adds up every expense dated in the current calendar month. Income, transfers between your own accounts, and credit-card payments are not counted as spending."
+  },
+  {
+    question: "How does a budget's 'Projection' work?",
+    answer:
+      "It estimates where your spending will land by month-end if you keep the current pace. It takes what you've spent so far and scales it up by how much of the month has passed — for example, ₹9,000 spent one-third of the way through the month projects to about ₹27,000."
+  },
+  {
+    question: "What do the budget labels mean — On track, Watch, Likely to exceed, Over budget?",
+    answer:
+      "On track means spending is comfortably within budget. Watch means you're getting close. Likely to exceed means that, at your current pace, the projection lands over the budget. Over budget means you've already spent more than the budgeted amount."
+  },
+  {
+    question: "What's the difference between a Type budget and a SubType budget?",
+    answer:
+      "A Type budget (chosen as 'All subtypes') caps a whole category like Expense. A SubType budget caps a single line like Groceries. For a given month you can budget either the whole Type or its individual SubTypes — not both at once."
+  },
+  {
+    question: "Which categories can I set a budget for?",
+    answer:
+      "Budgets track outflow categories: Expense, Loan, Investment and Transfer. Income isn't budgeted, so it won't appear as a budget line."
+  },
+  {
+    question: "How does AutoPay 'Payments made' count work?",
+    answer:
+      "Each time you add a transaction, choose SubType = AutoPay, and link it to a subscription, that subscription's counter goes up by one. Deleting or unlinking the transaction lowers the count again."
+  },
+  {
+    question: "How is the 'Spending mix' chart calculated?",
+    answer:
+      "It shows how this month's spending splits across your categories, as a share of the total. The largest categories are shown individually and the smallest are grouped together as 'Other'."
+  },
+  {
+    question: "How are backups made?",
+    answer:
+      "The app saves a local backup automatically every 30 minutes while it's running, and once more when you close it normally. Backups are kept in a local 'backups' folder on this device."
+  }
+];
+
+function FaqPage() {
   return (
-    <div className={`account-line ${isCard && expanded ? "card-rich" : ""}`}>
-      <div className="account-leading">
-        <span className={`account-icon ${accountIconTone(account.type)}`}>
-          {accountIconForType(account.type, 21)}
-        </span>
-        <div>
-          <strong>{account.name}</strong>
-          <span>{accountTypeLabel(account.type)}</span>
+    <div className="page-grid">
+      <Panel title="Frequently asked questions">
+        <p className="helper-text faq-intro">
+          Plain-language answers about how the numbers in this app are worked out.
+        </p>
+        <div className="faq-list">
+          {FAQ_ITEMS.map((item) => (
+            <FaqItem key={item.question} question={item.question} answer={item.answer} />
+          ))}
         </div>
-      </div>
-      <div className="account-values">
-        {isCard ? (
-          expanded ? (
-            <CardLimitSummary account={account} />
-          ) : (
-            <>
-              <strong>{formatINR(account.outstandingPaise)}</strong>
-              <span>Outstanding</span>
-            </>
-          )
-        ) : (
-          <>
-            <strong>{formatINR(account.balancePaise)}</strong>
-            <span>Balance</span>
-          </>
-        )}
-      </div>
+      </Panel>
+    </div>
+  );
+}
+
+function FaqItem({ question, answer }: { question: string; answer: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`faq-item ${open ? "open" : ""}`}>
+      <button
+        type="button"
+        className="faq-question"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span>{question}</span>
+        <ChevronDown size={18} className={`faq-chevron ${open ? "expanded" : ""}`} />
+      </button>
+      {open && <p className="faq-answer">{answer}</p>}
     </div>
   );
 }
@@ -3557,23 +3983,57 @@ function AccountManagerLine({
   onRemove?: (account: Account) => void;
   onRestore?: (account: Account) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const isCard = account.type === "credit_card";
+  const primaryValue = isCard ? account.outstandingPaise : account.balancePaise;
+  const primaryLabel = isCard ? "Outstanding" : "Balance";
+
   return (
-    <div className={`account-manage-line ${account.isArchived ? "archived" : ""}`}>
-      <AccountLine account={account} expanded />
-      <div className="account-actions">
-        {account.isArchived ? (
-          <button className="secondary-action" onClick={() => onRestore?.(account)}>
-            <RotateCcw size={16} />
-            Restore
+    <article className={`loan-card account-card ${account.isArchived ? "archived" : ""}`}>
+      <div className="loan-card-header">
+        <div className="loan-title">
+          <span className={`account-icon ${accountIconTone(account.type)}`}>
+            {accountIconForType(account.type, 20)}
+          </span>
+          <div>
+            <strong>{account.name}</strong>
+            <span>{accountTypeLabel(account.type)}</span>
+          </div>
+        </div>
+        <div className="loan-header-actions">
+          <div className="account-card-primary">
+            <strong>{formatINR(primaryValue)}</strong>
+            <span>{primaryLabel}</span>
+          </div>
+          <button
+            type="button"
+            className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
+            aria-label={expanded ? `Collapse ${account.name}` : `Expand ${account.name}`}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            <ChevronDown size={18} />
           </button>
-        ) : (
-          <button className="secondary-action danger-action" onClick={() => onRemove?.(account)}>
-            <Archive size={16} />
-            Remove
-          </button>
-        )}
+        </div>
       </div>
-    </div>
+
+      {expanded && <>
+        {isCard && <CardLimitSummary account={account} />}
+        <div className="account-actions">
+          {account.isArchived ? (
+            <button className="secondary-action" onClick={() => onRestore?.(account)}>
+              <RotateCcw size={16} />
+              Restore
+            </button>
+          ) : (
+            <button className="secondary-action danger-action" onClick={() => onRemove?.(account)}>
+              <Archive size={16} />
+              Remove
+            </button>
+          )}
+        </div>
+      </>}
+    </article>
   );
 }
 
@@ -3600,32 +4060,25 @@ function Panel({
 function CollapsiblePanel({
   title,
   action,
+  expanded,
   children
 }: {
   title: string;
   action?: React.ReactNode;
+  expanded: boolean;
   children: React.ReactNode;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const contentId = `panel-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 
   return (
     <section className={`panel collapsible-panel ${expanded ? "expanded" : ""}`}>
       <div className="panel-header">
         <h2>{title}</h2>
-        <div className="panel-header-actions">
-          {action && <div className="panel-action">{action}</div>}
-          <button
-            type="button"
-            className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
-            aria-label={expanded ? `Collapse ${title}` : `Expand ${title}`}
-            aria-expanded={expanded}
-            aria-controls={contentId}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            <ChevronDown size={18} />
-          </button>
-        </div>
+        {action && (
+          <div className="panel-header-actions">
+            <div className="panel-action">{action}</div>
+          </div>
+        )}
       </div>
       {expanded && <div id={contentId} className="collapsible-content">{children}</div>}
     </section>
@@ -3634,28 +4087,17 @@ function CollapsiblePanel({
 
 function OverviewDisclosure({
   title,
-  defaultExpanded = false,
+  expanded,
   children
 }: {
   title: string;
-  defaultExpanded?: boolean;
+  expanded: boolean;
   children: React.ReactNode;
 }) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-
   return (
     <section className="overview-disclosure">
       <div className="overview-disclosure-header">
         <h2>{title}</h2>
-        <button
-          type="button"
-          className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
-          aria-label={expanded ? `Collapse ${title}` : `Expand ${title}`}
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <ChevronDown size={18} />
-        </button>
       </div>
       {expanded && <div className="collapsible-content">{children}</div>}
     </section>

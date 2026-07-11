@@ -11,6 +11,7 @@ import {
   createAccount,
   createAutopaySubscription,
   createBackup,
+  createBudgetLine,
   createCategoryType,
   createLoan,
   createSubcategory,
@@ -18,12 +19,14 @@ import {
   archiveAutopaySubscription,
   archiveLoan,
   deleteAccount,
+  deleteBudgetLine,
   deleteCategoryType,
   deleteSubcategory,
   deleteTransaction,
   buildImportTemplate,
   exportTransactionsCsv,
   getBackupStatus,
+  getBudgetPlan,
   getCurrentBatch,
   getMonthlyReport,
   getOverview,
@@ -40,6 +43,7 @@ import {
   stopAutoBackup,
   updateAccount,
   updateAutopaySubscription,
+  updateBudgetLine,
   updateLoan,
   updateProfile,
   updateTransaction
@@ -252,6 +256,26 @@ app.get("/api/reports/monthly", async (request) => {
   );
 });
 
+app.get("/api/budgets", async (request) => {
+  const query = request.query as { month?: string };
+  return getBudgetPlan(query.month);
+});
+
+app.post("/api/budgets", async (request, reply) => {
+  const line = createBudgetLine(request.body as never);
+  return reply.status(201).send(line);
+});
+
+app.patch("/api/budgets/:id", async (request) => {
+  const params = request.params as { id: string };
+  return updateBudgetLine(params.id, request.body as never);
+});
+
+app.delete("/api/budgets/:id", async (request) => {
+  const params = request.params as { id: string };
+  return deleteBudgetLine(params.id);
+});
+
 app.get("/api/backup/status", async () => getBackupStatus());
 
 app.post("/api/backup", async () => createBackup("manual"));
@@ -283,11 +307,24 @@ app.get("/api/export/transactions.csv", async (_request, reply) => {
 
 if (existsSync(distDir)) {
   await app.register(fastifyStatic, {
-    root: distDir
+    root: distDir,
+    cacheControl: false,
+    setHeaders(res, filePath) {
+      // Content-hashed assets are immutable and safe to cache forever.
+      // index.html must never be cached, so a full reload always loads the
+      // newest build (and the fresh asset hashes it references).
+      if (filePath.endsWith(`${path.sep}index.html`) || filePath.endsWith("/index.html")) {
+        res.setHeader("cache-control", "no-store");
+      } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader("cache-control", "public, max-age=31536000, immutable");
+      } else {
+        res.setHeader("cache-control", "no-cache");
+      }
+    }
   });
 
   app.setNotFoundHandler((_request, reply) => {
-    reply.sendFile("index.html");
+    reply.header("cache-control", "no-store").sendFile("index.html");
   });
 }
 
