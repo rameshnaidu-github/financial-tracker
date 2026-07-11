@@ -43,6 +43,7 @@ import {
   startAutoBackup,
   stopAutoBackup,
   updateAccount,
+  updateAppSettings,
   updateAutopaySubscription,
   updateBudgetLine,
   updateLoan,
@@ -110,6 +111,8 @@ app.get("/api/bootstrap", async () => ({
 app.get("/api/profile", async () => getProfile());
 
 app.patch("/api/profile", async (request) => updateProfile(request.body as never));
+
+app.patch("/api/settings", async (request) => updateAppSettings(request.body as never));
 
 app.get("/api/overview", async (request) => {
   const query = request.query as { accountId?: string; month?: string };

@@ -358,6 +358,29 @@ a {
   padding: 10px;
 }
 
+.card-alert-controls {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.card-alert-controls input {
+  width: 64px;
+  min-height: 34px;
+  text-align: right;
+  font-weight: 850;
+}
+
+.card-alert-suffix {
+  color: var(--muted);
+  font-weight: 850;
+}
+
+.card-alert-row small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
 .settings-row span {
   color: var(--muted);
   font-size: 0.79rem;
@@ -615,27 +638,37 @@ a {
   font-weight: 800;
 }
 
-.overview-budget-alert ul {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.budget-alert-table {
+  width: 100%;
+  border-collapse: collapse;
 }
 
-.overview-budget-alert li {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 12px;
+.budget-alert-table th,
+.budget-alert-table td {
+  border-bottom: 1px solid rgba(220, 38, 38, 0.16);
+  padding: 8px 10px;
+  text-align: left;
 }
 
-.budget-alert-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.budget-alert-table th {
+  color: var(--muted);
+  font-size: 0.74rem;
   font-weight: 850;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.budget-alert-table td {
+  font-weight: 800;
+}
+
+.budget-alert-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.budget-alert-table .budget-alert-percent {
+  text-align: right;
+  white-space: nowrap;
 }
 
 .overview-disclosure {

@@ -53,6 +53,8 @@ export const Api = {
   profile: () => api<UserProfile>("/api/profile"),
   updateProfile: (body: Partial<UserProfile>) =>
     api<UserProfile>("/api/profile", { method: "PATCH", body }),
+  updateSettings: (body: { cardUtilizationAlertPercent: number }) =>
+    api<Record<string, string>>("/api/settings", { method: "PATCH", body }),
   overview: (accountId?: string, month?: string) => {
     const params = new URLSearchParams();
     if (accountId) params.set("accountId", accountId);

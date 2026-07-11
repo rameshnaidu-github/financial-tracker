@@ -1210,6 +1210,23 @@ test("builds month-on-month and year-on-year trend reports per Type", async () =
   await assertRejects("unknown trend type", () => services.getTrendReport(undefined, "type_missing", "month"));
 });
 
+test("stores the card utilization alert threshold with validation", async () => {
+  assert(
+    services.getSettings().card_utilization_alert_percent === "30",
+    "Card utilization alert should default to 30."
+  );
+
+  const updated = services.updateAppSettings({ cardUtilizationAlertPercent: 45 });
+  assert(updated.card_utilization_alert_percent === "45", "Threshold update should persist.");
+
+  await assertRejects("threshold above 100", () => services.updateAppSettings({ cardUtilizationAlertPercent: 150 }));
+  await assertRejects("threshold below 1", () => services.updateAppSettings({ cardUtilizationAlertPercent: 0 }));
+  assert(
+    services.getSettings().card_utilization_alert_percent === "45",
+    "Rejected updates should not change the stored threshold."
+  );
+});
+
 let failed = 0;
 
 for (const item of tests) {

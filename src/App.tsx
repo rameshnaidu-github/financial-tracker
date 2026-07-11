@@ -297,12 +297,29 @@ export default function App() {
     }
   }, [profileDraft, showNotice]);
 
+  const saveCardAlert = useCallback(
+    async (percent: number) => {
+      try {
+        const settings = await Api.updateSettings({ cardUtilizationAlertPercent: percent });
+        setBootstrap((current) => (current ? { ...current, settings } : current));
+        showNotice("Card alert threshold saved.");
+      } catch (err) {
+        showNotice(err instanceof Error ? err.message : "Could not save the setting.");
+      }
+    },
+    [showNotice]
+  );
+
   const accounts = bootstrap?.accounts ?? [];
   const loans = bootstrap?.loans ?? [];
   const subscriptions = bootstrap?.subscriptions ?? [];
   const categoryTypes = bootstrap?.categoryTypes ?? [];
   const categories = flattenSubcategories(categoryTypes);
   const profile = bootstrap?.profile ?? emptyProfile;
+  const cardAlertPercent = (() => {
+    const parsed = Number(bootstrap?.settings?.card_utilization_alert_percent ?? "30");
+    return Number.isFinite(parsed) && parsed >= 1 && parsed <= 100 ? Math.round(parsed) : 30;
+  })();
   const activeAccounts = accounts.filter((account) => !account.isArchived);
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const showAccountFilter =
@@ -401,6 +418,7 @@ export default function App() {
             <OverviewPage
               selectedAccountId={selectedAccountId}
               selectedAccount={selectedAccount}
+              cardAlertPercent={cardAlertPercent}
               refreshKey={refreshKey}
               onNavigate={navigate}
             />
@@ -445,6 +463,7 @@ export default function App() {
           {activePage === "accounts" && (
             <AccountsPage
               accounts={accounts}
+              cardAlertPercent={cardAlertPercent}
               refresh={refresh}
               showNotice={showNotice}
               requestConfirm={requestConfirm}
@@ -483,8 +502,10 @@ export default function App() {
               backupStatus={backupStatus}
               theme={theme}
               saving={profileSaving}
+              cardAlertPercent={cardAlertPercent}
               onProfileChange={setProfileDraft}
               onSaveProfile={saveProfile}
+              onSaveCardAlert={saveCardAlert}
               onThemeToggle={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
             />
           )}
@@ -558,11 +579,13 @@ function SetupPage({
 function OverviewPage({
   selectedAccountId,
   selectedAccount,
+  cardAlertPercent,
   refreshKey,
   onNavigate
 }: {
   selectedAccountId: string;
   selectedAccount?: Account;
+  cardAlertPercent: number;
   refreshKey: number;
   onNavigate: (page: Page) => void;
 }) {
@@ -640,17 +663,24 @@ function OverviewPage({
               Open budget planner
             </button>
           </div>
-          <ul>
-            {budgetAlerts.map((line) => (
-              <li key={line.id}>
-                <span className="budget-alert-name">{line.name}</span>
-                <span className={`budget-status ${line.status}`}>{line.statusLabel}</span>
-                <strong>
-                  {formatINR(line.actualPaise)} / {formatINR(line.amountPaise)}
-                </strong>
-              </li>
-            ))}
-          </ul>
+          <table className="budget-alert-table">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>SubType</th>
+                <th className="budget-alert-percent">% Used</th>
+              </tr>
+            </thead>
+            <tbody>
+              {budgetAlerts.map((line) => (
+                <tr key={line.id}>
+                  <td>{line.typeName}</td>
+                  <td>{budgetSubLabel(line)}</td>
+                  <td className="budget-alert-percent">{line.usedPercent}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </section>
       )}
 
@@ -692,7 +722,7 @@ function OverviewPage({
         <CollapsiblePanel title={`Account snapshot · ${overview.accounts.length}`} expanded={allExpanded} action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
           <div className="account-stack">
             {overview.accounts.map((account) => (
-              <OverviewAccountLine key={account.id} account={account} />
+              <OverviewAccountLine key={account.id} account={account} alertPercent={cardAlertPercent} />
             ))}
           </div>
         </CollapsiblePanel>
@@ -2501,11 +2531,13 @@ function budgetSummaryTone(plan: BudgetPlan): "neutral" | "warning" | "good" {
 
 function AccountsPage({
   accounts,
+  cardAlertPercent,
   refresh,
   showNotice,
   requestConfirm
 }: {
   accounts: Account[];
+  cardAlertPercent: number;
   refresh: () => Promise<void>;
   showNotice: (message: string) => void;
   requestConfirm: (request: ConfirmRequest) => void;
@@ -2546,7 +2578,7 @@ function AccountsPage({
       <Panel title="Accounts & cards">
         <div className="account-stack">
           {activeAccounts.map((account) => (
-            <AccountManagerLine key={account.id} account={account} onRemove={remove} />
+            <AccountManagerLine key={account.id} account={account} alertPercent={cardAlertPercent} onRemove={remove} />
           ))}
         </div>
         {archivedAccounts.length > 0 && (
@@ -2554,7 +2586,7 @@ function AccountsPage({
             <h3 className="section-subtitle">Removed</h3>
             <div className="account-stack">
               {archivedAccounts.map((account) => (
-                <AccountManagerLine key={account.id} account={account} onRestore={restore} />
+                <AccountManagerLine key={account.id} account={account} alertPercent={cardAlertPercent} onRestore={restore} />
               ))}
             </div>
           </>
@@ -3712,13 +3744,16 @@ function DonutChart({
 
   for (const side of ["left", "right"] as const) {
     const sideSlices = slices.filter((slice) => slice.side === side).sort((a, b) => a.labelY - b.labelY);
-    const gap = Math.max(25, Math.min(38, 260 / Math.max(sideSlices.length - 1, 1)));
+    // Each label is two text lines (~30px tall); stack labels relative to the
+    // previous one so clustered small slices never overlap.
+    const gap = 36;
     sideSlices.forEach((slice, index) => {
-      slice.labelY = Math.max(slice.labelY, 45 + index * gap);
+      const floor = index === 0 ? 45 : sideSlices[index - 1].labelY + gap;
+      slice.labelY = Math.max(slice.labelY, floor);
     });
     for (let index = sideSlices.length - 1; index >= 0; index -= 1) {
-      const maxY = 315 - (sideSlices.length - 1 - index) * gap;
-      sideSlices[index].labelY = Math.min(sideSlices[index].labelY, maxY);
+      const ceiling = index === sideSlices.length - 1 ? 315 : sideSlices[index + 1].labelY - gap;
+      sideSlices[index].labelY = Math.min(sideSlices[index].labelY, ceiling);
     }
   }
 
@@ -3886,11 +3921,11 @@ function categoryFromTransaction(transaction: Transaction): Category {
   };
 }
 
-function OverviewAccountLine({ account }: { account: Account }) {
+function OverviewAccountLine({ account, alertPercent }: { account: Account; alertPercent: number }) {
   const isCard = account.type === "credit_card";
   const limit = account.creditLimitPaise ?? 0;
   const usage = isCard && limit > 0 ? Math.min(Math.max(Math.round((account.outstandingPaise / limit) * 100), 0), 100) : 0;
-  const highUsage = isCard && usage > 30;
+  const highUsage = isCard && usage > alertPercent;
 
   return (
     <div className="account-line overview-account-line">
@@ -4013,12 +4048,12 @@ function FaqItem({ question, answer }: { question: string; answer: string }) {
   );
 }
 
-function CardLimitSummary({ account }: { account: Account }) {
+function CardLimitSummary({ account, alertPercent }: { account: Account; alertPercent: number }) {
   const limit = account.creditLimitPaise ?? 0;
   const outstanding = account.outstandingPaise;
   const available = account.availableLimitPaise ?? Math.max(limit - outstanding, 0);
   const usage = creditUtilization(account);
-  const highUsage = usage > 30;
+  const highUsage = usage > alertPercent;
 
   return (
     <div className="card-limit-summary">
@@ -4075,8 +4110,10 @@ function ProfilePage({
   backupStatus,
   theme,
   saving,
+  cardAlertPercent,
   onProfileChange,
   onSaveProfile,
+  onSaveCardAlert,
   onThemeToggle
 }: {
   profile: UserProfile;
@@ -4084,12 +4121,22 @@ function ProfilePage({
   backupStatus: BackupStatus | null;
   theme: Theme;
   saving: boolean;
+  cardAlertPercent: number;
   onProfileChange: (profile: UserProfile) => void;
   onSaveProfile: () => void;
+  onSaveCardAlert: (percent: number) => Promise<void> | void;
   onThemeToggle: () => void;
 }) {
   const displayName = profile.name || "Your profile";
   const displayEmail = profile.email || "Local profile";
+  const [cardAlertDraft, setCardAlertDraft] = useState(String(cardAlertPercent));
+
+  useEffect(() => {
+    setCardAlertDraft(String(cardAlertPercent));
+  }, [cardAlertPercent]);
+
+  const draftValue = Number.parseInt(cardAlertDraft, 10);
+  const draftIsValid = Number.isInteger(draftValue) && draftValue >= 1 && draftValue <= 100;
 
   return (
     <div className="profile-page">
@@ -4144,6 +4191,27 @@ function ProfilePage({
             <span>Week starts from</span>
             <strong>{formatWeekStart(settings.week_start)}</strong>
           </div>
+          <div className="settings-row card-alert-row">
+            <span>Card utilization alert</span>
+            <div className="card-alert-controls">
+              <input
+                aria-label="Card utilization alert percentage"
+                inputMode="numeric"
+                value={cardAlertDraft}
+                onChange={(event) => setCardAlertDraft(event.target.value)}
+              />
+              <span className="card-alert-suffix">%</span>
+              <button
+                type="button"
+                className="secondary-action"
+                disabled={!draftIsValid || draftValue === cardAlertPercent}
+                onClick={() => void onSaveCardAlert(draftValue)}
+              >
+                Save
+              </button>
+            </div>
+            <small>Credit cards turn red when utilization crosses this value (1–100).</small>
+          </div>
           <div className="settings-row backup-row">
             <span>Backup status</span>
             <strong>{formatBackupStatus(backupStatus)}</strong>
@@ -4162,10 +4230,12 @@ function ProfilePage({
 
 function AccountManagerLine({
   account,
+  alertPercent,
   onRemove,
   onRestore
 }: {
   account: Account;
+  alertPercent: number;
   onRemove?: (account: Account) => void;
   onRestore?: (account: Account) => void;
 }) {
@@ -4204,7 +4274,7 @@ function AccountManagerLine({
       </div>
 
       {expanded && <>
-        {isCard && <CardLimitSummary account={account} />}
+        {isCard && <CardLimitSummary account={account} alertPercent={alertPercent} />}
         <div className="account-actions">
           {account.isArchived ? (
             <button className="secondary-action" onClick={() => onRestore?.(account)}>

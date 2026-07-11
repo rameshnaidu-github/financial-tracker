@@ -17,6 +17,7 @@ import {
   updateBudgetLineSchema,
   updateLoanSchema,
   updateProfileSchema,
+  updateSettingsSchema,
   updateTransactionSchema,
   type AccountType,
   type BudgetScopeType,
@@ -36,6 +37,7 @@ import {
   type UpdateBudgetLineInput,
   type UpdateLoanInput,
   type UpdateProfileInput,
+  type UpdateSettingsInput,
   type UpdateTransactionInput
 } from "../shared/finance.ts";
 import { asRecord, asRecords, db, transaction } from "./db.ts";
@@ -345,6 +347,12 @@ export function getProfile(): UserProfile {
     email: settings.profile_email ?? "",
     age: settings.profile_age ?? ""
   };
+}
+
+export function updateAppSettings(input: UpdateSettingsInput) {
+  const parsed = updateSettingsSchema.parse(input);
+  setSetting("card_utilization_alert_percent", String(parsed.cardUtilizationAlertPercent));
+  return getSettings();
 }
 
 export function updateProfile(input: UpdateProfileInput): UserProfile {

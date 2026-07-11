@@ -300,6 +300,10 @@ export const updateBudgetLineSchema = z
   })
   .refine((value) => Object.keys(value).length > 0, "No budget changes provided.");
 
+export const updateSettingsSchema = z.object({
+  cardUtilizationAlertPercent: z.number().int().min(1).max(100)
+});
+
 export const updateProfileSchema = z.object({
   name: z.string().trim().max(80).optional(),
   email: z
@@ -453,6 +457,7 @@ export type UpdateAutopaySubscriptionInput = z.infer<typeof updateAutopaySubscri
 export type CreateBudgetLineInput = z.infer<typeof createBudgetLineSchema>;
 export type UpdateBudgetLineInput = z.infer<typeof updateBudgetLineSchema>;
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
 export type CreateBatchInput = z.infer<typeof createBatchSchema>;
