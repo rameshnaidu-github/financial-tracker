@@ -50,6 +50,8 @@ The app will be available at **http://127.0.0.1:4000**.
 
 On first run, the app creates its own SQLite database at `data/finance.db` — no setup required. Your data stays on this machine.
 
+These steps work the same on **macOS, Windows, and Linux** — install Node.js and pnpm for your platform and run the commands above from a terminal (on Windows, use PowerShell or Command Prompt). The optional `scripts/start.sh` / `scripts/stop.sh` helpers are macOS/Linux-only; on Windows just use `pnpm start` and stop with `Ctrl+C`.
+
 ### Development mode
 
 To run the frontend and backend with hot-reload while making changes:

@@ -19,6 +19,7 @@ export type TaxonomyBehavior =
   | "transfer"
   | "card_payment"
   | "refund";
+export type BudgetScopeType = "type" | "subcategory";
 
 export type Account = {
   id: string;
@@ -100,8 +101,22 @@ export type Transaction = {
   loanPaymentType: LoanPaymentType | null;
   loanPrincipalPaise: number | null;
   loanInterestPaise: number | null;
+  subscriptionId: string | null;
+  subscriptionName: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type AutopaySubscription = {
+  id: string;
+  name: string;
+  amountPaise: number;
+  startDate: string;
+  durationMonths: number;
+  expiryDate: string;
+  paymentCount: number;
+  status: "active" | "expired";
+  isArchived: boolean;
 };
 
 export type Loan = {
@@ -139,6 +154,7 @@ export type Bootstrap = {
   accounts: Account[];
   categoryTypes: CategoryType[];
   loans: Loan[];
+  subscriptions: AutopaySubscription[];
 };
 
 export type UserProfile = {
@@ -219,6 +235,59 @@ export type MonthlyReport = {
   types: ReportType[];
 };
 
+export type BudgetStatus = "safe" | "watch" | "critical" | "over";
+
+export type BudgetScope = {
+  scopeType: BudgetScopeType;
+  scopeId: string;
+  typeId: string;
+  subcategoryId: string | null;
+  name: string;
+  typeName: string;
+  behavior: TaxonomyBehavior;
+  icon: string;
+  color: string;
+};
+
+export type BudgetLine = BudgetScope & {
+  id: string;
+  month: string;
+  amountPaise: number;
+  actualPaise: number;
+  remainingPaise: number;
+  usedPercent: number;
+  expectedPercent: number;
+  paceDeltaPercent: number;
+  projectedPaise: number;
+  status: BudgetStatus;
+  statusLabel: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BudgetPlan = {
+  month: string;
+  start: string;
+  end: string;
+  asOfDate: string;
+  dayOfMonth: number;
+  daysInMonth: number;
+  elapsedPercent: number;
+  totals: {
+    amountPaise: number;
+    actualPaise: number;
+    remainingPaise: number;
+    projectedPaise: number;
+    safeCount: number;
+    watchCount: number;
+    criticalCount: number;
+    overCount: number;
+    unplannedActualPaise: number;
+  };
+  lines: BudgetLine[];
+  availableScopes: BudgetScope[];
+};
+
 export type CreateTransactionPayload = {
   batchId?: string;
   date: string;
@@ -236,6 +305,7 @@ export type CreateTransactionPayload = {
   linkedTransactionId?: string;
   loanId?: string;
   loanPaymentType?: LoanPaymentType;
+  subscriptionId?: string;
   splits?: Array<{
     categoryId: string;
     amountPaise: number;

@@ -118,6 +118,35 @@ export function initDatabase() {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS autopay_subscriptions (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL COLLATE NOCASE,
+      amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+      start_date TEXT NOT NULL,
+      duration_months INTEGER NOT NULL CHECK (duration_months > 0),
+      is_archived INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS autopay_payments (
+      id TEXT PRIMARY KEY,
+      subscription_id TEXT NOT NULL REFERENCES autopay_subscriptions(id) ON DELETE CASCADE,
+      transaction_id TEXT NOT NULL UNIQUE REFERENCES transactions(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS budget_lines (
+      id TEXT PRIMARY KEY,
+      month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
+      scope_type TEXT NOT NULL CHECK (scope_type IN ('type', 'subcategory')),
+      scope_id TEXT NOT NULL,
+      amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(month, scope_type, scope_id)
+    );
+
   `);
 
   migrateAccountNameConstraint();
@@ -130,6 +159,8 @@ export function initDatabase() {
   ensureAccountIndexes();
   ensureTransactionIndexes();
   ensureLoanIndexes();
+  ensureAutopayIndexes();
+  ensureBudgetIndexes();
   ensureTaxonomyIndexes();
   seedSettings();
   pruneBackupFiles();
@@ -141,6 +172,21 @@ function ensureLoanIndexes() {
     CREATE INDEX IF NOT EXISTS idx_loans_archived ON loans(is_archived);
     CREATE INDEX IF NOT EXISTS idx_loan_payments_loan ON loan_payments(loan_id);
     CREATE INDEX IF NOT EXISTS idx_loan_payments_transaction ON loan_payments(transaction_id);
+  `);
+}
+
+function ensureAutopayIndexes() {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_autopay_subscriptions_archived ON autopay_subscriptions(is_archived);
+    CREATE INDEX IF NOT EXISTS idx_autopay_payments_subscription ON autopay_payments(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_autopay_payments_transaction ON autopay_payments(transaction_id);
+  `);
+}
+
+function ensureBudgetIndexes() {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_budget_lines_month ON budget_lines(month);
+    CREATE INDEX IF NOT EXISTS idx_budget_lines_scope ON budget_lines(scope_type, scope_id);
   `);
 }
 

@@ -9,19 +9,24 @@ import { initDatabase } from "./db.ts";
 import { isTrustedRequestOrigin, securityHeaders } from "./security.ts";
 import {
   createAccount,
+  createAutopaySubscription,
   createBackup,
+  createBudgetLine,
   createCategoryType,
   createLoan,
   createSubcategory,
   createTransaction,
+  archiveAutopaySubscription,
   archiveLoan,
   deleteAccount,
+  deleteBudgetLine,
   deleteCategoryType,
   deleteSubcategory,
   deleteTransaction,
   buildImportTemplate,
   exportTransactionsCsv,
   getBackupStatus,
+  getBudgetPlan,
   getCurrentBatch,
   getMonthlyReport,
   getOverview,
@@ -29,6 +34,7 @@ import {
   getSettings,
   importTransactionsWorkbook,
   listAccounts,
+  listAutopaySubscriptions,
   listCategoryTypes,
   listLoans,
   listTransactions,
@@ -36,6 +42,8 @@ import {
   startAutoBackup,
   stopAutoBackup,
   updateAccount,
+  updateAutopaySubscription,
+  updateBudgetLine,
   updateLoan,
   updateProfile,
   updateTransaction
@@ -94,7 +102,8 @@ app.get("/api/bootstrap", async () => ({
   profile: getProfile(),
   accounts: listAccounts(),
   categoryTypes: listCategoryTypes(),
-  loans: listLoans(true)
+  loans: listLoans(true),
+  subscriptions: listAutopaySubscriptions(true)
 }));
 
 app.get("/api/profile", async () => getProfile());
@@ -165,6 +174,26 @@ app.delete("/api/loans/:id", async (request) => {
   return archiveLoan(params.id);
 });
 
+app.get("/api/subscriptions", async (request) => {
+  const query = request.query as { includeArchived?: string };
+  return listAutopaySubscriptions(query.includeArchived === "true");
+});
+
+app.post("/api/subscriptions", async (request, reply) => {
+  const subscription = createAutopaySubscription(request.body as never);
+  return reply.status(201).send(subscription);
+});
+
+app.patch("/api/subscriptions/:id", async (request) => {
+  const params = request.params as { id: string };
+  return updateAutopaySubscription(params.id, request.body as never);
+});
+
+app.delete("/api/subscriptions/:id", async (request) => {
+  const params = request.params as { id: string };
+  return archiveAutopaySubscription(params.id);
+});
+
 app.get("/api/batches/current", async (request) => {
   const query = request.query as { weekStart: string; weekEnd: string };
   return getCurrentBatch(query.weekStart, query.weekEnd);
@@ -227,6 +256,26 @@ app.get("/api/reports/monthly", async (request) => {
   );
 });
 
+app.get("/api/budgets", async (request) => {
+  const query = request.query as { month?: string };
+  return getBudgetPlan(query.month);
+});
+
+app.post("/api/budgets", async (request, reply) => {
+  const line = createBudgetLine(request.body as never);
+  return reply.status(201).send(line);
+});
+
+app.patch("/api/budgets/:id", async (request) => {
+  const params = request.params as { id: string };
+  return updateBudgetLine(params.id, request.body as never);
+});
+
+app.delete("/api/budgets/:id", async (request) => {
+  const params = request.params as { id: string };
+  return deleteBudgetLine(params.id);
+});
+
 app.get("/api/backup/status", async () => getBackupStatus());
 
 app.post("/api/backup", async () => createBackup("manual"));
@@ -258,11 +307,24 @@ app.get("/api/export/transactions.csv", async (_request, reply) => {
 
 if (existsSync(distDir)) {
   await app.register(fastifyStatic, {
-    root: distDir
+    root: distDir,
+    cacheControl: false,
+    setHeaders(res, filePath) {
+      // Content-hashed assets are immutable and safe to cache forever.
+      // index.html must never be cached, so a full reload always loads the
+      // newest build (and the fresh asset hashes it references).
+      if (filePath.endsWith(`${path.sep}index.html`) || filePath.endsWith("/index.html")) {
+        res.setHeader("cache-control", "no-store");
+      } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader("cache-control", "public, max-age=31536000, immutable");
+      } else {
+        res.setHeader("cache-control", "no-cache");
+      }
+    }
   });
 
   app.setNotFoundHandler((_request, reply) => {
-    reply.sendFile("index.html");
+    reply.header("cache-control", "no-store").sendFile("index.html");
   });
 }
 

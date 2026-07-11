@@ -117,6 +117,45 @@ test("seeds INR, Monday week start, and Type/SubType taxonomy", () => {
   assert(!names.includes("Uncategorized"), "Uncategorized should remain a state, not a visible Type.");
 });
 
+test("builds a first-time-user Excel template with typed sample values and guidance", async () => {
+  const template = await services.buildImportTemplate();
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(template as unknown as ArrayBuffer);
+  const transactionSheet = workbook.getWorksheet("Transactions");
+  const instructions = workbook.getWorksheet("Instructions");
+  const lookups = workbook.getWorksheet("Lookups");
+
+  assert(transactionSheet, "Template should include a Transactions sheet.");
+  assert(instructions, "Template should include onboarding instructions.");
+  assert(lookups?.state === "hidden", "Lookup lists should be discoverable if a user unhides sheets.");
+  assert(transactionSheet.getCell("B2").value === "My Bank Account", "New user sample should include a typed account.");
+  const instructionText = [2, 3, 4, 5, 6, 7]
+    .map((rowNumber) => String(instructions.getCell(`B${rowNumber}`).value ?? ""))
+    .join(" ");
+  assert(
+    instructionText.includes("type a new Account"),
+    "Instructions should explain that new Accounts can be typed."
+  );
+
+  const accountValidation = transactionSheet.getCell("B2").dataValidation;
+  const typeValidation = transactionSheet.getCell("D2").dataValidation;
+  const subtypeValidation = transactionSheet.getCell("F2").dataValidation;
+  const typeCount = services.listCategoryTypes().length;
+
+  assert(accountValidation?.prompt?.includes("type a new account"), "Account dropdown should explain typed new accounts.");
+  assert(
+    typeValidation?.formulae?.[0] === `Lookups!$B$2:$B$${typeCount + 1}`,
+    "Type dropdown should use a clean Type list."
+  );
+  assert(subtypeValidation?.prompt?.includes("type a new SubType"), "SubType dropdown should explain typed new SubTypes.");
+  assert(
+    Array.from({ length: typeCount }, (_, index) => index + 2).every((rowNumber) =>
+      String(lookups.getCell(`B${rowNumber}`).value ?? "").trim()
+    ),
+    "Type lookup list should not include blank options."
+  );
+});
+
 test("stores local profile fields and validates profile input", async () => {
   const profile = services.updateProfile({
     name: "Ramesh",
@@ -566,6 +605,59 @@ test("preserves split allocations and supports clearing optional transaction fie
   services.deleteTransaction(id);
 });
 
+test("preserves archived AutoPay links when editing historical transactions", async () => {
+  assert(state.bankId, "Bank should exist.");
+  const subscription = services.createAutopaySubscription({
+    name: "QA Archived AutoPay",
+    amountPaise: 49_900,
+    startDate: "2026-07-01",
+    durationMonths: 12
+  });
+  const payment = services.createTransaction({
+    date: "2026-07-15",
+    accountId: state.bankId,
+    method: "upi",
+    merchant: "Archived AutoPay payment",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "AutoPay"),
+    amountPaise: 49_900,
+    direction: "outflow",
+    kind: "expense",
+    subscriptionId: subscription.id
+  });
+  const id = payment.transaction?.id;
+  assert(id, "Linked AutoPay transaction should be created.");
+
+  services.archiveAutopaySubscription(subscription.id);
+  services.updateTransaction(id, { note: "Historical edit after archive" });
+  const edited = services.getTransaction(id);
+
+  assert(edited?.subscriptionId === subscription.id, "Editing history should preserve the archived AutoPay link.");
+  assert(edited?.subscriptionName === subscription.name, "Historical links should still expose the subscription name.");
+
+  await assertRejectsWithMessage(
+    "new archived autopay payment",
+    () =>
+      services.createTransaction({
+        date: "2026-07-16",
+        accountId: state.bankId,
+        method: "upi",
+        merchant: "New archived AutoPay payment",
+        typeId: typeId("Expense"),
+        subcategoryId: subcategoryId("Expense", "AutoPay"),
+        amountPaise: 49_900,
+        direction: "outflow",
+        kind: "expense",
+        subscriptionId: subscription.id
+      }),
+    "Archived subscriptions cannot receive new payments."
+  );
+
+  services.updateTransaction(id, { subscriptionId: "" });
+  assert(services.getTransaction(id)?.subscriptionId === null, "Historical AutoPay links should remain clearable.");
+  services.deleteTransaction(id);
+});
+
 test("tracks loan statement values, linked transactions, unlink, and archive", async () => {
   assert(state.bankId, "Bank should exist.");
   const loan = services.createLoan({
@@ -895,6 +987,122 @@ test("Excel import creates missing accounts, food cards, Types, SubTypes, and ta
   assert(
     result.warnings.some((warning) => warning.includes("credit limit ₹0")),
     "Import should warn about updating the auto-created credit-card limit."
+  );
+});
+
+test("plans selected monthly budgets with pace warnings and overlap protection", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Budget Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 100_000_00
+  });
+
+  services.createTransaction({
+    date: "2026-08-05",
+    accountId: bank.id,
+    method: "upi",
+    merchant: "Budget groceries",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 6_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+  services.createTransaction({
+    date: "2026-08-06",
+    accountId: bank.id,
+    method: "bank_transfer",
+    merchant: "Budget mutual fund",
+    typeId: typeId("Investment"),
+    subcategoryId: subcategoryId("Investment", "Mutual Funds"),
+    amountPaise: 5_000_00,
+    direction: "outflow",
+    kind: "investment"
+  });
+
+  const groceries = services.createBudgetLine({
+    month: "2026-08",
+    scopeType: "subcategory",
+    scopeId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 10_000_00
+  });
+  const investments = services.createBudgetLine({
+    month: "2026-08",
+    scopeType: "type",
+    scopeId: typeId("Investment"),
+    amountPaise: 20_000_00
+  });
+
+  await assertRejectsWithMessage(
+    "duplicate budget",
+    () =>
+      services.createBudgetLine({
+        month: "2026-08",
+        scopeType: "subcategory",
+        scopeId: subcategoryId("Expense", "Groceries"),
+        amountPaise: 12_000_00
+      }),
+    "already has a budget"
+  );
+  await assertRejectsWithMessage(
+    "overlapping budget",
+    () =>
+      services.createBudgetLine({
+        month: "2026-08",
+        scopeType: "type",
+        scopeId: typeId("Expense"),
+        amountPaise: 30_000_00
+      }),
+    "overlap"
+  );
+
+  const earlyPlan = services.getBudgetPlan("2026-08", "2026-08-10");
+  const groceryLine = earlyPlan.lines.find((line) => line.id === groceries.id);
+  const investmentLine = earlyPlan.lines.find((line) => line.id === investments.id);
+
+  assert(groceryLine?.actualPaise === 6_000_00, "SubType budget should use monthly report actuals.");
+  assert(groceryLine.status === "critical", "Fast spending should warn before crossing the line.");
+  assert(groceryLine.projectedPaise > groceryLine.amountPaise, "Projection should show likely overspend.");
+  assert(investmentLine?.status === "safe", "Investment budget within pace should remain safe.");
+  assert(
+    !earlyPlan.availableScopes.some((scope) => scope.scopeType === "type" && scope.scopeId === typeId("Expense")),
+    "A Type scope should be hidden when one of its SubTypes is already budgeted."
+  );
+
+  const updated = services.updateBudgetLine(groceries.id, { amountPaise: 30_000_00 });
+  assert(updated.amountPaise === 30_000_00, "Budget updates should change the allocation.");
+
+  const deleted = services.deleteBudgetLine(investments.id);
+  assert(deleted.ok, "Budget delete should confirm success.");
+  assert(
+    !services.getBudgetPlan("2026-08", "2026-08-10").lines.some((line) => line.id === investments.id),
+    "Deleted budget lines should no longer appear."
+  );
+
+  const cleanupType = services.createCategoryType({
+    name: `Budget Cleanup ${suffix}`,
+    behavior: "expense",
+    icon: "wallet",
+    color: "#0f766e"
+  });
+  const cleanupSubcategory = services.createSubcategory({
+    typeId: cleanupType.id,
+    name: "Cleanup SubType",
+    icon: "wallet",
+    color: "#0f766e"
+  });
+  const cleanupBudget = services.createBudgetLine({
+    month: "2026-08",
+    scopeType: "subcategory",
+    scopeId: cleanupSubcategory.id,
+    amountPaise: 1_000_00
+  });
+
+  services.deleteCategoryType(cleanupType.id);
+  assert(
+    !services.getBudgetPlan("2026-08", "2026-08-10").lines.some((line) => line.id === cleanupBudget.id),
+    "Deleting a custom Type should remove its budget lines."
   );
 });
 

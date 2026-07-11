@@ -3,6 +3,8 @@ import { z } from "zod";
 export const CURRENCY = "INR";
 export const CURRENCY_SYMBOL = "₹";
 export const WEEK_START = "monday";
+export const AUTOPAY_SUBCATEGORY_ID = "sub_autopay";
+export const AUTOPAY_DURATION_MONTH_OPTIONS = [1, 3, 6, 12, 24, 36] as const;
 
 export const ICON_OPTIONS = [
   "shopping-basket",
@@ -74,7 +76,8 @@ export const DEFAULT_CATEGORY_TYPES = [
       { id: "sub_transport", name: "Transport", icon: "car", color: "#2563eb" },
       { id: "sub_shopping", name: "Shopping", icon: "shopping-bag", color: "#db2777" },
       { id: "sub_health", name: "Health", icon: "heart-pulse", color: "#10b981" },
-      { id: "sub_travel", name: "Travel", icon: "plane", color: "#0891b2" }
+      { id: "sub_travel", name: "Travel", icon: "plane", color: "#0891b2" },
+      { id: "sub_autopay", name: "AutoPay", icon: "calendar-clock", color: "#4f46e5" }
     ]
   },
   {
@@ -160,6 +163,7 @@ export const transactionKindSchema = z.enum([
   "emi"
 ]);
 export const taxonomyBehaviorSchema = z.enum(TAXONOMY_BEHAVIORS);
+export const budgetScopeTypeSchema = z.enum(["type", "subcategory"]);
 
 const idSchema = z.string().min(1);
 const dateSchema = z
@@ -266,6 +270,36 @@ export const updateLoanSchema = z
   })
   .refine((value) => Object.keys(value).length > 0, "No loan changes provided.");
 
+export const createAutopaySubscriptionSchema = z.object({
+  name: z.string().trim().min(2).max(90),
+  amountPaise: positivePaiseSchema,
+  startDate: dateSchema,
+  durationMonths: z.number().int().positive().max(600)
+});
+
+export const updateAutopaySubscriptionSchema = z
+  .object({
+    name: z.string().trim().min(2).max(90).optional(),
+    amountPaise: positivePaiseSchema.optional(),
+    startDate: dateSchema.optional(),
+    durationMonths: z.number().int().positive().max(600).optional(),
+    isArchived: z.boolean().optional()
+  })
+  .refine((value) => Object.keys(value).length > 0, "No subscription changes provided.");
+
+export const createBudgetLineSchema = z.object({
+  month: monthSchema,
+  scopeType: budgetScopeTypeSchema,
+  scopeId: idSchema,
+  amountPaise: positivePaiseSchema
+});
+
+export const updateBudgetLineSchema = z
+  .object({
+    amountPaise: positivePaiseSchema.optional()
+  })
+  .refine((value) => Object.keys(value).length > 0, "No budget changes provided.");
+
 export const updateProfileSchema = z.object({
   name: z.string().trim().max(80).optional(),
   email: z
@@ -312,6 +346,7 @@ const transactionObjectSchema = z.object({
     linkedTransactionId: idSchema.optional(),
     loanId: optionalIdSchema.optional(),
     loanPaymentType: loanPaymentTypeSchema.optional(),
+    subscriptionId: optionalIdSchema.optional(),
     splits: z.array(transactionSplitSchema).optional()
   });
 
@@ -351,6 +386,14 @@ export const createTransactionSchema = transactionObjectSchema.superRefine((valu
       });
     }
 
+    if (value.subscriptionId && value.subcategoryId !== AUTOPAY_SUBCATEGORY_ID) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["subscriptionId"],
+        message: "Linked subscriptions require SubType = AutoPay."
+      });
+    }
+
     if (
       (value.kind === "expense" || value.kind === "investment" || value.kind === "emi") &&
       value.direction !== "outflow"
@@ -379,7 +422,8 @@ export const updateTransactionSchema = transactionObjectSchema.partial().extend(
   subcategoryId: clearableIdSchema,
   transferAccountId: clearableIdSchema,
   linkedTransactionId: clearableIdSchema,
-  loanId: clearableIdSchema
+  loanId: clearableIdSchema,
+  subscriptionId: clearableIdSchema
 }).refine(
   (value) => Object.keys(value).length > 0,
   "No transaction changes provided."
@@ -397,12 +441,17 @@ export type Direction = z.infer<typeof directionSchema>;
 export type LoanPaymentType = z.infer<typeof loanPaymentTypeSchema>;
 export type TransactionKind = z.infer<typeof transactionKindSchema>;
 export type TaxonomyBehavior = z.infer<typeof taxonomyBehaviorSchema>;
+export type BudgetScopeType = z.infer<typeof budgetScopeTypeSchema>;
 export type CreateAccountInput = z.infer<typeof createAccountSchema>;
 export type UpdateAccountInput = z.infer<typeof updateAccountSchema>;
 export type CreateCategoryTypeInput = z.infer<typeof createCategoryTypeSchema>;
 export type CreateSubcategoryInput = z.infer<typeof createSubcategorySchema>;
 export type CreateLoanInput = z.infer<typeof createLoanSchema>;
 export type UpdateLoanInput = z.infer<typeof updateLoanSchema>;
+export type CreateAutopaySubscriptionInput = z.infer<typeof createAutopaySubscriptionSchema>;
+export type UpdateAutopaySubscriptionInput = z.infer<typeof updateAutopaySubscriptionSchema>;
+export type CreateBudgetLineInput = z.infer<typeof createBudgetLineSchema>;
+export type UpdateBudgetLineInput = z.infer<typeof updateBudgetLineSchema>;
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
