@@ -1,6 +1,7 @@
 import {
   ArrowDownUp,
   BarChart3,
+  CalendarClock,
   CalendarDays,
   Check,
   ChevronDown,
@@ -14,12 +15,14 @@ import {
   Archive,
   Moon,
   Pencil,
+  PiggyBank,
   Plus,
   RotateCcw,
   Search,
   Sun,
   Tags,
   Trash2,
+  TrendingUp,
   Upload,
   UserCircle,
   Utensils,
@@ -40,6 +43,7 @@ import {
 import { IconGlyph } from "./icons";
 import type {
   Account,
+  AutopaySubscription,
   BackupStatus,
   Bootstrap,
   Category,
@@ -56,8 +60,9 @@ import type {
   TransactionKind,
   UserProfile
 } from "./types";
+import { AUTOPAY_DURATION_MONTH_OPTIONS, AUTOPAY_SUBCATEGORY_ID } from "../shared/finance";
 
-type Page = "overview" | "weekly" | "transactions" | "reports" | "accounts" | "loans" | "categories" | "profile";
+type Page = "overview" | "weekly" | "transactions" | "reports" | "accounts" | "loans" | "subscriptions" | "categories" | "profile";
 type Theme = "light" | "dark";
 type DonutSegment = {
   id: string;
@@ -87,6 +92,7 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home }> = [
   { page: "reports", label: "Reports", icon: BarChart3 },
   { page: "accounts", label: "Accounts", icon: WalletCards },
   { page: "loans", label: "Loans", icon: Landmark },
+  { page: "subscriptions", label: "AutoPay", icon: CalendarClock },
   { page: "categories", label: "Categories", icon: Tags },
   { page: "profile", label: "Profile", icon: UserCircle }
 ];
@@ -98,6 +104,7 @@ const mobileLabels: Record<Page, string> = {
   reports: "Rpt",
   accounts: "Accts",
   loans: "Loan",
+  subscriptions: "Auto",
   categories: "Cats",
   profile: "Me"
 };
@@ -109,6 +116,7 @@ const pagePaths: Record<Page, string> = {
   reports: "/reports",
   accounts: "/accounts",
   loans: "/loans",
+  subscriptions: "/subscriptions",
   categories: "/categories",
   profile: "/profile"
 };
@@ -277,6 +285,7 @@ export default function App() {
 
   const accounts = bootstrap?.accounts ?? [];
   const loans = bootstrap?.loans ?? [];
+  const subscriptions = bootstrap?.subscriptions ?? [];
   const categoryTypes = bootstrap?.categoryTypes ?? [];
   const categories = flattenSubcategories(categoryTypes);
   const profile = bootstrap?.profile ?? emptyProfile;
@@ -285,6 +294,7 @@ export default function App() {
   const showAccountFilter =
     activePage !== "accounts" &&
     activePage !== "loans" &&
+    activePage !== "subscriptions" &&
     activePage !== "categories" &&
     activePage !== "profile";
 
@@ -326,7 +336,6 @@ export default function App() {
           <div className="brand-mark">₹</div>
           <div>
             <strong>Financial Tracker</strong>
-            <span>Local-first INR</span>
           </div>
         </div>
 
@@ -385,6 +394,7 @@ export default function App() {
               selectedAccountId={selectedAccountId}
               accounts={activeAccounts}
               loans={loans.filter((loan) => !loan.isArchived)}
+              subscriptions={subscriptions.filter((subscription) => !subscription.isArchived)}
               categoryTypes={categoryTypes}
               refresh={refresh}
               refreshKey={refreshKey}
@@ -398,6 +408,7 @@ export default function App() {
               selectedAccountId={selectedAccountId}
               accounts={activeAccounts}
               loans={loans.filter((loan) => !loan.isArchived)}
+              subscriptions={subscriptions.filter((subscription) => !subscription.isArchived)}
               categoryTypes={categoryTypes}
               refresh={refresh}
               refreshKey={refreshKey}
@@ -418,6 +429,14 @@ export default function App() {
             <LoansPage
               loans={loans}
               categoryTypes={categoryTypes}
+              refresh={refresh}
+              showNotice={showNotice}
+              requestConfirm={requestConfirm}
+            />
+          )}
+          {activePage === "subscriptions" && (
+            <SubscriptionsPage
+              subscriptions={subscriptions}
               refresh={refresh}
               showNotice={showNotice}
               requestConfirm={requestConfirm}
@@ -546,6 +565,16 @@ function OverviewPage({
   }
 
   const monthlyNetPaise = overview.summary.incomePaise - overview.summary.totalSpendingPaise;
+  const savingsRate =
+    overview.summary.incomePaise > 0 ? Math.round((monthlyNetPaise / overview.summary.incomePaise) * 100) : null;
+  const spendingSegments = consolidateDonutSegments(
+    overview.categoryReport.map((category) => ({
+      id: category.subcategoryId ?? category.categoryId ?? category.name,
+      name: category.name,
+      color: category.color,
+      amountPaise: category.amountPaise
+    }))
+  );
 
   return (
     <div className="page-grid">
@@ -572,16 +601,21 @@ function OverviewPage({
           icon={<BarChart3 />}
         />
         <SummaryCard
-          label="All-time uncategorized"
-          value={`${overview.summary.uncategorizedCount} items`}
-          icon={<CircleAlert />}
-          tone={overview.summary.uncategorizedCount > 0 ? "warning" : "good"}
+          label="This month income"
+          value={formatINR(overview.summary.incomePaise)}
+          icon={<TrendingUp />}
         />
         <SummaryCard
           label="Monthly net cash flow"
           value={signedImpact(monthlyNetPaise)}
           icon={<ArrowDownUp />}
           tone={monthlyNetPaise >= 0 ? "good" : "warning"}
+        />
+        <SummaryCard
+          label="Savings rate"
+          value={savingsRate === null ? "—" : `${savingsRate}%`}
+          icon={<PiggyBank />}
+          tone={savingsRate === null ? undefined : savingsRate >= 0 ? "good" : "warning"}
         />
       </section>
       </OverviewDisclosure>
@@ -600,14 +634,68 @@ function OverviewPage({
         </CollapsiblePanel>
       </section>
 
-      <section className="overview-report-section">
+      <section className="two-column overview-analytics">
         <CollapsiblePanel
-          title={`Category report · ${formatMonth(overview.month)}`}
+          title={`Spending mix · ${formatMonth(overview.month)}`}
           action={<button onClick={() => onNavigate("reports")}>Open reports</button>}
         >
-          <CategoryBars categories={overview.categoryReport} />
+          {spendingSegments.length === 0 || overview.summary.totalSpendingPaise <= 0 ? (
+            <EmptyState text="No category spending yet this month." />
+          ) : (
+            <DonutChart
+              segments={spendingSegments}
+              totalPaise={overview.summary.totalSpendingPaise}
+              ariaLabel="Spending by category"
+              centerLabel="Spent"
+              centerValue={formatINR(overview.summary.totalSpendingPaise)}
+            />
+          )}
+        </CollapsiblePanel>
+
+        <CollapsiblePanel title="Income vs spending">
+          <IncomeSpendingBars
+            incomePaise={overview.summary.incomePaise}
+            spendingPaise={overview.summary.totalSpendingPaise}
+          />
         </CollapsiblePanel>
       </section>
+    </div>
+  );
+}
+
+function IncomeSpendingBars({
+  incomePaise,
+  spendingPaise
+}: {
+  incomePaise: number;
+  spendingPaise: number;
+}) {
+  if (incomePaise <= 0 && spendingPaise <= 0) {
+    return <EmptyState text="No income or spending yet this month." />;
+  }
+
+  const netPaise = incomePaise - spendingPaise;
+  const max = Math.max(incomePaise, spendingPaise, 1);
+  const rows = [
+    { label: "Income", value: incomePaise, color: "var(--good)" },
+    { label: "Spending", value: spendingPaise, color: "var(--warning)" }
+  ];
+
+  return (
+    <div className="compare-bars">
+      {rows.map((row) => (
+        <div className="compare-row" key={row.label}>
+          <span className="compare-label">{row.label}</span>
+          <div className="bar-track">
+            <div style={{ width: `${(row.value / max) * 100}%`, background: row.color }} />
+          </div>
+          <strong>{formatINR(row.value)}</strong>
+        </div>
+      ))}
+      <div className="compare-net">
+        <span>Net cash flow</span>
+        <strong className={netPaise >= 0 ? "amount-in" : "amount-out"}>{signedImpact(netPaise)}</strong>
+      </div>
     </div>
   );
 }
@@ -616,6 +704,7 @@ function WeeklyEntryPage({
   selectedAccountId,
   accounts,
   loans,
+  subscriptions,
   categoryTypes,
   refresh,
   refreshKey,
@@ -626,6 +715,7 @@ function WeeklyEntryPage({
   selectedAccountId: string;
   accounts: Account[];
   loans: Loan[];
+  subscriptions: AutopaySubscription[];
   categoryTypes: CategoryType[];
   refresh: () => Promise<void>;
   refreshKey: number;
@@ -657,7 +747,8 @@ function WeeklyEntryPage({
     amount: "",
     transferAccountId: accounts.find((account) => account.type === "credit_card")?.id ?? "",
     loanId: "",
-    loanPaymentType: "emi" as LoanPaymentType
+    loanPaymentType: "emi" as LoanPaymentType,
+    subscriptionId: ""
   });
 
   const reloadWeek = useCallback(async () => {
@@ -701,6 +792,7 @@ function WeeklyEntryPage({
   const availableSubcategories = selectedType?.subcategories ?? [];
   const selectedBehavior = selectedType?.behavior ?? "expense";
   const availableLoans = loans.filter((loan) => loan.subcategoryId === form.subcategoryId);
+  const isAutopaySelected = form.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
   const expenseTotal = transactions
     .filter((transaction) => transaction.kind === "expense")
     .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
@@ -739,7 +831,9 @@ function WeeklyEntryPage({
         kind,
         transferAccountId: behavior === "card_payment" ? form.transferAccountId : undefined,
         loanId: behavior === "loan" ? form.loanId || undefined : undefined,
-        loanPaymentType: behavior === "loan" && form.loanId ? form.loanPaymentType : undefined
+        loanPaymentType: behavior === "loan" && form.loanId ? form.loanPaymentType : undefined,
+        subscriptionId:
+          form.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? form.subscriptionId || undefined : undefined
       };
 
       const result = await Api.createTransaction(payload);
@@ -751,7 +845,8 @@ function WeeklyEntryPage({
         amount: "",
         subcategoryId: "",
         loanId: "",
-        loanPaymentType: "emi"
+        loanPaymentType: "emi",
+        subscriptionId: ""
       }));
       await reloadWeek();
       await refresh();
@@ -876,7 +971,9 @@ function WeeklyEntryPage({
                 ) : (
                   <select
                     value={form.subcategoryId}
-                    onChange={(event) => setForm({ ...form, subcategoryId: event.target.value, loanId: "" })}
+                    onChange={(event) =>
+                      setForm({ ...form, subcategoryId: event.target.value, loanId: "", subscriptionId: "" })
+                    }
                   >
                     <option value="">Decide later</option>
                     {availableSubcategories.map((subcategory) => (
@@ -887,6 +984,24 @@ function WeeklyEntryPage({
                   </select>
                 )}
               </label>
+              {isAutopaySelected && (
+                <label>
+                  Subscription
+                  <select
+                    value={form.subscriptionId}
+                    onChange={(event) => setForm({ ...form, subscriptionId: event.target.value })}
+                  >
+                    <option value="">Not linked yet</option>
+                    {subscriptions
+                      .filter((subscription) => subscription.status === "active")
+                      .map((subscription) => (
+                        <option key={subscription.id} value={subscription.id}>
+                          {subscription.name} · {formatINR(subscription.amountPaise)}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
               {selectedBehavior === "loan" && (
                 <>
                   <label>
@@ -1030,12 +1145,14 @@ type TransactionEditDraft = {
   transferAccountId: string;
   loanId: string;
   loanPaymentType: LoanPaymentType;
+  subscriptionId: string;
 };
 
 function TransactionsPage({
   selectedAccountId,
   accounts,
   loans,
+  subscriptions,
   categoryTypes,
   refresh,
   refreshKey,
@@ -1045,6 +1162,7 @@ function TransactionsPage({
   selectedAccountId: string;
   accounts: Account[];
   loans: Loan[];
+  subscriptions: AutopaySubscription[];
   categoryTypes: CategoryType[];
   refresh: () => Promise<void>;
   refreshKey: number;
@@ -1055,6 +1173,9 @@ function TransactionsPage({
   const [search, setSearch] = useState("");
   const [typeId, setTypeId] = useState("");
   const [subcategoryId, setSubcategoryId] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const rangeIsValid = !from || !to || from <= to;
   const [hasMoreTransactions, setHasMoreTransactions] = useState(false);
   const [loadingTransactions, setLoadingTransactions] = useState(false);
   const [loadingMoreTransactions, setLoadingMoreTransactions] = useState(false);
@@ -1078,6 +1199,8 @@ function TransactionsPage({
         search: search || undefined,
         typeId: typeId || undefined,
         subcategoryId: subcategoryId || undefined,
+        from: rangeIsValid ? from || undefined : undefined,
+        to: rangeIsValid ? to || undefined : undefined,
         limit: pageSize + 1,
         offset
       });
@@ -1089,7 +1212,7 @@ function TransactionsPage({
       setLoadingTransactions(false);
       setLoadingMoreTransactions(false);
     }
-  }, [search, selectedAccountId, showNotice, subcategoryId, typeId]);
+  }, [from, rangeIsValid, search, selectedAccountId, showNotice, subcategoryId, to, typeId]);
 
   useEffect(() => {
     setEditDraft(null);
@@ -1150,7 +1273,9 @@ function TransactionsPage({
         kind,
         transferAccountId: behavior === "card_payment" ? editDraft.transferAccountId : "",
         loanId: behavior === "loan" ? editDraft.loanId : "",
-        loanPaymentType: behavior === "loan" && editDraft.loanId ? editDraft.loanPaymentType : undefined
+        loanPaymentType: behavior === "loan" && editDraft.loanId ? editDraft.loanPaymentType : undefined,
+        subscriptionId:
+          editDraft.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? editDraft.subscriptionId : ""
       });
       setEditDraft(null);
       await loadPage();
@@ -1211,7 +1336,25 @@ function TransactionsPage({
               ))}
             </select>
           </label>
-          <button onClick={() => loadPage()}>Apply</button>
+          <label className="control-field toolbar-control">
+            <span className="control-label">From</span>
+            <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+          </label>
+          <label className="control-field toolbar-control">
+            <span className="control-label">To</span>
+            <input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+          </label>
+          <button
+            onClick={() => {
+              if (!rangeIsValid) {
+                showNotice("Choose a valid date range.");
+                return;
+              }
+              loadPage();
+            }}
+          >
+            Apply
+          </button>
         </div>
       </div>
 
@@ -1239,6 +1382,7 @@ function TransactionsPage({
                     draft={editDraft}
                     accounts={accounts}
                     loans={loans}
+                    subscriptions={subscriptions}
                     categoryTypes={categoryTypes}
                     cardAccounts={cardAccounts}
                     saving={savingEdit}
@@ -1314,6 +1458,7 @@ function TransactionEditRow({
   draft,
   accounts,
   loans,
+  subscriptions,
   categoryTypes,
   cardAccounts,
   saving,
@@ -1325,6 +1470,7 @@ function TransactionEditRow({
   draft: TransactionEditDraft;
   accounts: Account[];
   loans: Loan[];
+  subscriptions: AutopaySubscription[];
   categoryTypes: CategoryType[];
   cardAccounts: Account[];
   saving: boolean;
@@ -1338,6 +1484,10 @@ function TransactionEditRow({
   const behavior = selectedType?.behavior ?? behaviorForKind(draft.kind);
   const availableSubcategories = selectedType?.subcategories ?? [];
   const availableLoans = loans.filter((loan) => loan.subcategoryId === draft.subcategoryId);
+  const isAutopaySelected = draft.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
+  const availableSubscriptions = subscriptions.filter(
+    (subscription) => subscription.status === "active" || subscription.id === draft.subscriptionId
+  );
 
   return (
     <div className="transaction-edit-row">
@@ -1381,7 +1531,8 @@ function TransactionEditRow({
                 subcategoryId: "",
                 transferAccountId: cardAccounts[0]?.id ?? "",
                 loanId: "",
-                loanPaymentType: "emi"
+                loanPaymentType: "emi",
+                subscriptionId: ""
               });
             }}
           >
@@ -1440,7 +1591,9 @@ function TransactionEditRow({
           ) : (
             <select
               value={draft.subcategoryId}
-              onChange={(event) => onChange({ ...draft, subcategoryId: event.target.value, loanId: "" })}
+              onChange={(event) =>
+                onChange({ ...draft, subcategoryId: event.target.value, loanId: "", subscriptionId: "" })
+              }
               disabled={!selectedType}
             >
               <option value="">Decide later</option>
@@ -1452,6 +1605,22 @@ function TransactionEditRow({
             </select>
           )}
         </label>
+        {isAutopaySelected && (
+          <label>
+            Subscription
+            <select
+              value={draft.subscriptionId}
+              onChange={(event) => onChange({ ...draft, subscriptionId: event.target.value })}
+            >
+              <option value="">Not linked yet</option>
+              {availableSubscriptions.map((subscription) => (
+                <option key={subscription.id} value={subscription.id}>
+                  {subscription.name} · {formatINR(subscription.amountPaise)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {behavior === "loan" && (
           <>
             <label>
@@ -2191,6 +2360,276 @@ function LoanCard({
   );
 }
 
+function formatDateWithYear(dateLike: string) {
+  const date = new Date(`${dateLike}T00:00:00`);
+  return date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function SubscriptionsPage({
+  subscriptions,
+  refresh,
+  showNotice,
+  requestConfirm
+}: {
+  subscriptions: AutopaySubscription[];
+  refresh: () => Promise<void>;
+  showNotice: (message: string) => void;
+  requestConfirm: (request: ConfirmRequest) => void;
+}) {
+  const [editing, setEditing] = useState<AutopaySubscription | null>(null);
+  const active = subscriptions.filter((subscription) => !subscription.isArchived);
+  const archived = subscriptions.filter((subscription) => subscription.isArchived);
+  const activeCount = active.filter((subscription) => subscription.status === "active").length;
+  const monthlyTotal = active
+    .filter((subscription) => subscription.status === "active")
+    .reduce((sum, subscription) => sum + subscription.amountPaise, 0);
+  const totalPayments = subscriptions.reduce((sum, subscription) => sum + subscription.paymentCount, 0);
+
+  function archive(subscription: AutopaySubscription) {
+    requestConfirm({
+      message: "Are you sure you want to archive this subscription?",
+      detail: `${subscription.name} will move out of active tracking. Existing transactions and counts stay preserved.`,
+      confirmLabel: "Archive",
+      tone: "danger",
+      onConfirm: async () => {
+        try {
+          await Api.archiveSubscription(subscription.id);
+          if (editing?.id === subscription.id) setEditing(null);
+          await refresh();
+          showNotice("Subscription archived.");
+        } catch (err) {
+          showNotice(err instanceof Error ? err.message : "Could not archive subscription.");
+        }
+      }
+    });
+  }
+
+  async function restore(subscription: AutopaySubscription) {
+    try {
+      await Api.updateSubscription(subscription.id, { isArchived: false });
+      await refresh();
+      showNotice("Subscription restored.");
+    } catch (err) {
+      showNotice(err instanceof Error ? err.message : "Could not restore subscription.");
+    }
+  }
+
+  return (
+    <div className="page-grid loans-page">
+      <section className="summary-grid mini loan-summary-grid">
+        <SummaryCard label="Active subscriptions" value={String(activeCount)} icon={<CalendarClock />} />
+        <SummaryCard label="Monthly total" value={formatINR(monthlyTotal)} icon={<ArrowDownUp />} tone="warning" />
+        <SummaryCard label="Payments logged" value={String(totalPayments)} icon={<Check />} />
+      </section>
+
+      <div className="two-column loans-layout">
+        <Panel title="Subscription tracker">
+          {active.length === 0 ? (
+            <EmptyState text="No active subscriptions yet." />
+          ) : (
+            <div className="loan-card-grid">
+              {active.map((subscription) => (
+                <SubscriptionCard
+                  key={subscription.id}
+                  subscription={subscription}
+                  onEdit={setEditing}
+                  onArchive={archive}
+                />
+              ))}
+            </div>
+          )}
+
+          {archived.length > 0 && (
+            <>
+              <h3 className="section-subtitle">Archived subscriptions</h3>
+              <div className="loan-card-grid archived-loans">
+                {archived.map((subscription) => (
+                  <SubscriptionCard
+                    key={subscription.id}
+                    subscription={subscription}
+                    onEdit={setEditing}
+                    onRestore={restore}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+        </Panel>
+
+        <Panel title={editing ? "Edit subscription" : "Add subscription"}>
+          <SubscriptionForm
+            key={editing?.id ?? "new-subscription"}
+            subscription={editing}
+            onCancel={editing ? () => setEditing(null) : undefined}
+            onSaved={async (message) => {
+              setEditing(null);
+              await refresh();
+              showNotice(message);
+            }}
+          />
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function SubscriptionCard({
+  subscription,
+  onEdit,
+  onArchive,
+  onRestore
+}: {
+  subscription: AutopaySubscription;
+  onEdit: (subscription: AutopaySubscription) => void;
+  onArchive?: (subscription: AutopaySubscription) => void;
+  onRestore?: (subscription: AutopaySubscription) => void;
+}) {
+  const expired = subscription.status === "expired";
+  return (
+    <article className={`loan-card ${subscription.isArchived ? "archived" : ""}`}>
+      <div className="loan-card-header">
+        <div className="loan-title">
+          <span className="loan-icon" style={{ color: "#4f46e5", background: "#4f46e514" }}>
+            <IconGlyph name="calendar-clock" size={18} />
+          </span>
+          <div>
+            <strong>{subscription.name}</strong>
+            <span>{formatINR(subscription.amountPaise)} / cycle</span>
+          </div>
+        </div>
+        <span className={`subscription-status ${expired ? "expired" : "active"}`}>
+          {expired ? "Expired" : "Active"}
+        </span>
+      </div>
+
+      <div className="subscription-meta">
+        <div>
+          <span>Started</span>
+          <strong>{formatDateWithYear(subscription.startDate)}</strong>
+        </div>
+        <div>
+          <span>Expires</span>
+          <strong>{formatDateWithYear(subscription.expiryDate)}</strong>
+        </div>
+        <div>
+          <span>Duration</span>
+          <strong>{subscription.durationMonths} months</strong>
+        </div>
+        <div>
+          <span>Payments made</span>
+          <strong>{subscription.paymentCount}</strong>
+        </div>
+      </div>
+
+      <div className="loan-actions">
+        <button type="button" className="secondary-action" onClick={() => onEdit(subscription)}>
+          <Pencil size={16} />
+          Edit
+        </button>
+        {onRestore && (
+          <button type="button" className="secondary-action" onClick={() => onRestore(subscription)}>
+            <RotateCcw size={16} />
+            Restore
+          </button>
+        )}
+        {onArchive && (
+          <button type="button" className="secondary-action danger-action" onClick={() => onArchive(subscription)}>
+            <Archive size={16} />
+            Archive
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function SubscriptionForm({
+  subscription,
+  onSaved,
+  onCancel
+}: {
+  subscription: AutopaySubscription | null;
+  onSaved: (message: string) => Promise<void>;
+  onCancel?: () => void;
+}) {
+  const [name, setName] = useState(subscription?.name ?? "");
+  const [amount, setAmount] = useState(subscription ? amountInputFromPaise(subscription.amountPaise) : "");
+  const [startDate, setStartDate] = useState(subscription?.startDate ?? todayISO());
+  const [durationMonths, setDurationMonths] = useState(String(subscription?.durationMonths ?? 12));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+
+    try {
+      const payload = {
+        name,
+        amountPaise: parseAmountToPaise(amount),
+        startDate,
+        durationMonths: Number.parseInt(durationMonths, 10)
+      };
+
+      if (subscription) {
+        await Api.updateSubscription(subscription.id, payload);
+        await onSaved("Subscription updated.");
+      } else {
+        await Api.createSubscription(payload);
+        setName("");
+        setAmount("");
+        setStartDate(todayISO());
+        setDurationMonths("12");
+        await onSaved("Subscription added.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save subscription.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="stack-form loan-form" onSubmit={submit}>
+      <label>
+        Name
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Netflix, Spotify..." required />
+      </label>
+      <label>
+        Amount
+        <input value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+      </label>
+      <label>
+        Start date
+        <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} required />
+      </label>
+      <label>
+        Duration
+        <select value={durationMonths} onChange={(event) => setDurationMonths(event.target.value)} required>
+          {AUTOPAY_DURATION_MONTH_OPTIONS.map((months) => (
+            <option key={months} value={months}>
+              {months} {months === 1 ? "month" : "months"}
+            </option>
+          ))}
+        </select>
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <div className="loan-form-actions">
+        {onCancel && (
+          <button type="button" className="secondary-action" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+        )}
+        <button className="primary-action" disabled={saving}>
+          <Plus size={18} />
+          {saving ? "Saving..." : subscription ? "Save subscription" : "Add subscription"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function CategoriesPage({
   categoryTypes,
   refresh,
@@ -2537,7 +2976,7 @@ function CategoryBars({ categories }: { categories: Array<{ name: string; icon: 
       {categories.map((category) => (
         <div className="bar-row" key={category.name}>
           <div className="bar-label">
-            <span className="category-icon" style={{ color: category.color, background: `${category.color}18` }}>
+            <span className="category-icon" style={{ "--cat-color": category.color } as React.CSSProperties}>
               <IconGlyph name={category.icon} size={16} />
             </span>
             <span>{category.name}</span>
@@ -2800,7 +3239,7 @@ function CategoryBadge({ category, compact = false }: { category: Category; comp
   return (
     <span
       className={`category-badge ${compact ? "compact" : ""}`}
-      style={{ color: category.color, background: `${category.color}16` }}
+      style={{ "--cat-color": category.color } as React.CSSProperties}
     >
       <IconGlyph name={category.icon} size={14} />
       <span className="category-badge-label">{category.name}</span>
@@ -2819,13 +3258,7 @@ function TransactionTag({
   tone?: "neutral" | "account" | "method" | "type" | "subtype";
   color?: string;
 }) {
-  const colorStyle = color
-    ? {
-        color,
-        background: `${color}14`,
-        borderColor: `${color}30`
-      }
-    : undefined;
+  const colorStyle = color ? ({ "--cat-color": color } as React.CSSProperties) : undefined;
 
   return (
     <span className={`transaction-tag ${tone}`} style={colorStyle}>
@@ -3367,7 +3800,8 @@ function draftFromTransaction(
       accounts.find((account) => account.type === "credit_card")?.id ??
       "",
     loanId: transaction.loanId ?? "",
-    loanPaymentType: transaction.loanPaymentType ?? "emi"
+    loanPaymentType: transaction.loanPaymentType ?? "emi",
+    subscriptionId: transaction.subscriptionId ?? ""
   };
 }
 

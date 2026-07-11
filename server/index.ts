@@ -9,11 +9,13 @@ import { initDatabase } from "./db.ts";
 import { isTrustedRequestOrigin, securityHeaders } from "./security.ts";
 import {
   createAccount,
+  createAutopaySubscription,
   createBackup,
   createCategoryType,
   createLoan,
   createSubcategory,
   createTransaction,
+  archiveAutopaySubscription,
   archiveLoan,
   deleteAccount,
   deleteCategoryType,
@@ -29,6 +31,7 @@ import {
   getSettings,
   importTransactionsWorkbook,
   listAccounts,
+  listAutopaySubscriptions,
   listCategoryTypes,
   listLoans,
   listTransactions,
@@ -36,6 +39,7 @@ import {
   startAutoBackup,
   stopAutoBackup,
   updateAccount,
+  updateAutopaySubscription,
   updateLoan,
   updateProfile,
   updateTransaction
@@ -94,7 +98,8 @@ app.get("/api/bootstrap", async () => ({
   profile: getProfile(),
   accounts: listAccounts(),
   categoryTypes: listCategoryTypes(),
-  loans: listLoans(true)
+  loans: listLoans(true),
+  subscriptions: listAutopaySubscriptions(true)
 }));
 
 app.get("/api/profile", async () => getProfile());
@@ -163,6 +168,26 @@ app.patch("/api/loans/:id", async (request) => {
 app.delete("/api/loans/:id", async (request) => {
   const params = request.params as { id: string };
   return archiveLoan(params.id);
+});
+
+app.get("/api/subscriptions", async (request) => {
+  const query = request.query as { includeArchived?: string };
+  return listAutopaySubscriptions(query.includeArchived === "true");
+});
+
+app.post("/api/subscriptions", async (request, reply) => {
+  const subscription = createAutopaySubscription(request.body as never);
+  return reply.status(201).send(subscription);
+});
+
+app.patch("/api/subscriptions/:id", async (request) => {
+  const params = request.params as { id: string };
+  return updateAutopaySubscription(params.id, request.body as never);
+});
+
+app.delete("/api/subscriptions/:id", async (request) => {
+  const params = request.params as { id: string };
+  return archiveAutopaySubscription(params.id);
 });
 
 app.get("/api/batches/current", async (request) => {

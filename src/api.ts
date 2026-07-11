@@ -1,5 +1,6 @@
 import type {
   Account,
+  AutopaySubscription,
   BackupStatus,
   Batch,
   Bootstrap,
@@ -98,6 +99,28 @@ export const Api = {
   }>) => api<Loan>(`/api/loans/${id}`, { method: "PATCH", body }),
   archiveLoan: (id: string) =>
     api<{ ok: true; mode: "archived" }>(`/api/loans/${id}`, { method: "DELETE" }),
+  subscriptions: (includeArchived = true) =>
+    api<AutopaySubscription[]>(
+      `/api/subscriptions?${new URLSearchParams({ includeArchived: String(includeArchived) })}`
+    ),
+  createSubscription: (body: {
+    name: string;
+    amountPaise: number;
+    startDate: string;
+    durationMonths: number;
+  }) => api<AutopaySubscription>("/api/subscriptions", { method: "POST", body }),
+  updateSubscription: (
+    id: string,
+    body: Partial<{
+      name: string;
+      amountPaise: number;
+      startDate: string;
+      durationMonths: number;
+      isArchived: boolean;
+    }>
+  ) => api<AutopaySubscription>(`/api/subscriptions/${id}`, { method: "PATCH", body }),
+  archiveSubscription: (id: string) =>
+    api<{ ok: true; mode: "archived" }>(`/api/subscriptions/${id}`, { method: "DELETE" }),
   currentBatch: (weekStart: string, weekEnd: string) => {
     const params = new URLSearchParams({ weekStart, weekEnd });
     return api<Batch>(`/api/batches/current?${params}`);

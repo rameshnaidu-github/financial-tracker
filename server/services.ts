@@ -3,18 +3,22 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import ExcelJS from "exceljs";
 import {
+  AUTOPAY_SUBCATEGORY_ID,
   createAccountSchema,
+  createAutopaySubscriptionSchema,
   createBatchSchema,
   createCategoryTypeSchema,
   createLoanSchema,
   createSubcategorySchema,
   createTransactionSchema,
   updateAccountSchema,
+  updateAutopaySubscriptionSchema,
   updateLoanSchema,
   updateProfileSchema,
   updateTransactionSchema,
   type AccountType,
   type CreateAccountInput,
+  type CreateAutopaySubscriptionInput,
   type CreateCategoryTypeInput,
   type CreateLoanInput,
   type CreateSubcategoryInput,
@@ -24,6 +28,7 @@ import {
   type TaxonomyBehavior,
   type TransactionKind,
   type UpdateAccountInput,
+  type UpdateAutopaySubscriptionInput,
   type UpdateLoanInput,
   type UpdateProfileInput,
   type UpdateTransactionInput
@@ -168,6 +173,8 @@ export type TransactionSummary = {
   loanPaymentType: LoanPaymentType | null;
   loanPrincipalPaise: number | null;
   loanInterestPaise: number | null;
+  subscriptionId: string | null;
+  subscriptionName: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -394,6 +401,103 @@ export function updateLoan(id: string, input: UpdateLoanInput): LoanSummary {
 export function archiveLoan(id: string) {
   requireLoanRow(id);
   db.prepare("UPDATE loans SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
+  return { ok: true, mode: "archived" as const };
+}
+
+export type AutopaySubscriptionRow = {
+  id: string;
+  name: string;
+  amount_paise: number;
+  start_date: string;
+  duration_months: number;
+  is_archived: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AutopaySubscriptionSummary = {
+  id: string;
+  name: string;
+  amountPaise: number;
+  startDate: string;
+  durationMonths: number;
+  expiryDate: string;
+  paymentCount: number;
+  status: "active" | "expired";
+  isArchived: boolean;
+};
+
+export function listAutopaySubscriptions(includeArchived = false): AutopaySubscriptionSummary[] {
+  const rows = asRecords<AutopaySubscriptionRow>(
+    db
+      .prepare(
+        `SELECT id, name, amount_paise, start_date, duration_months, is_archived, created_at, updated_at
+         FROM autopay_subscriptions
+         ${includeArchived ? "" : "WHERE is_archived = 0"}
+         ORDER BY is_archived ASC, name COLLATE NOCASE ASC`
+      )
+      .all()
+  );
+
+  return rows.map(mapAutopaySubscription);
+}
+
+export function createAutopaySubscription(input: CreateAutopaySubscriptionInput): AutopaySubscriptionSummary {
+  const parsed = createAutopaySubscriptionSchema.parse(input);
+  const id = randomUUID();
+
+  db.prepare(
+    `INSERT INTO autopay_subscriptions
+      (id, name, amount_paise, start_date, duration_months)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(id, parsed.name, parsed.amountPaise, parsed.startDate, parsed.durationMonths);
+
+  return requireAutopaySummary(id);
+}
+
+export function updateAutopaySubscription(
+  id: string,
+  input: UpdateAutopaySubscriptionInput
+): AutopaySubscriptionSummary {
+  const existing = requireAutopayRow(id);
+  const patch = updateAutopaySubscriptionSchema.parse(input);
+  const merged = {
+    name: patch.name ?? existing.name,
+    amountPaise: patch.amountPaise ?? existing.amount_paise,
+    startDate: patch.startDate ?? existing.start_date,
+    durationMonths: patch.durationMonths ?? existing.duration_months,
+    isArchived: patch.isArchived ?? Boolean(existing.is_archived)
+  };
+
+  createAutopaySubscriptionSchema.parse({
+    name: merged.name,
+    amountPaise: merged.amountPaise,
+    startDate: merged.startDate,
+    durationMonths: merged.durationMonths
+  });
+
+  db.prepare(
+    `UPDATE autopay_subscriptions
+     SET name = ?, amount_paise = ?, start_date = ?, duration_months = ?,
+         is_archived = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  ).run(
+    merged.name,
+    merged.amountPaise,
+    merged.startDate,
+    merged.durationMonths,
+    merged.isArchived ? 1 : 0,
+    id
+  );
+
+  return requireAutopaySummary(id);
+}
+
+export function archiveAutopaySubscription(id: string) {
+  requireAutopayRow(id);
+  db.prepare(
+    "UPDATE autopay_subscriptions SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+  ).run(id);
   return { ok: true, mode: "archived" as const };
 }
 
@@ -799,7 +903,9 @@ export function listTransactions(query: TransactionQuery = {}): TransactionSumma
          LEFT JOIN accounts ta ON ta.id = t.transfer_account_id
          LEFT JOIN loan_payments lp ON lp.transaction_id = t.id
          LEFT JOIN loans l ON l.id = lp.loan_id
-         ${where}
+         LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
+         LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
+${where}
          ORDER BY t.date DESC, t.created_at DESC
          LIMIT ${limit} OFFSET ${offset}`
       )
@@ -822,7 +928,9 @@ export function getTransaction(id: string) {
          LEFT JOIN accounts ta ON ta.id = t.transfer_account_id
          LEFT JOIN loan_payments lp ON lp.transaction_id = t.id
          LEFT JOIN loans l ON l.id = lp.loan_id
-         WHERE t.id = ?`
+         LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
+         LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
+WHERE t.id = ?`
       )
       .get(id)
   );
@@ -904,6 +1012,8 @@ function insertValidatedTransaction(parsed: CreateTransactionInput) {
     refreshLoanPayments(parsed.loanId);
   }
 
+  syncAutopayPaymentForTransaction(id, parsed);
+
   return id;
 }
 
@@ -913,6 +1023,7 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
     throw notFound("Transaction not found.");
   }
   const existingLoanPayment = getLoanPaymentForTransaction(id);
+  const existingAutopayPayment = getAutopayPaymentForTransaction(id);
   const existingSplits = getTransactionSplits(id);
   const patch = updateTransactionSchema.parse(input);
   if (Object.prototype.hasOwnProperty.call(patch, "loanId") && !patch.loanId) {
@@ -936,9 +1047,13 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
     linkedTransactionId: existing.linked_transaction_id ?? undefined,
     loanId: existingLoanPayment?.loan_id ?? undefined,
     loanPaymentType: existingLoanPayment?.payment_type ?? undefined,
+    subscriptionId: existingAutopayPayment?.subscription_id ?? undefined,
     splits: existingSplits.length ? existingSplits : undefined
   };
   Object.assign(mergedInput, patch);
+  if (mergedInput.subcategoryId !== AUTOPAY_SUBCATEGORY_ID) {
+    mergedInput.subscriptionId = undefined;
+  }
   const merged = createTransactionSchema.parse(mergedInput);
   if (merged.kind !== "emi") {
     merged.loanId = undefined;
@@ -994,6 +1109,9 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
     for (const loanId of loanIdsToRefresh) {
       refreshLoanPayments(loanId as string);
     }
+
+    db.prepare("DELETE FROM autopay_payments WHERE transaction_id = ?").run(id);
+    syncAutopayPaymentForTransaction(id, merged);
   });
 
   return {
@@ -1590,6 +1708,12 @@ export async function buildImportTemplate() {
       showErrorMessage: false,
       formulae: [`Lookups!$A$2:$A$${Math.max(lookupRows.length + 1, 2)}`]
     };
+    transactionSheet.getCell(`F${rowNumber}`).dataValidation = {
+      type: "list",
+      allowBlank: false,
+      showErrorMessage: false,
+      formulae: [`Lookups!$B$2:$B$${Math.max(lookupRows.length + 1, 2)}`]
+    };
     transactionSheet.getCell(`E${rowNumber}`).dataValidation = {
       type: "list",
       allowBlank: true,
@@ -1991,6 +2115,83 @@ function getLoanPaymentForTransaction(transactionId: string) {
       )
       .get(transactionId)
   );
+}
+
+function mapAutopaySubscription(row: AutopaySubscriptionRow): AutopaySubscriptionSummary {
+  const paymentCount = asRecord<{ count: number }>(
+    db.prepare("SELECT COUNT(*) AS count FROM autopay_payments WHERE subscription_id = ?").get(row.id)
+  ).count;
+  const expiryDate = addMonthsToIsoDate(row.start_date, row.duration_months);
+  const status: "active" | "expired" = currentIsoDate() >= expiryDate ? "expired" : "active";
+
+  return {
+    id: row.id,
+    name: row.name,
+    amountPaise: row.amount_paise,
+    startDate: row.start_date,
+    durationMonths: row.duration_months,
+    expiryDate,
+    paymentCount,
+    status,
+    isArchived: Boolean(row.is_archived)
+  };
+}
+
+function requireAutopayRow(id: string) {
+  const row = asRecord<AutopaySubscriptionRow | undefined>(
+    db
+      .prepare(
+        `SELECT id, name, amount_paise, start_date, duration_months, is_archived, created_at, updated_at
+         FROM autopay_subscriptions
+         WHERE id = ?`
+      )
+      .get(id)
+  );
+
+  if (!row) {
+    throw notFound("Subscription not found.");
+  }
+  return row;
+}
+
+function requireAutopaySummary(id: string) {
+  return mapAutopaySubscription(requireAutopayRow(id));
+}
+
+function requireActiveAutopay(id: string) {
+  const subscription = requireAutopayRow(id);
+  if (subscription.is_archived) {
+    throw badRequest("Archived subscriptions cannot receive new payments.");
+  }
+  return subscription;
+}
+
+function getAutopayPaymentForTransaction(transactionId: string) {
+  return asRecord<{ id: string; subscription_id: string; transaction_id: string } | undefined>(
+    db
+      .prepare(
+        `SELECT id, subscription_id, transaction_id
+         FROM autopay_payments
+         WHERE transaction_id = ?
+         LIMIT 1`
+      )
+      .get(transactionId)
+  );
+}
+
+function syncAutopayPaymentForTransaction(transactionId: string, input: CreateTransactionInput) {
+  if (!input.subscriptionId) {
+    return;
+  }
+  if (input.subcategoryId !== AUTOPAY_SUBCATEGORY_ID) {
+    throw badRequest("Only AutoPay transactions can be linked to a subscription.");
+  }
+
+  const subscription = requireActiveAutopay(input.subscriptionId);
+  db.prepare(
+    `INSERT INTO autopay_payments (id, subscription_id, transaction_id)
+     VALUES (?, ?, ?)`
+  ).run(randomUUID(), subscription.id, transactionId);
 }
 
 function syncLoanPaymentForTransaction(transactionId: string, input: CreateTransactionInput) {
@@ -2872,7 +3073,9 @@ function findDuplicateCandidates(input: {
          LEFT JOIN accounts ta ON ta.id = t.transfer_account_id
          LEFT JOIN loan_payments lp ON lp.transaction_id = t.id
          LEFT JOIN loans l ON l.id = lp.loan_id
-         WHERE t.id != ?
+         LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
+         LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
+WHERE t.id != ?
            AND t.account_id = ?
            AND t.amount_paise = ?
            AND t.direction = ?
@@ -2989,6 +3192,8 @@ type JoinedFields = {
   loan_payment_type: LoanPaymentType | null;
   loan_principal_paise: number | null;
   loan_interest_paise: number | null;
+  subscription_id: string | null;
+  subscription_name: string | null;
 };
 
 const transactionSelectFields = `
@@ -3027,7 +3232,9 @@ const transactionSelectFields = `
   l.name AS loan_name,
   lp.payment_type AS loan_payment_type,
   lp.principal_paise AS loan_principal_paise,
-  lp.interest_paise AS loan_interest_paise
+  lp.interest_paise AS loan_interest_paise,
+  ap.subscription_id AS subscription_id,
+  s.name AS subscription_name
 `;
 
 function mapTransaction(row: TransactionRow & JoinedFields): TransactionSummary {
@@ -3066,6 +3273,8 @@ function mapTransaction(row: TransactionRow & JoinedFields): TransactionSummary 
     loanPaymentType: row.loan_payment_type,
     loanPrincipalPaise: row.loan_principal_paise,
     loanInterestPaise: row.loan_interest_paise,
+    subscriptionId: row.subscription_id,
+    subscriptionName: row.subscription_name,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -3122,6 +3331,14 @@ function addMonths(month: string, count: number) {
 function monthEndDate(month: string) {
   const [year, monthIndex] = month.split("-").map(Number);
   return localIsoDate(new Date(year, monthIndex, 0));
+}
+
+function addMonthsToIsoDate(isoDate: string, count: number) {
+  const [year, monthIndex, day] = isoDate.split("-").map(Number);
+  const target = new Date(year, monthIndex - 1 + count, 1);
+  const daysInTargetMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  const clampedDay = Math.min(day, daysInTargetMonth);
+  return localIsoDate(new Date(target.getFullYear(), target.getMonth(), clampedDay));
 }
 
 function localIsoDate(date: Date) {

@@ -100,8 +100,22 @@ export type Transaction = {
   loanPaymentType: LoanPaymentType | null;
   loanPrincipalPaise: number | null;
   loanInterestPaise: number | null;
+  subscriptionId: string | null;
+  subscriptionName: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type AutopaySubscription = {
+  id: string;
+  name: string;
+  amountPaise: number;
+  startDate: string;
+  durationMonths: number;
+  expiryDate: string;
+  paymentCount: number;
+  status: "active" | "expired";
+  isArchived: boolean;
 };
 
 export type Loan = {
@@ -139,6 +153,7 @@ export type Bootstrap = {
   accounts: Account[];
   categoryTypes: CategoryType[];
   loans: Loan[];
+  subscriptions: AutopaySubscription[];
 };
 
 export type UserProfile = {
@@ -236,6 +251,7 @@ export type CreateTransactionPayload = {
   linkedTransactionId?: string;
   loanId?: string;
   loanPaymentType?: LoanPaymentType;
+  subscriptionId?: string;
   splits?: Array<{
     categoryId: string;
     amountPaise: number;
