@@ -1,0 +1,40 @@
+{
+  "name": "local-finance-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"pnpm:server:dev\" \"pnpm:client:dev\"",
+    "server:dev": "NODE_NO_WARNINGS=1 node --watch server/index.ts",
+    "client:dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "start": "NODE_NO_WARNINGS=1 node server/index.ts",
+    "app:start": "bash scripts/start.sh",
+    "app:stop": "bash scripts/stop.sh",
+    "test:qa": "NODE_NO_WARNINGS=1 node tests/qa-smoke.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/multipart": "^10.0.0",
+    "@fastify/static": "latest",
+    "@vitejs/plugin-react": "latest",
+    "concurrently": "latest",
+    "exceljs": "^4.4.0",
+    "fastify": "latest",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "tsx": "latest",
+    "vite": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "typescript": "latest"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

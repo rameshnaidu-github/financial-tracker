@@ -1,0 +1,12 @@
+node_modules/
+.pnpm-store/
+dist/
+data/
+backups/
+.DS_Store
+*.log
+*.pid
+docs/
+*.docx
+.claude/
+tasks/
