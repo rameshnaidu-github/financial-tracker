@@ -373,6 +373,18 @@ process.once("SIGTERM", () => {
   void shutdown("SIGTERM");
 });
 
+// Last-resort safety net: on an otherwise-fatal error, try to capture a backup
+// before exiting so a crash never costs the user data.
+process.once("uncaughtException", (error) => {
+  app.log.error(error, "Uncaught exception");
+  void shutdown("uncaughtException");
+});
+
+process.once("unhandledRejection", (reason) => {
+  app.log.error(reason, "Unhandled promise rejection");
+  void shutdown("unhandledRejection");
+});
+
 await app.listen({ port, host });
 
 function blankToUndefined(value: string | undefined) {

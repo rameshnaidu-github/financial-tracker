@@ -1395,7 +1395,10 @@ export function getTrendReport(
       db.prepare("SELECT MIN(date) AS first FROM transactions").get()
     );
     const firstYear = firstRow?.first ? Number(firstRow.first.slice(0, 4)) : currentYear;
-    for (let year = Math.min(firstYear, currentYear); year <= currentYear; year += 1) {
+    // Cap the window so a mis-dated transaction can never trigger an unbounded
+    // number of per-year report queries.
+    const startYear = Math.max(Math.min(firstYear, currentYear), currentYear - 9);
+    for (let year = startYear; year <= currentYear; year += 1) {
       points.push({
         label: String(year),
         amountPaise: amountForType(getMonthlyReport(accountId, `${year}-01`, `${year}-01-01`, `${year}-12-31`))
