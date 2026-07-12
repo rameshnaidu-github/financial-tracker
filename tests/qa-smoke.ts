@@ -831,7 +831,7 @@ test("deleting a used SubType moves its history to uncategorized", () => {
   assert(moved?.status === "uncategorized", "Moved transaction should be flagged as uncategorized.");
 });
 
-test("removes accounts by deleting unused records and archiving accounts with history", () => {
+test("removes accounts by deleting unused records and hiding accounts with history", () => {
   const unused = services.createAccount({
     name: "QA Empty Wallet",
     type: "bank",
@@ -858,10 +858,10 @@ test("removes accounts by deleting unused records and archiving accounts with hi
     kind: "expense"
   });
   const usedResult = services.deleteAccount(used.id);
-  const archived = services.listAccounts().find((account) => account.id === used.id);
+  const hidden = services.listAccounts().find((account) => account.id === used.id);
 
-  assert(usedResult.mode === "archived", "Used account should be archived.");
-  assert(archived?.isArchived, "Archived account should remain for history.");
+  assert(usedResult.mode === "hidden", "Used account should be hidden.");
+  assert(hidden?.isArchived, "Hidden account should remain for history.");
 
   const recreated = services.createAccount({
     name: "QA Old Wallet",
@@ -899,6 +899,30 @@ test("filters transactions by uncategorized status and exports CSV", () => {
   assert(uncategorized.length === 4, "Four uncategorized transactions should be present.");
   assert(csv.includes("date,account,type,subtype,method"), "CSV should include new taxonomy headers.");
   assert(csv.includes("DMart"), "CSV should include transaction rows.");
+});
+
+test("neutralizes spreadsheet formula injection in CSV export", () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA CSV Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 10_000_00
+  });
+  services.createTransaction({
+    date: "2026-07-07",
+    accountId: bank.id,
+    method: "upi",
+    merchant: "=HYPERLINK(\"http://evil\",\"click\")",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 1_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  const csv = services.exportTransactionsCsv();
+  assert(csv.includes("\"'=HYPERLINK"), "A formula-like merchant must be prefixed with a quote in the CSV.");
+  assert(!/,"=HYPERLINK/.test(csv), "No raw formula cell should be emitted.");
 });
 
 test("paginates transactions with limit and offset", () => {

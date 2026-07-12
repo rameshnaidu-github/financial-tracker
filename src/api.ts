@@ -71,7 +71,7 @@ export const Api = {
   updateAccount: (id: string, body: { name?: string; creditLimitPaise?: number; isArchived?: boolean }) =>
     api<Account>(`/api/accounts/${id}`, { method: "PATCH", body }),
   deleteAccount: (id: string) =>
-    api<{ ok: true; mode: "deleted" | "archived" }>(`/api/accounts/${id}`, { method: "DELETE" }),
+    api<{ ok: true; mode: "deleted" | "hidden" }>(`/api/accounts/${id}`, { method: "DELETE" }),
   categoryTypes: () => api<CategoryType[]>("/api/category-types"),
   createCategoryType: (body: { name: string; behavior: string; icon: string; color: string }) =>
     api<CategoryType>("/api/category-types", { method: "POST", body }),

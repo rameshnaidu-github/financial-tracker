@@ -593,7 +593,7 @@ function OverviewPage({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [allExpanded, setAllExpanded] = useState(true);
-  const [budgetAlerts, setBudgetAlerts] = useState<BudgetLine[]>([]);
+  const [budgetPlan, setBudgetPlan] = useState<BudgetPlan | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -612,11 +612,11 @@ function OverviewPage({
     Api.budgetPlan()
       .then((plan) => {
         if (active) {
-          setBudgetAlerts(plan.lines.filter((line) => line.status === "critical" || line.status === "over"));
+          setBudgetPlan(plan);
         }
       })
       .catch(() => {
-        if (active) setBudgetAlerts([]);
+        if (active) setBudgetPlan(null);
       });
     return () => {
       active = false;
@@ -639,6 +639,8 @@ function OverviewPage({
       amountPaise: category.amountPaise
     }))
   );
+  const budgetAlerts =
+    budgetPlan?.lines.filter((line) => line.status === "critical" || line.status === "over") ?? [];
 
   return (
     <div className="page-grid">
@@ -668,15 +670,21 @@ function OverviewPage({
               <tr>
                 <th>Type</th>
                 <th>SubType</th>
+                <th>Status</th>
                 <th className="budget-alert-percent">% Used</th>
               </tr>
             </thead>
             <tbody>
               {budgetAlerts.map((line) => (
-                <tr key={line.id}>
+                <tr className={`budget-alert-row ${line.status}`} key={line.id}>
                   <td>{line.typeName}</td>
                   <td>{budgetSubLabel(line)}</td>
-                  <td className="budget-alert-percent">{line.usedPercent}%</td>
+                  <td>
+                    <span className={`budget-alert-status ${line.status}`}>{line.statusLabel}</span>
+                  </td>
+                  <td className="budget-alert-percent">
+                    <span>{line.usedPercent}%</span>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -743,6 +751,7 @@ function OverviewPage({
               ariaLabel="Spending by category"
               centerLabel="Spent"
               centerValue={formatINR(overview.summary.totalSpendingPaise)}
+              className="overview-donut-chart"
             />
           )}
         </CollapsiblePanel>
@@ -752,6 +761,16 @@ function OverviewPage({
             incomePaise={overview.summary.incomePaise}
             spendingPaise={overview.summary.totalSpendingPaise}
           />
+        </CollapsiblePanel>
+      </section>
+
+      <section className="two-column overview-analytics">
+        <CollapsiblePanel title="Top spending lines" expanded={allExpanded} action={<button onClick={() => onNavigate("reports")}>Details</button>}>
+          <CategoryBars categories={overview.categoryReport.slice(0, 5)} />
+        </CollapsiblePanel>
+
+        <CollapsiblePanel title="Budget guardrails" expanded={allExpanded} action={<button onClick={() => onNavigate("budgets")}>Plan</button>}>
+          <BudgetGuardrails plan={budgetPlan} uncategorizedCount={overview.summary.uncategorizedCount} />
         </CollapsiblePanel>
       </section>
     </div>
@@ -786,6 +805,54 @@ function IncomeSpendingBars({
           <strong>{formatINR(row.value)}</strong>
         </div>
       ))}
+    </div>
+  );
+}
+
+function BudgetGuardrails({
+  plan,
+  uncategorizedCount
+}: {
+  plan: BudgetPlan | null;
+  uncategorizedCount: number;
+}) {
+  if (!plan || plan.lines.length === 0) {
+    return <EmptyState text="Add budget lines to see month-to-date guardrails." />;
+  }
+
+  const usedPercent = boundedPercent(plan.totals.actualPaise, plan.totals.amountPaise);
+  const paceDelta = Math.round(usedPercent - plan.elapsedPercent);
+  const healthRows = [
+    { label: "On track", value: plan.totals.safeCount, tone: "safe" },
+    { label: "Watch", value: plan.totals.watchCount + plan.totals.criticalCount, tone: "watch" },
+    { label: "Over", value: plan.totals.overCount, tone: "over" }
+  ];
+
+  return (
+    <div className="budget-guardrails">
+      <div className="budget-pace-meter">
+        <div className="budget-pace-copy">
+          <span>Budget used</span>
+          <strong>{usedPercent}%</strong>
+          <small>{paceDelta > 0 ? `${paceDelta}% ahead of today` : `${Math.abs(paceDelta)}% under today's pace`}</small>
+        </div>
+        <div className="budget-pace-track" aria-label="Budget used compared with month elapsed">
+          <span className="expected" style={{ left: `${Math.min(plan.elapsedPercent, 100)}%` }} />
+          <span className={usedPercent > 100 ? "over" : usedPercent >= 75 ? "watch" : "safe"} style={{ width: `${Math.min(usedPercent, 100)}%` }} />
+        </div>
+      </div>
+      <div className="budget-health-grid">
+        {healthRows.map((row) => (
+          <div className={`budget-health ${row.tone}`} key={row.label}>
+            <span>{row.label}</span>
+            <strong>{row.value}</strong>
+          </div>
+        ))}
+      </div>
+      <div className="budget-signal-list">
+        <Metric label="Unplanned spend" value={formatINR(plan.totals.unplannedActualPaise)} warning={plan.totals.unplannedActualPaise > 0} />
+        <Metric label="Uncategorized" value={`${uncategorizedCount} item${uncategorizedCount === 1 ? "" : "s"}`} warning={uncategorizedCount > 0} />
+      </div>
     </div>
   );
 }
@@ -2083,6 +2150,11 @@ function compactINR(paise: number) {
   return `₹${Math.round(rupees)}`;
 }
 
+function boundedPercent(value: number, total: number) {
+  if (total <= 0) return 0;
+  return Math.round((value / total) * 100);
+}
+
 function TrendChart({
   points,
   variant,
@@ -2543,19 +2615,18 @@ function AccountsPage({
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
   const activeAccounts = accounts.filter((account) => !account.isArchived);
-  const archivedAccounts = accounts.filter((account) => account.isArchived);
 
   async function remove(account: Account) {
     requestConfirm({
       message: "Are you sure you want to delete this?",
-      detail: `${account.name} will be removed from active use. Existing history is preserved when the account has transactions.`,
-      confirmLabel: "Remove",
+      detail: `${account.name} will disappear from the app. Existing transaction history is preserved when history is linked to this account.`,
+      confirmLabel: "Delete",
       tone: "danger",
       onConfirm: async () => {
         try {
           const result = await Api.deleteAccount(account.id);
           await refresh();
-          showNotice(result.mode === "archived" ? "Account removed from active use." : "Account deleted.");
+          showNotice(result.mode === "hidden" ? "Account hidden. Existing history is preserved." : "Account deleted.");
         } catch (err) {
           showNotice(err instanceof Error ? err.message : "Could not remove account.");
         }
@@ -2563,36 +2634,20 @@ function AccountsPage({
     });
   }
 
-  async function restore(account: Account) {
-    try {
-      await Api.updateAccount(account.id, { isArchived: false });
-      await refresh();
-      showNotice("Account restored.");
-    } catch (err) {
-      showNotice(err instanceof Error ? err.message : "Could not restore account.");
-    }
-  }
-
   return (
     <div className="two-column">
       <Panel title="Accounts & cards">
-        <div className="account-stack">
-          {activeAccounts.map((account) => (
-            <AccountManagerLine key={account.id} account={account} alertPercent={cardAlertPercent} onRemove={remove} />
-          ))}
-        </div>
-        {archivedAccounts.length > 0 && (
-          <>
-            <h3 className="section-subtitle">Removed</h3>
-            <div className="account-stack">
-              {archivedAccounts.map((account) => (
-                <AccountManagerLine key={account.id} account={account} alertPercent={cardAlertPercent} onRestore={restore} />
-              ))}
-            </div>
-          </>
+        {activeAccounts.length === 0 ? (
+          <EmptyState text="No active accounts or cards. Add one to keep tracking." />
+        ) : (
+          <div className="account-stack">
+            {activeAccounts.map((account) => (
+              <AccountManagerLine key={account.id} account={account} alertPercent={cardAlertPercent} onRemove={remove} />
+            ))}
+          </div>
         )}
         <p className="helper-text">
-          Removing an account with history archives it. Balances are still derived from the starting value plus transactions.
+          Deleting an unused account removes it permanently. Accounts with linked transactions are hidden so reports keep their history.
         </p>
       </Panel>
       <Panel title="Add account">
@@ -3694,13 +3749,15 @@ function DonutChart({
   totalPaise,
   ariaLabel,
   centerLabel,
-  centerValue
+  centerValue,
+  className = ""
 }: {
   segments: DonutSegment[];
   totalPaise: number;
   ariaLabel: string;
   centerLabel: string;
   centerValue: string;
+  className?: string;
 }) {
   const width = 520;
   const height = 360;
@@ -3714,7 +3771,7 @@ function DonutChart({
 
   if (segments.length === 0 || totalPaise <= 0) {
     return (
-      <svg className="donut-chart" viewBox={`0 0 ${width} ${height}`} aria-label="No chart data">
+      <svg className={`donut-chart ${className}`.trim()} viewBox={`0 0 ${width} ${height}`} aria-label="No chart data">
         <circle className="donut-empty" cx={centerX} cy={centerY} r={radius} />
       </svg>
     );
@@ -3758,7 +3815,7 @@ function DonutChart({
   }
 
   return (
-    <svg className="donut-chart" viewBox={`0 0 ${width} ${height}`} aria-label={ariaLabel}>
+    <svg className={`donut-chart ${className}`.trim()} viewBox={`0 0 ${width} ${height}`} aria-label={ariaLabel}>
       <circle className="donut-track" cx={centerX} cy={centerY} r={radius} />
       {slices.map((segment) => {
         const startX = centerX + Math.cos(segment.radians) * lineStartRadius;
@@ -4137,6 +4194,15 @@ function ProfilePage({
 
   const draftValue = Number.parseInt(cardAlertDraft, 10);
   const draftIsValid = Number.isInteger(draftValue) && draftValue >= 1 && draftValue <= 100;
+  const profileAgeText = profile.age.trim();
+  const profileAge = Number.parseInt(profileAgeText, 10);
+  const profileCanSave =
+    profile.name.trim().length > 0 &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.email.trim()) &&
+    /^\d+$/.test(profileAgeText) &&
+    Number.isInteger(profileAge) &&
+    profileAge >= 1 &&
+    profileAge <= 120;
 
   return (
     <div className="profile-page">
@@ -4175,7 +4241,12 @@ function ProfilePage({
               placeholder="Add age"
             />
           </label>
-          <button className="profile-save-button" onClick={onSaveProfile} disabled={saving}>
+          <button
+            className={`profile-save-button ${profileCanSave ? "" : "blurred"}`}
+            onClick={onSaveProfile}
+            disabled={saving || !profileCanSave}
+            title={profileCanSave ? "Save profile" : "Enter a valid name, email, and age"}
+          >
             <Check size={16} />
             {saving ? "Saving..." : "Save profile"}
           </button>
@@ -4231,13 +4302,11 @@ function ProfilePage({
 function AccountManagerLine({
   account,
   alertPercent,
-  onRemove,
-  onRestore
+  onRemove
 }: {
   account: Account;
   alertPercent: number;
   onRemove?: (account: Account) => void;
-  onRestore?: (account: Account) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const isCard = account.type === "credit_card";
@@ -4276,17 +4345,10 @@ function AccountManagerLine({
       {expanded && <>
         {isCard && <CardLimitSummary account={account} alertPercent={alertPercent} />}
         <div className="account-actions">
-          {account.isArchived ? (
-            <button className="secondary-action" onClick={() => onRestore?.(account)}>
-              <RotateCcw size={16} />
-              Restore
-            </button>
-          ) : (
-            <button className="secondary-action danger-action" onClick={() => onRemove?.(account)}>
-              <Archive size={16} />
-              Remove
-            </button>
-          )}
+          <button className="secondary-action danger-action" onClick={() => onRemove?.(account)}>
+            <Trash2 size={16} />
+            Delete
+          </button>
         </div>
       </>}
     </article>

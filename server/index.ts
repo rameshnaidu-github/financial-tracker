@@ -102,7 +102,7 @@ app.get("/api/health", async () => ({ ok: true }));
 app.get("/api/bootstrap", async () => ({
   settings: getSettings(),
   profile: getProfile(),
-  accounts: listAccounts(),
+  accounts: listAccounts().filter((account) => !account.isArchived),
   categoryTypes: listCategoryTypes(),
   loans: listLoans(true),
   subscriptions: listAutopaySubscriptions(true)
@@ -119,7 +119,7 @@ app.get("/api/overview", async (request) => {
   return getOverview(blankToUndefined(query.accountId), query.month);
 });
 
-app.get("/api/accounts", async () => listAccounts());
+app.get("/api/accounts", async () => listAccounts().filter((account) => !account.isArchived));
 
 app.post("/api/accounts", async (request, reply) => {
   const account = createAccount(request.body as never);
@@ -342,7 +342,7 @@ if (existsSync(distDir)) {
 }
 
 const port = Number(process.env.PORT ?? 4000);
-const host = process.env.HOST ?? "0.0.0.0";
+const host = process.env.HOST ?? "127.0.0.1";
 let shuttingDown = false;
 
 async function shutdown(signal: string) {

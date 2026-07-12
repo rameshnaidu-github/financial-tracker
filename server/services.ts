@@ -872,7 +872,7 @@ export function deleteAccount(id: string) {
      WHERE id = ?`
   ).run(id);
 
-  return { ok: true, mode: "archived" };
+  return { ok: true, mode: "hidden" };
 }
 
 export function getCurrentBatch(weekStart: string, weekEnd: string) {
@@ -3881,7 +3881,11 @@ function localIsoDate(date: Date) {
 }
 
 function csvCell(value: string) {
-  return `"${value.replace(/"/g, '""')}"`;
+  // Neutralize spreadsheet formula injection: a cell that a spreadsheet would
+  // read as a formula (leading = + - @, or a leading control character) is
+  // prefixed with a single quote so Excel/Sheets treat it as plain text.
+  const guarded = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return `"${guarded.replace(/"/g, '""')}"`;
 }
 
 function setSetting(key: string, value: string) {
