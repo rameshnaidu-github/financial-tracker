@@ -831,7 +831,7 @@ test("deleting a used SubType moves its history to uncategorized", () => {
   assert(moved?.status === "uncategorized", "Moved transaction should be flagged as uncategorized.");
 });
 
-test("removes accounts by deleting unused records and archiving accounts with history", () => {
+test("removes accounts by deleting unused records and hiding accounts with history", () => {
   const unused = services.createAccount({
     name: "QA Empty Wallet",
     type: "bank",
@@ -858,10 +858,10 @@ test("removes accounts by deleting unused records and archiving accounts with hi
     kind: "expense"
   });
   const usedResult = services.deleteAccount(used.id);
-  const archived = services.listAccounts().find((account) => account.id === used.id);
+  const hidden = services.listAccounts().find((account) => account.id === used.id);
 
-  assert(usedResult.mode === "archived", "Used account should be archived.");
-  assert(archived?.isArchived, "Archived account should remain for history.");
+  assert(usedResult.mode === "hidden", "Used account should be hidden.");
+  assert(hidden?.isArchived, "Hidden account should remain for history.");
 
   const recreated = services.createAccount({
     name: "QA Old Wallet",
@@ -899,6 +899,30 @@ test("filters transactions by uncategorized status and exports CSV", () => {
   assert(uncategorized.length === 4, "Four uncategorized transactions should be present.");
   assert(csv.includes("date,account,type,subtype,method"), "CSV should include new taxonomy headers.");
   assert(csv.includes("DMart"), "CSV should include transaction rows.");
+});
+
+test("neutralizes spreadsheet formula injection in CSV export", () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA CSV Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 10_000_00
+  });
+  services.createTransaction({
+    date: "2026-07-07",
+    accountId: bank.id,
+    method: "upi",
+    merchant: "=HYPERLINK(\"http://evil\",\"click\")",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 1_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  const csv = services.exportTransactionsCsv();
+  assert(csv.includes("\"'=HYPERLINK"), "A formula-like merchant must be prefixed with a quote in the CSV.");
+  assert(!/,"=HYPERLINK/.test(csv), "No raw formula cell should be emitted.");
 });
 
 test("paginates transactions with limit and offset", () => {
@@ -1144,6 +1168,86 @@ test("rolls back Excel-created records when transaction insertion fails", async 
   assert(
     !services.listCategoryTypes().some((type) => type.name === "Atomic Expense QA"),
     "A failed import should roll back its planned Type and SubType."
+  );
+});
+
+test("builds month-on-month and year-on-year trend reports per Type", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Trend Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 500_000_00
+  });
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const currentMonth = `${year}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+  services.createTransaction({
+    date: `${year}-01-15`,
+    accountId: bank.id,
+    method: "upi",
+    merchant: "Trend groceries Jan",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 3_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+  services.createTransaction({
+    date: `${currentMonth}-10`,
+    accountId: bank.id,
+    method: "upi",
+    merchant: "Trend groceries now",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 2_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  const monthly = services.getTrendReport(bank.id, typeId("Expense"), "month");
+  assert(monthly.points.length === now.getMonth() + 1, "Month trend should span January through the current month.");
+  assert(monthly.points[0].amountPaise === 3_000_00, "January bucket should hold the January expense.");
+  assert(
+    monthly.points[monthly.points.length - 1].amountPaise === 2_000_00,
+    "The current month bucket should hold this month's expense."
+  );
+  assert(
+    monthly.points.slice(1, -1).every((point) => point.amountPaise === 0),
+    "Months without expenses should be zero."
+  );
+
+  const yearly = services.getTrendReport(bank.id, typeId("Expense"), "year");
+  assert(yearly.points.length >= 1, "Year trend should include at least the current year.");
+  assert(
+    yearly.points[yearly.points.length - 1].amountPaise === 5_000_00,
+    "The current year bucket should total both expenses."
+  );
+
+  const income = services.getTrendReport(bank.id, typeId("Income"), "month");
+  assert(
+    income.points.every((point) => point.amountPaise === 0),
+    "Income trend for this account should be zero when only expenses exist."
+  );
+
+  await assertRejects("unknown trend type", () => services.getTrendReport(undefined, "type_missing", "month"));
+});
+
+test("stores the card utilization alert threshold with validation", async () => {
+  assert(
+    services.getSettings().card_utilization_alert_percent === "30",
+    "Card utilization alert should default to 30."
+  );
+
+  const updated = services.updateAppSettings({ cardUtilizationAlertPercent: 45 });
+  assert(updated.card_utilization_alert_percent === "45", "Threshold update should persist.");
+
+  await assertRejects("threshold above 100", () => services.updateAppSettings({ cardUtilizationAlertPercent: 150 }));
+  await assertRejects("threshold below 1", () => services.updateAppSettings({ cardUtilizationAlertPercent: 0 }));
+  assert(
+    services.getSettings().card_utilization_alert_percent === "45",
+    "Rejected updates should not change the stored threshold."
   );
 });
 

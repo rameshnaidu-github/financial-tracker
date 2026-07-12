@@ -645,6 +645,7 @@ function seedSettings() {
   insert.run("currency", CURRENCY);
   insert.run("week_start", WEEK_START);
   insert.run("first_screen", "overview");
+  insert.run("card_utilization_alert_percent", "30");
   insert.run("profile_name", "");
   insert.run("profile_email", "");
   insert.run("profile_age", "");

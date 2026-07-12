@@ -17,6 +17,7 @@ import {
   updateBudgetLineSchema,
   updateLoanSchema,
   updateProfileSchema,
+  updateSettingsSchema,
   updateTransactionSchema,
   type AccountType,
   type BudgetScopeType,
@@ -36,6 +37,7 @@ import {
   type UpdateBudgetLineInput,
   type UpdateLoanInput,
   type UpdateProfileInput,
+  type UpdateSettingsInput,
   type UpdateTransactionInput
 } from "../shared/finance.ts";
 import { asRecord, asRecords, db, transaction } from "./db.ts";
@@ -345,6 +347,12 @@ export function getProfile(): UserProfile {
     email: settings.profile_email ?? "",
     age: settings.profile_age ?? ""
   };
+}
+
+export function updateAppSettings(input: UpdateSettingsInput) {
+  const parsed = updateSettingsSchema.parse(input);
+  setSetting("card_utilization_alert_percent", String(parsed.cardUtilizationAlertPercent));
+  return getSettings();
 }
 
 export function updateProfile(input: UpdateProfileInput): UserProfile {
@@ -864,7 +872,7 @@ export function deleteAccount(id: string) {
      WHERE id = ?`
   ).run(id);
 
-  return { ok: true, mode: "archived" };
+  return { ok: true, mode: "hidden" };
 }
 
 export function getCurrentBatch(weekStart: string, weekEnd: string) {
@@ -1344,6 +1352,61 @@ export function deleteBudgetLine(id: string) {
     throw notFound("Budget line not found.");
   }
   return { ok: true };
+}
+
+export type TrendMode = "month" | "year";
+
+export type TrendPoint = {
+  label: string;
+  amountPaise: number;
+};
+
+export type TrendReport = {
+  mode: TrendMode;
+  typeId: string;
+  typeName: string;
+  color: string;
+  points: TrendPoint[];
+};
+
+export function getTrendReport(
+  accountId: string | undefined,
+  typeId: string,
+  mode: TrendMode
+): TrendReport {
+  const type = requireCategoryType(typeId);
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const points: TrendPoint[] = [];
+
+  const amountForType = (report: ReturnType<typeof getMonthlyReport>) =>
+    report.types.find((item) => item.typeId === typeId)?.amountPaise ?? 0;
+
+  if (mode === "month") {
+    for (let index = 0; index <= now.getMonth(); index += 1) {
+      const month = `${currentYear}-${String(index + 1).padStart(2, "0")}`;
+      points.push({
+        label: new Date(currentYear, index, 1).toLocaleDateString("en-IN", { month: "short" }),
+        amountPaise: amountForType(getMonthlyReport(accountId, month))
+      });
+    }
+  } else {
+    const firstRow = asRecord<{ first: string | null }>(
+      db.prepare("SELECT MIN(date) AS first FROM transactions").get()
+    );
+    const firstYear = firstRow?.first ? Number(firstRow.first.slice(0, 4)) : currentYear;
+    // Cap the window so a mis-dated transaction can never trigger an unbounded
+    // number of per-year report queries.
+    const startYear = Math.max(Math.min(firstYear, currentYear), currentYear - 9);
+    for (let year = startYear; year <= currentYear; year += 1) {
+      points.push({
+        label: String(year),
+        amountPaise: amountForType(getMonthlyReport(accountId, `${year}-01`, `${year}-01-01`, `${year}-12-31`))
+      });
+    }
+  }
+
+  return { mode, typeId, typeName: type.name, color: type.color, points };
 }
 
 export function getMonthlyReport(
@@ -3821,7 +3884,11 @@ function localIsoDate(date: Date) {
 }
 
 function csvCell(value: string) {
-  return `"${value.replace(/"/g, '""')}"`;
+  // Neutralize spreadsheet formula injection: a cell that a spreadsheet would
+  // read as a formula (leading = + - @, or a leading control character) is
+  // prefixed with a single quote so Excel/Sheets treat it as plain text.
+  const guarded = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return `"${guarded.replace(/"/g, '""')}"`;
 }
 
 function setSetting(key: string, value: string) {

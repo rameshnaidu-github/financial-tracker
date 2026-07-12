@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently -k \"pnpm:server:dev\" \"pnpm:client:dev\"",
     "server:dev": "node --no-warnings --watch server/index.ts",
-    "client:dev": "vite --host 0.0.0.0",
+    "client:dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "start": "node --no-warnings server/index.ts",
     "app:start": "bash scripts/start.sh",
@@ -16,23 +16,23 @@
   },
   "dependencies": {
     "@fastify/multipart": "^10.0.0",
-    "@fastify/static": "latest",
-    "@vitejs/plugin-react": "latest",
-    "concurrently": "latest",
+    "@fastify/static": "^9.1.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "concurrently": "^10.0.3",
     "exceljs": "^4.4.0",
-    "fastify": "latest",
-    "lucide-react": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "tsx": "latest",
-    "vite": "latest",
-    "zod": "latest"
+    "fastify": "^5.10.0",
+    "lucide-react": "^1.23.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tsx": "^4.23.0",
+    "vite": "^8.1.3",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "typescript": "latest"
+    "@types/node": "^26.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^6.0.3"
   },
   "engines": {
     "node": ">=24.0.0"

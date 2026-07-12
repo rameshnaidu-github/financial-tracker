@@ -235,6 +235,21 @@ export type MonthlyReport = {
   types: ReportType[];
 };
 
+export type TrendMode = "month" | "year";
+
+export type TrendPoint = {
+  label: string;
+  amountPaise: number;
+};
+
+export type TrendReport = {
+  mode: TrendMode;
+  typeId: string;
+  typeName: string;
+  color: string;
+  points: TrendPoint[];
+};
+
 export type BudgetStatus = "safe" | "watch" | "critical" | "over";
 
 export type BudgetScope = {

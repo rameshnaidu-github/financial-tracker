@@ -12,50 +12,50 @@ importers:
         specifier: ^10.0.0
         version: 10.0.0
       '@fastify/static':
-        specifier: latest
+        specifier: ^9.1.3
         version: 9.1.3
       '@vitejs/plugin-react':
-        specifier: latest
+        specifier: ^6.0.3
         version: 6.0.3(vite@8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(tsx@4.23.0))
       concurrently:
-        specifier: latest
+        specifier: ^10.0.3
         version: 10.0.3
       exceljs:
         specifier: ^4.4.0
         version: 4.4.0
       fastify:
-        specifier: latest
+        specifier: ^5.10.0
         version: 5.10.0
       lucide-react:
-        specifier: latest
+        specifier: ^1.23.0
         version: 1.23.0(react@19.2.7)
       react:
-        specifier: latest
+        specifier: ^19.2.7
         version: 19.2.7
       react-dom:
-        specifier: latest
+        specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       tsx:
-        specifier: latest
+        specifier: ^4.23.0
         version: 4.23.0
       vite:
-        specifier: latest
+        specifier: ^8.1.3
         version: 8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(tsx@4.23.0)
       zod:
-        specifier: latest
+        specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
       '@types/node':
-        specifier: latest
+        specifier: ^26.1.0
         version: 26.1.0
       '@types/react':
-        specifier: latest
+        specifier: ^19.2.17
         version: 19.2.17
       '@types/react-dom':
-        specifier: latest
+        specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.17)
       typescript:
-        specifier: latest
+        specifier: ^6.0.3
         version: 6.0.3
 
 packages:

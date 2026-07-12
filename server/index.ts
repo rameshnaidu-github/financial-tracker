@@ -30,6 +30,7 @@ import {
   getCurrentBatch,
   getMonthlyReport,
   getOverview,
+  getTrendReport,
   getProfile,
   getSettings,
   importTransactionsWorkbook,
@@ -42,6 +43,7 @@ import {
   startAutoBackup,
   stopAutoBackup,
   updateAccount,
+  updateAppSettings,
   updateAutopaySubscription,
   updateBudgetLine,
   updateLoan,
@@ -100,7 +102,7 @@ app.get("/api/health", async () => ({ ok: true }));
 app.get("/api/bootstrap", async () => ({
   settings: getSettings(),
   profile: getProfile(),
-  accounts: listAccounts(),
+  accounts: listAccounts().filter((account) => !account.isArchived),
   categoryTypes: listCategoryTypes(),
   loans: listLoans(true),
   subscriptions: listAutopaySubscriptions(true)
@@ -110,12 +112,14 @@ app.get("/api/profile", async () => getProfile());
 
 app.patch("/api/profile", async (request) => updateProfile(request.body as never));
 
+app.patch("/api/settings", async (request) => updateAppSettings(request.body as never));
+
 app.get("/api/overview", async (request) => {
   const query = request.query as { accountId?: string; month?: string };
   return getOverview(blankToUndefined(query.accountId), query.month);
 });
 
-app.get("/api/accounts", async () => listAccounts());
+app.get("/api/accounts", async () => listAccounts().filter((account) => !account.isArchived));
 
 app.post("/api/accounts", async (request, reply) => {
   const account = createAccount(request.body as never);
@@ -256,6 +260,15 @@ app.get("/api/reports/monthly", async (request) => {
   );
 });
 
+app.get("/api/reports/trends", async (request) => {
+  const query = request.query as { accountId?: string; typeId?: string; mode?: string };
+  return getTrendReport(
+    blankToUndefined(query.accountId),
+    query.typeId ?? "",
+    query.mode === "year" ? "year" : "month"
+  );
+});
+
 app.get("/api/budgets", async (request) => {
   const query = request.query as { month?: string };
   return getBudgetPlan(query.month);
@@ -329,7 +342,7 @@ if (existsSync(distDir)) {
 }
 
 const port = Number(process.env.PORT ?? 4000);
-const host = process.env.HOST ?? "0.0.0.0";
+const host = process.env.HOST ?? "127.0.0.1";
 let shuttingDown = false;
 
 async function shutdown(signal: string) {
@@ -358,6 +371,18 @@ process.once("SIGINT", () => {
 
 process.once("SIGTERM", () => {
   void shutdown("SIGTERM");
+});
+
+// Last-resort safety net: on an otherwise-fatal error, try to capture a backup
+// before exiting so a crash never costs the user data.
+process.once("uncaughtException", (error) => {
+  app.log.error(error, "Uncaught exception");
+  void shutdown("uncaughtException");
+});
+
+process.once("unhandledRejection", (reason) => {
+  app.log.error(reason, "Unhandled promise rejection");
+  void shutdown("unhandledRejection");
 });
 
 await app.listen({ port, host });

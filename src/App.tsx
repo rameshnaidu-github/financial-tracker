@@ -63,6 +63,9 @@ import type {
   TaxonomyBehavior,
   Transaction,
   TransactionKind,
+  TrendMode,
+  TrendPoint,
+  TrendReport,
   UserProfile
 } from "./types";
 import { AUTOPAY_DURATION_MONTH_OPTIONS, AUTOPAY_SUBCATEGORY_ID } from "../shared/finance";
@@ -294,12 +297,29 @@ export default function App() {
     }
   }, [profileDraft, showNotice]);
 
+  const saveCardAlert = useCallback(
+    async (percent: number) => {
+      try {
+        const settings = await Api.updateSettings({ cardUtilizationAlertPercent: percent });
+        setBootstrap((current) => (current ? { ...current, settings } : current));
+        showNotice("Card alert threshold saved.");
+      } catch (err) {
+        showNotice(err instanceof Error ? err.message : "Could not save the setting.");
+      }
+    },
+    [showNotice]
+  );
+
   const accounts = bootstrap?.accounts ?? [];
   const loans = bootstrap?.loans ?? [];
   const subscriptions = bootstrap?.subscriptions ?? [];
   const categoryTypes = bootstrap?.categoryTypes ?? [];
   const categories = flattenSubcategories(categoryTypes);
   const profile = bootstrap?.profile ?? emptyProfile;
+  const cardAlertPercent = (() => {
+    const parsed = Number(bootstrap?.settings?.card_utilization_alert_percent ?? "30");
+    return Number.isFinite(parsed) && parsed >= 1 && parsed <= 100 ? Math.round(parsed) : 30;
+  })();
   const activeAccounts = accounts.filter((account) => !account.isArchived);
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const showAccountFilter =
@@ -398,6 +418,7 @@ export default function App() {
             <OverviewPage
               selectedAccountId={selectedAccountId}
               selectedAccount={selectedAccount}
+              cardAlertPercent={cardAlertPercent}
               refreshKey={refreshKey}
               onNavigate={navigate}
             />
@@ -429,7 +450,9 @@ export default function App() {
               requestConfirm={requestConfirm}
             />
           )}
-          {activePage === "reports" && <ReportsPage selectedAccountId={selectedAccountId} refreshKey={refreshKey} />}
+          {activePage === "reports" && (
+            <ReportsPage selectedAccountId={selectedAccountId} categoryTypes={categoryTypes} refreshKey={refreshKey} />
+          )}
           {activePage === "budgets" && (
             <BudgetPlannerPage
               refreshKey={refreshKey}
@@ -440,6 +463,7 @@ export default function App() {
           {activePage === "accounts" && (
             <AccountsPage
               accounts={accounts}
+              cardAlertPercent={cardAlertPercent}
               refresh={refresh}
               showNotice={showNotice}
               requestConfirm={requestConfirm}
@@ -478,8 +502,10 @@ export default function App() {
               backupStatus={backupStatus}
               theme={theme}
               saving={profileSaving}
+              cardAlertPercent={cardAlertPercent}
               onProfileChange={setProfileDraft}
               onSaveProfile={saveProfile}
+              onSaveCardAlert={saveCardAlert}
               onThemeToggle={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
             />
           )}
@@ -553,11 +579,13 @@ function SetupPage({
 function OverviewPage({
   selectedAccountId,
   selectedAccount,
+  cardAlertPercent,
   refreshKey,
   onNavigate
 }: {
   selectedAccountId: string;
   selectedAccount?: Account;
+  cardAlertPercent: number;
   refreshKey: number;
   onNavigate: (page: Page) => void;
 }) {
@@ -565,7 +593,7 @@ function OverviewPage({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [allExpanded, setAllExpanded] = useState(true);
-  const [budgetAlerts, setBudgetAlerts] = useState<BudgetLine[]>([]);
+  const [budgetPlan, setBudgetPlan] = useState<BudgetPlan | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -584,11 +612,11 @@ function OverviewPage({
     Api.budgetPlan()
       .then((plan) => {
         if (active) {
-          setBudgetAlerts(plan.lines.filter((line) => line.status === "critical" || line.status === "over"));
+          setBudgetPlan(plan);
         }
       })
       .catch(() => {
-        if (active) setBudgetAlerts([]);
+        if (active) setBudgetPlan(null);
       });
     return () => {
       active = false;
@@ -611,6 +639,8 @@ function OverviewPage({
       amountPaise: category.amountPaise
     }))
   );
+  const budgetAlerts =
+    budgetPlan?.lines.filter((line) => line.status === "critical" || line.status === "over") ?? [];
 
   return (
     <div className="page-grid">
@@ -635,17 +665,30 @@ function OverviewPage({
               Open budget planner
             </button>
           </div>
-          <ul>
-            {budgetAlerts.map((line) => (
-              <li key={line.id}>
-                <span className="budget-alert-name">{line.name}</span>
-                <span className={`budget-status ${line.status}`}>{line.statusLabel}</span>
-                <strong>
-                  {formatINR(line.actualPaise)} / {formatINR(line.amountPaise)}
-                </strong>
-              </li>
-            ))}
-          </ul>
+          <table className="budget-alert-table">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>SubType</th>
+                <th>Status</th>
+                <th className="budget-alert-percent">% Used</th>
+              </tr>
+            </thead>
+            <tbody>
+              {budgetAlerts.map((line) => (
+                <tr className={`budget-alert-row ${line.status}`} key={line.id}>
+                  <td>{line.typeName}</td>
+                  <td>{budgetSubLabel(line)}</td>
+                  <td>
+                    <span className={`budget-alert-status ${line.status}`}>{line.statusLabel}</span>
+                  </td>
+                  <td className="budget-alert-percent">
+                    <span>{line.usedPercent}%</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </section>
       )}
 
@@ -687,7 +730,7 @@ function OverviewPage({
         <CollapsiblePanel title={`Account snapshot · ${overview.accounts.length}`} expanded={allExpanded} action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
           <div className="account-stack">
             {overview.accounts.map((account) => (
-              <OverviewAccountLine key={account.id} account={account} />
+              <OverviewAccountLine key={account.id} account={account} alertPercent={cardAlertPercent} />
             ))}
           </div>
         </CollapsiblePanel>
@@ -708,6 +751,7 @@ function OverviewPage({
               ariaLabel="Spending by category"
               centerLabel="Spent"
               centerValue={formatINR(overview.summary.totalSpendingPaise)}
+              className="overview-donut-chart"
             />
           )}
         </CollapsiblePanel>
@@ -717,6 +761,16 @@ function OverviewPage({
             incomePaise={overview.summary.incomePaise}
             spendingPaise={overview.summary.totalSpendingPaise}
           />
+        </CollapsiblePanel>
+      </section>
+
+      <section className="two-column overview-analytics">
+        <CollapsiblePanel title="Top spending lines" expanded={allExpanded} action={<button onClick={() => onNavigate("reports")}>Details</button>}>
+          <CategoryBars categories={overview.categoryReport.slice(0, 5)} />
+        </CollapsiblePanel>
+
+        <CollapsiblePanel title="Budget guardrails" expanded={allExpanded} action={<button onClick={() => onNavigate("budgets")}>Plan</button>}>
+          <BudgetGuardrails plan={budgetPlan} uncategorizedCount={overview.summary.uncategorizedCount} />
         </CollapsiblePanel>
       </section>
     </div>
@@ -751,6 +805,54 @@ function IncomeSpendingBars({
           <strong>{formatINR(row.value)}</strong>
         </div>
       ))}
+    </div>
+  );
+}
+
+function BudgetGuardrails({
+  plan,
+  uncategorizedCount
+}: {
+  plan: BudgetPlan | null;
+  uncategorizedCount: number;
+}) {
+  if (!plan || plan.lines.length === 0) {
+    return <EmptyState text="Add budget lines to see month-to-date guardrails." />;
+  }
+
+  const usedPercent = boundedPercent(plan.totals.actualPaise, plan.totals.amountPaise);
+  const paceDelta = Math.round(usedPercent - plan.elapsedPercent);
+  const healthRows = [
+    { label: "On track", value: plan.totals.safeCount, tone: "safe" },
+    { label: "Watch", value: plan.totals.watchCount + plan.totals.criticalCount, tone: "watch" },
+    { label: "Over", value: plan.totals.overCount, tone: "over" }
+  ];
+
+  return (
+    <div className="budget-guardrails">
+      <div className="budget-pace-meter">
+        <div className="budget-pace-copy">
+          <span>Budget used</span>
+          <strong>{usedPercent}%</strong>
+          <small>{paceDelta > 0 ? `${paceDelta}% ahead of today` : `${Math.abs(paceDelta)}% under today's pace`}</small>
+        </div>
+        <div className="budget-pace-track" aria-label="Budget used compared with month elapsed">
+          <span className="expected" style={{ left: `${Math.min(plan.elapsedPercent, 100)}%` }} />
+          <span className={usedPercent > 100 ? "over" : usedPercent >= 75 ? "watch" : "safe"} style={{ width: `${Math.min(usedPercent, 100)}%` }} />
+        </div>
+      </div>
+      <div className="budget-health-grid">
+        {healthRows.map((row) => (
+          <div className={`budget-health ${row.tone}`} key={row.label}>
+            <span>{row.label}</span>
+            <strong>{row.value}</strong>
+          </div>
+        ))}
+      </div>
+      <div className="budget-signal-list">
+        <Metric label="Unplanned spend" value={formatINR(plan.totals.unplannedActualPaise)} warning={plan.totals.unplannedActualPaise > 0} />
+        <Metric label="Uncategorized" value={`${uncategorizedCount} item${uncategorizedCount === 1 ? "" : "s"}`} warning={uncategorizedCount > 0} />
+      </div>
     </div>
   );
 }
@@ -1847,9 +1949,11 @@ function ImportTransactionsModal({
 
 function ReportsPage({
   selectedAccountId,
+  categoryTypes,
   refreshKey
 }: {
   selectedAccountId: string;
+  categoryTypes: CategoryType[];
   refreshKey: number;
 }) {
   const initialMonth = currentMonth();
@@ -1860,6 +1964,39 @@ function ReportsPage({
   const [reportRetryKey, setReportRetryKey] = useState(0);
   const [selectedTypeId, setSelectedTypeId] = useState("");
   const rangeIsValid = from <= to;
+  const trendTypes = categoryTypes.filter((type) => type.behavior !== "card_payment");
+  const [trendMode, setTrendMode] = useState<TrendMode>("month");
+  const [trendStyle, setTrendStyle] = useState<"bar" | "line">("bar");
+  const [trendTypeId, setTrendTypeId] = useState(
+    () => trendTypes.find((type) => type.behavior === "expense")?.id ?? trendTypes[0]?.id ?? ""
+  );
+  const [trend, setTrend] = useState<TrendReport | null>(null);
+  const [trendError, setTrendError] = useState("");
+
+  useEffect(() => {
+    if (trendTypeId && trendTypes.some((type) => type.id === trendTypeId)) return;
+    setTrendTypeId(trendTypes[0]?.id ?? "");
+  }, [trendTypes, trendTypeId]);
+
+  useEffect(() => {
+    if (!trendTypeId) {
+      setTrend(null);
+      return;
+    }
+    let active = true;
+    setTrend(null);
+    setTrendError("");
+    Api.trendReport(trendTypeId, trendMode, selectedAccountId || undefined)
+      .then((next) => {
+        if (active) setTrend(next);
+      })
+      .catch((error: unknown) => {
+        if (active) setTrendError(error instanceof Error ? error.message : "Could not load the trend.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [trendTypeId, trendMode, selectedAccountId, refreshKey]);
 
   useEffect(() => {
     if (!rangeIsValid) {
@@ -1951,7 +2088,158 @@ function ReportsPage({
           </>
         )}
       </Panel>
+
+      <Panel title="Trends">
+        <div className="trend-controls">
+          <div className="segmented-control">
+            <button type="button" className={trendMode === "month" ? "active" : ""} onClick={() => setTrendMode("month")}>
+              Month on month
+            </button>
+            <button type="button" className={trendMode === "year" ? "active" : ""} onClick={() => setTrendMode("year")}>
+              Year on year
+            </button>
+          </div>
+          <div className="segmented-control">
+            <button type="button" className={trendStyle === "bar" ? "active" : ""} onClick={() => setTrendStyle("bar")}>
+              Bar
+            </button>
+            <button type="button" className={trendStyle === "line" ? "active" : ""} onClick={() => setTrendStyle("line")}>
+              Line
+            </button>
+          </div>
+          <label className="control-field toolbar-control trend-type-control">
+            <span className="control-label">Type</span>
+            <select value={trendTypeId} onChange={(event) => setTrendTypeId(event.target.value)}>
+              {trendTypes.map((type) => (
+                <option key={type.id} value={type.id}>
+                  {type.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {trendError ? (
+          <EmptyState text={trendError} />
+        ) : !trendTypeId ? (
+          <EmptyState text="Add a Type in Categories to see trends." />
+        ) : !trend ? (
+          <PanelLoader label="Loading trend" />
+        ) : trend.points.every((point) => point.amountPaise === 0) ? (
+          <EmptyState
+            text={`No ${trend.typeName} recorded ${trendMode === "month" ? "this year" : "yet"}.`}
+          />
+        ) : (
+          <>
+            <p className="helper-text trend-caption">
+              {trend.typeName} · {trendMode === "month" ? `${new Date().getFullYear()}, January to date` : "by year"}
+            </p>
+            <TrendChart points={trend.points} variant={trendStyle} color={trend.color} />
+          </>
+        )}
+      </Panel>
     </div>
+  );
+}
+
+function compactINR(paise: number) {
+  const rupees = paise / 100;
+  if (rupees >= 10000000) return `₹${(rupees / 10000000).toFixed(1).replace(/\.0$/, "")}Cr`;
+  if (rupees >= 100000) return `₹${(rupees / 100000).toFixed(1).replace(/\.0$/, "")}L`;
+  if (rupees >= 1000) return `₹${(rupees / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  return `₹${Math.round(rupees)}`;
+}
+
+function boundedPercent(value: number, total: number) {
+  if (total <= 0) return 0;
+  return Math.round((value / total) * 100);
+}
+
+function TrendChart({
+  points,
+  variant,
+  color
+}: {
+  points: TrendPoint[];
+  variant: "bar" | "line";
+  color: string;
+}) {
+  const width = 760;
+  const height = 300;
+  const pad = { top: 30, right: 14, bottom: 32, left: 14 };
+  const innerWidth = width - pad.left - pad.right;
+  const innerHeight = height - pad.top - pad.bottom;
+  const max = Math.max(...points.map((point) => point.amountPaise), 1);
+  const step = innerWidth / points.length;
+  const baseline = pad.top + innerHeight;
+
+  const centers = points.map((point, index) => ({
+    ...point,
+    x: pad.left + step * index + step / 2,
+    y: baseline - (point.amountPaise / max) * innerHeight
+  }));
+
+  return (
+    <svg className="trend-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Trend chart">
+      {[0.25, 0.5, 0.75].map((fraction) => (
+        <line
+          key={fraction}
+          className="trend-gridline"
+          x1={pad.left}
+          x2={width - pad.right}
+          y1={baseline - innerHeight * fraction}
+          y2={baseline - innerHeight * fraction}
+        />
+      ))}
+      <line className="trend-axis" x1={pad.left} x2={width - pad.right} y1={baseline} y2={baseline} />
+
+      {variant === "bar" ? (
+        centers.map((point) => {
+          const barWidth = Math.min(step * 0.55, 52);
+          const barHeight = Math.max(baseline - point.y, point.amountPaise > 0 ? 2 : 0);
+          return (
+            <g key={point.label}>
+              <title>{`${point.label}: ${formatINR(point.amountPaise)}`}</title>
+              <rect
+                x={point.x - barWidth / 2}
+                y={baseline - barHeight}
+                width={barWidth}
+                height={barHeight}
+                rx={5}
+                fill={color}
+              />
+            </g>
+          );
+        })
+      ) : (
+        <>
+          <polyline
+            className="trend-line"
+            stroke={color}
+            points={centers.map((point) => `${point.x},${point.y}`).join(" ")}
+          />
+          {centers.map((point) => (
+            <g key={point.label}>
+              <title>{`${point.label}: ${formatINR(point.amountPaise)}`}</title>
+              <circle cx={point.x} cy={point.y} r={4.5} fill={color} />
+            </g>
+          ))}
+        </>
+      )}
+
+      {centers.map((point) => (
+        <g key={`labels-${point.label}`}>
+          {point.amountPaise > 0 && (
+            <text className="trend-value" x={point.x} y={point.y - 9} textAnchor="middle">
+              {compactINR(point.amountPaise)}
+            </text>
+          )}
+          <text className="trend-label" x={point.x} y={height - 10} textAnchor="middle">
+            {point.label}
+          </text>
+        </g>
+      ))}
+    </svg>
   );
 }
 
@@ -2315,29 +2603,30 @@ function budgetSummaryTone(plan: BudgetPlan): "neutral" | "warning" | "good" {
 
 function AccountsPage({
   accounts,
+  cardAlertPercent,
   refresh,
   showNotice,
   requestConfirm
 }: {
   accounts: Account[];
+  cardAlertPercent: number;
   refresh: () => Promise<void>;
   showNotice: (message: string) => void;
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
   const activeAccounts = accounts.filter((account) => !account.isArchived);
-  const archivedAccounts = accounts.filter((account) => account.isArchived);
 
   async function remove(account: Account) {
     requestConfirm({
       message: "Are you sure you want to delete this?",
-      detail: `${account.name} will be removed from active use. Existing history is preserved when the account has transactions.`,
-      confirmLabel: "Remove",
+      detail: `${account.name} will disappear from the app. Existing transaction history is preserved when history is linked to this account.`,
+      confirmLabel: "Delete",
       tone: "danger",
       onConfirm: async () => {
         try {
           const result = await Api.deleteAccount(account.id);
           await refresh();
-          showNotice(result.mode === "archived" ? "Account removed from active use." : "Account deleted.");
+          showNotice(result.mode === "hidden" ? "Account hidden. Existing history is preserved." : "Account deleted.");
         } catch (err) {
           showNotice(err instanceof Error ? err.message : "Could not remove account.");
         }
@@ -2345,36 +2634,20 @@ function AccountsPage({
     });
   }
 
-  async function restore(account: Account) {
-    try {
-      await Api.updateAccount(account.id, { isArchived: false });
-      await refresh();
-      showNotice("Account restored.");
-    } catch (err) {
-      showNotice(err instanceof Error ? err.message : "Could not restore account.");
-    }
-  }
-
   return (
     <div className="two-column">
       <Panel title="Accounts & cards">
-        <div className="account-stack">
-          {activeAccounts.map((account) => (
-            <AccountManagerLine key={account.id} account={account} onRemove={remove} />
-          ))}
-        </div>
-        {archivedAccounts.length > 0 && (
-          <>
-            <h3 className="section-subtitle">Removed</h3>
-            <div className="account-stack">
-              {archivedAccounts.map((account) => (
-                <AccountManagerLine key={account.id} account={account} onRestore={restore} />
-              ))}
-            </div>
-          </>
+        {activeAccounts.length === 0 ? (
+          <EmptyState text="No active accounts or cards. Add one to keep tracking." />
+        ) : (
+          <div className="account-stack">
+            {activeAccounts.map((account) => (
+              <AccountManagerLine key={account.id} account={account} alertPercent={cardAlertPercent} onRemove={remove} />
+            ))}
+          </div>
         )}
         <p className="helper-text">
-          Removing an account with history archives it. Balances are still derived from the starting value plus transactions.
+          Deleting an unused account removes it permanently. Accounts with linked transactions are hidden so reports keep their history.
         </p>
       </Panel>
       <Panel title="Add account">
@@ -3476,13 +3749,15 @@ function DonutChart({
   totalPaise,
   ariaLabel,
   centerLabel,
-  centerValue
+  centerValue,
+  className = ""
 }: {
   segments: DonutSegment[];
   totalPaise: number;
   ariaLabel: string;
   centerLabel: string;
   centerValue: string;
+  className?: string;
 }) {
   const width = 520;
   const height = 360;
@@ -3496,7 +3771,7 @@ function DonutChart({
 
   if (segments.length === 0 || totalPaise <= 0) {
     return (
-      <svg className="donut-chart" viewBox={`0 0 ${width} ${height}`} aria-label="No chart data">
+      <svg className={`donut-chart ${className}`.trim()} viewBox={`0 0 ${width} ${height}`} aria-label="No chart data">
         <circle className="donut-empty" cx={centerX} cy={centerY} r={radius} />
       </svg>
     );
@@ -3526,18 +3801,21 @@ function DonutChart({
 
   for (const side of ["left", "right"] as const) {
     const sideSlices = slices.filter((slice) => slice.side === side).sort((a, b) => a.labelY - b.labelY);
-    const gap = Math.max(25, Math.min(38, 260 / Math.max(sideSlices.length - 1, 1)));
+    // Each label is two text lines (~30px tall); stack labels relative to the
+    // previous one so clustered small slices never overlap.
+    const gap = 36;
     sideSlices.forEach((slice, index) => {
-      slice.labelY = Math.max(slice.labelY, 45 + index * gap);
+      const floor = index === 0 ? 45 : sideSlices[index - 1].labelY + gap;
+      slice.labelY = Math.max(slice.labelY, floor);
     });
     for (let index = sideSlices.length - 1; index >= 0; index -= 1) {
-      const maxY = 315 - (sideSlices.length - 1 - index) * gap;
-      sideSlices[index].labelY = Math.min(sideSlices[index].labelY, maxY);
+      const ceiling = index === sideSlices.length - 1 ? 315 : sideSlices[index + 1].labelY - gap;
+      sideSlices[index].labelY = Math.min(sideSlices[index].labelY, ceiling);
     }
   }
 
   return (
-    <svg className="donut-chart" viewBox={`0 0 ${width} ${height}`} aria-label={ariaLabel}>
+    <svg className={`donut-chart ${className}`.trim()} viewBox={`0 0 ${width} ${height}`} aria-label={ariaLabel}>
       <circle className="donut-track" cx={centerX} cy={centerY} r={radius} />
       {slices.map((segment) => {
         const startX = centerX + Math.cos(segment.radians) * lineStartRadius;
@@ -3700,11 +3978,11 @@ function categoryFromTransaction(transaction: Transaction): Category {
   };
 }
 
-function OverviewAccountLine({ account }: { account: Account }) {
+function OverviewAccountLine({ account, alertPercent }: { account: Account; alertPercent: number }) {
   const isCard = account.type === "credit_card";
   const limit = account.creditLimitPaise ?? 0;
   const usage = isCard && limit > 0 ? Math.min(Math.max(Math.round((account.outstandingPaise / limit) * 100), 0), 100) : 0;
-  const highUsage = isCard && usage > 30;
+  const highUsage = isCard && usage > alertPercent;
 
   return (
     <div className="account-line overview-account-line">
@@ -3827,12 +4105,12 @@ function FaqItem({ question, answer }: { question: string; answer: string }) {
   );
 }
 
-function CardLimitSummary({ account }: { account: Account }) {
+function CardLimitSummary({ account, alertPercent }: { account: Account; alertPercent: number }) {
   const limit = account.creditLimitPaise ?? 0;
   const outstanding = account.outstandingPaise;
   const available = account.availableLimitPaise ?? Math.max(limit - outstanding, 0);
   const usage = creditUtilization(account);
-  const highUsage = usage > 30;
+  const highUsage = usage > alertPercent;
 
   return (
     <div className="card-limit-summary">
@@ -3889,8 +4167,10 @@ function ProfilePage({
   backupStatus,
   theme,
   saving,
+  cardAlertPercent,
   onProfileChange,
   onSaveProfile,
+  onSaveCardAlert,
   onThemeToggle
 }: {
   profile: UserProfile;
@@ -3898,12 +4178,31 @@ function ProfilePage({
   backupStatus: BackupStatus | null;
   theme: Theme;
   saving: boolean;
+  cardAlertPercent: number;
   onProfileChange: (profile: UserProfile) => void;
   onSaveProfile: () => void;
+  onSaveCardAlert: (percent: number) => Promise<void> | void;
   onThemeToggle: () => void;
 }) {
   const displayName = profile.name || "Your profile";
   const displayEmail = profile.email || "Local profile";
+  const [cardAlertDraft, setCardAlertDraft] = useState(String(cardAlertPercent));
+
+  useEffect(() => {
+    setCardAlertDraft(String(cardAlertPercent));
+  }, [cardAlertPercent]);
+
+  const draftValue = Number.parseInt(cardAlertDraft, 10);
+  const draftIsValid = Number.isInteger(draftValue) && draftValue >= 1 && draftValue <= 100;
+  const profileAgeText = profile.age.trim();
+  const profileAge = Number.parseInt(profileAgeText, 10);
+  const profileCanSave =
+    profile.name.trim().length > 0 &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.email.trim()) &&
+    /^\d+$/.test(profileAgeText) &&
+    Number.isInteger(profileAge) &&
+    profileAge >= 1 &&
+    profileAge <= 120;
 
   return (
     <div className="profile-page">
@@ -3942,7 +4241,12 @@ function ProfilePage({
               placeholder="Add age"
             />
           </label>
-          <button className="profile-save-button" onClick={onSaveProfile} disabled={saving}>
+          <button
+            className={`profile-save-button ${profileCanSave ? "" : "blurred"}`}
+            onClick={onSaveProfile}
+            disabled={saving || !profileCanSave}
+            title={profileCanSave ? "Save profile" : "Enter a valid name, email, and age"}
+          >
             <Check size={16} />
             {saving ? "Saving..." : "Save profile"}
           </button>
@@ -3957,6 +4261,27 @@ function ProfilePage({
           <div className="settings-row">
             <span>Week starts from</span>
             <strong>{formatWeekStart(settings.week_start)}</strong>
+          </div>
+          <div className="settings-row card-alert-row">
+            <span>Card utilization alert</span>
+            <div className="card-alert-controls">
+              <input
+                aria-label="Card utilization alert percentage"
+                inputMode="numeric"
+                value={cardAlertDraft}
+                onChange={(event) => setCardAlertDraft(event.target.value)}
+              />
+              <span className="card-alert-suffix">%</span>
+              <button
+                type="button"
+                className="secondary-action"
+                disabled={!draftIsValid || draftValue === cardAlertPercent}
+                onClick={() => void onSaveCardAlert(draftValue)}
+              >
+                Save
+              </button>
+            </div>
+            <small>Credit cards turn red when utilization crosses this value (1–100).</small>
           </div>
           <div className="settings-row backup-row">
             <span>Backup status</span>
@@ -3976,12 +4301,12 @@ function ProfilePage({
 
 function AccountManagerLine({
   account,
-  onRemove,
-  onRestore
+  alertPercent,
+  onRemove
 }: {
   account: Account;
+  alertPercent: number;
   onRemove?: (account: Account) => void;
-  onRestore?: (account: Account) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const isCard = account.type === "credit_card";
@@ -4018,19 +4343,12 @@ function AccountManagerLine({
       </div>
 
       {expanded && <>
-        {isCard && <CardLimitSummary account={account} />}
+        {isCard && <CardLimitSummary account={account} alertPercent={alertPercent} />}
         <div className="account-actions">
-          {account.isArchived ? (
-            <button className="secondary-action" onClick={() => onRestore?.(account)}>
-              <RotateCcw size={16} />
-              Restore
-            </button>
-          ) : (
-            <button className="secondary-action danger-action" onClick={() => onRemove?.(account)}>
-              <Archive size={16} />
-              Remove
-            </button>
-          )}
+          <button className="secondary-action danger-action" onClick={() => onRemove?.(account)}>
+            <Trash2 size={16} />
+            Delete
+          </button>
         </div>
       </>}
     </article>

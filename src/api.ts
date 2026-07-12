@@ -13,6 +13,7 @@ import type {
   Subcategory,
   Overview,
   Transaction,
+  TrendReport,
   UserProfile
 } from "./types";
 
@@ -52,6 +53,8 @@ export const Api = {
   profile: () => api<UserProfile>("/api/profile"),
   updateProfile: (body: Partial<UserProfile>) =>
     api<UserProfile>("/api/profile", { method: "PATCH", body }),
+  updateSettings: (body: { cardUtilizationAlertPercent: number }) =>
+    api<Record<string, string>>("/api/settings", { method: "PATCH", body }),
   overview: (accountId?: string, month?: string) => {
     const params = new URLSearchParams();
     if (accountId) params.set("accountId", accountId);
@@ -68,7 +71,7 @@ export const Api = {
   updateAccount: (id: string, body: { name?: string; creditLimitPaise?: number; isArchived?: boolean }) =>
     api<Account>(`/api/accounts/${id}`, { method: "PATCH", body }),
   deleteAccount: (id: string) =>
-    api<{ ok: true; mode: "deleted" | "archived" }>(`/api/accounts/${id}`, { method: "DELETE" }),
+    api<{ ok: true; mode: "deleted" | "hidden" }>(`/api/accounts/${id}`, { method: "DELETE" }),
   categoryTypes: () => api<CategoryType[]>("/api/category-types"),
   createCategoryType: (body: { name: string; behavior: string; icon: string; color: string }) =>
     api<CategoryType>("/api/category-types", { method: "POST", body }),
@@ -154,6 +157,11 @@ export const Api = {
     if (from) params.set("from", from);
     if (to) params.set("to", to);
     return api<MonthlyReport>(`/api/reports/monthly?${params}`);
+  },
+  trendReport: (typeId: string, mode: "month" | "year", accountId?: string) => {
+    const params = new URLSearchParams({ typeId, mode });
+    if (accountId) params.set("accountId", accountId);
+    return api<TrendReport>(`/api/reports/trends?${params}`);
   },
   budgetPlan: (month?: string) => {
     const params = new URLSearchParams();
