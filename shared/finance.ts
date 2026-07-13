@@ -319,6 +319,8 @@ export const createInvestmentSchema = z.object({
   name: z.string().trim().min(1).max(90),
   investedPaise: paiseSchema,
   currentValuePaise: paiseSchema,
+  shares: z.number().nonnegative().optional(),
+  purchaseDate: dateSchema.optional(),
   note: optionalTextSchema
 });
 
@@ -328,6 +330,8 @@ export const updateInvestmentSchema = z
     name: z.string().trim().min(1).max(90).optional(),
     investedPaise: paiseSchema.optional(),
     currentValuePaise: paiseSchema.optional(),
+    shares: z.number().nonnegative().optional(),
+    purchaseDate: dateSchema.optional(),
     note: optionalTextSchema
   })
   .refine((value) => Object.keys(value).length > 0, "No investment changes provided.");

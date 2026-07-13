@@ -142,6 +142,8 @@ export function initDatabase() {
       name TEXT NOT NULL,
       invested_paise INTEGER NOT NULL CHECK (invested_paise >= 0),
       current_value_paise INTEGER NOT NULL CHECK (current_value_paise >= 0),
+      shares REAL,
+      purchase_date TEXT,
       note TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -173,6 +175,7 @@ export function initDatabase() {
   ensureAutopayIndexes();
   ensureBudgetIndexes();
   ensureInvestmentIndexes();
+  ensureInvestmentColumns();
   ensureTaxonomyIndexes();
   seedSettings();
   pruneBackupFiles();
@@ -206,6 +209,11 @@ function ensureInvestmentIndexes() {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_investments_type ON investments(type);
   `);
+}
+
+function ensureInvestmentColumns() {
+  addColumnIfMissing("investments", "shares", "REAL");
+  addColumnIfMissing("investments", "purchase_date", "TEXT");
 }
 
 function migrateAccountNameConstraint() {

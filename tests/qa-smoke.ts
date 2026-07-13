@@ -1256,25 +1256,41 @@ test("tracks investment holdings with computed gain and validation", async () =>
     type: "stocks",
     name: "QA Reliance",
     investedPaise: 1_00_000_00,
-    currentValuePaise: 1_35_000_00
+    currentValuePaise: 1_35_000_00,
+    shares: 12.5,
+    purchaseDate: "2026-03-15"
   });
   assert(stock.gainPaise === 35_000_00, "Gain should be current minus invested.");
   assert(stock.gainPercent === 35, "Gain percent should be computed.");
   assert(stock.typeLabel === "Stocks", "Type label should resolve from metadata.");
+  assert(stock.shares === 12.5, "Fractional shares should round-trip through create.");
+  assert(stock.purchaseDate === "2026-03-15", "Purchase date should round-trip through create.");
 
   const mf = services.createInvestment({
     type: "mutual_funds",
     name: "QA Flexicap",
     investedPaise: 2_00_000_00,
-    currentValuePaise: 1_80_000_00
+    currentValuePaise: 1_80_000_00,
+    purchaseDate: "2026-01-05"
   });
   assert(mf.gainPaise === -20_000_00 && mf.gainPercent === -10, "Losses should be negative.");
+  assert(mf.shares === null, "Shares should be optional for non-stock holdings.");
+  assert(mf.purchaseDate === "2026-01-05", "Purchase date should round-trip for non-stocks.");
 
   const updated = services.updateInvestment(stock.id, { currentValuePaise: 90_000_00 });
   assert(updated.gainPaise === -10_000_00, "Updating current value should recompute the gain.");
+  assert(updated.shares === 12.5, "Untouched shares should persist across an update.");
+  assert(updated.purchaseDate === "2026-03-15", "Untouched purchase date should persist across an update.");
+
+  const reshared = services.updateInvestment(stock.id, { shares: 20, purchaseDate: "2026-04-01" });
+  assert(reshared.shares === 20 && reshared.purchaseDate === "2026-04-01", "Shares and date should be updatable.");
 
   const list = services.listInvestments();
   assert(list.length >= 2, "Investments should be listed.");
+  assert(
+    list.find((item) => item.id === stock.id)?.shares === 20,
+    "Updated shares should be reflected in the list."
+  );
 
   await assertRejects("unknown investment type", () =>
     services.createInvestment({ type: "crypto" as never, name: "X", investedPaise: 100, currentValuePaise: 200 })
@@ -1283,6 +1299,53 @@ test("tracks investment holdings with computed gain and validation", async () =>
   services.deleteInvestment(mf.id);
   assert(!services.listInvestments().some((item) => item.id === mf.id), "Deleted investment should be gone.");
   await assertRejects("delete missing investment", () => services.deleteInvestment(mf.id));
+});
+
+test("builds a monthly payment-history grid and rejects unknown sources", async () => {
+  assert(state.bankId, "Bank should exist.");
+  const loan = services.createLoan({
+    name: "QA Payment History Loan",
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    principalAmountPaise: 12_000_000,
+    startingOutstandingPaise: 12_000_000,
+    startMonth: "2029-01",
+    annualInterestRateBps: 1000,
+    tenureMonths: 24,
+    monthlyEmiPaise: 500_000
+  });
+
+  services.createTransaction({
+    date: "2029-03-10",
+    accountId: state.bankId,
+    method: "bank_transfer",
+    merchant: "QA history EMI",
+    typeId: typeId("Loan"),
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    amountPaise: 500_000,
+    direction: "outflow",
+    kind: "emi",
+    loanId: loan.id,
+    loanPaymentType: "emi"
+  });
+
+  const history = services.getPaymentHistory("loan", loan.id, 2029);
+  assert(history.months.length === 12, "Payment history should always have 12 months.");
+  assert(history.months[2] === true, "March (index 2) should be marked paid.");
+  assert(
+    history.months.filter((paid) => paid).length === 1,
+    "Only the paid month should be true."
+  );
+  assert(history.year === 2029 && history.source === "loan", "History should echo its scope.");
+
+  const otherYear = services.getPaymentHistory("loan", loan.id, 2030);
+  assert(
+    otherYear.months.every((paid) => paid === false),
+    "A year with no payments should be all false."
+  );
+
+  await assertRejects("invalid payment history source", () =>
+    services.getPaymentHistory("stocks" as never, loan.id, 2029)
+  );
 });
 
 let failed = 0;

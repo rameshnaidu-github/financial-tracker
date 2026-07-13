@@ -590,6 +590,8 @@ type InvestmentRow = {
   name: string;
   invested_paise: number;
   current_value_paise: number;
+  shares: number | null;
+  purchase_date: string | null;
   note: string | null;
   created_at: string;
   updated_at: string;
@@ -606,6 +608,8 @@ export type InvestmentSummary = {
   currentValuePaise: number;
   gainPaise: number;
   gainPercent: number;
+  shares: number | null;
+  purchaseDate: string | null;
   note: string | null;
   createdAt: string;
   updatedAt: string;
@@ -615,7 +619,7 @@ export function listInvestments(): InvestmentSummary[] {
   const rows = asRecords<InvestmentRow>(
     db
       .prepare(
-        `SELECT id, type, name, invested_paise, current_value_paise, note, created_at, updated_at
+        `SELECT id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at
          FROM investments
          ORDER BY created_at, id`
       )
@@ -628,9 +632,18 @@ export function createInvestment(input: CreateInvestmentInput): InvestmentSummar
   const parsed = createInvestmentSchema.parse(input);
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO investments (id, type, name, invested_paise, current_value_paise, note)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, parsed.type, parsed.name, parsed.investedPaise, parsed.currentValuePaise, parsed.note ?? null);
+    `INSERT INTO investments (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    parsed.type,
+    parsed.name,
+    parsed.investedPaise,
+    parsed.currentValuePaise,
+    parsed.shares ?? null,
+    parsed.purchaseDate ?? null,
+    parsed.note ?? null
+  );
   return requireInvestmentSummary(id);
 }
 
@@ -642,14 +655,27 @@ export function updateInvestment(id: string, input: UpdateInvestmentInput): Inve
     name: patch.name ?? existing.name,
     investedPaise: patch.investedPaise ?? existing.invested_paise,
     currentValuePaise: patch.currentValuePaise ?? existing.current_value_paise,
+    shares: Object.prototype.hasOwnProperty.call(patch, "shares") ? patch.shares ?? null : existing.shares,
+    purchaseDate: Object.prototype.hasOwnProperty.call(patch, "purchaseDate")
+      ? patch.purchaseDate ?? null
+      : existing.purchase_date,
     note: Object.prototype.hasOwnProperty.call(patch, "note") ? patch.note ?? null : existing.note
   };
   db.prepare(
     `UPDATE investments
-     SET type = ?, name = ?, invested_paise = ?, current_value_paise = ?, note = ?,
+     SET type = ?, name = ?, invested_paise = ?, current_value_paise = ?, shares = ?, purchase_date = ?, note = ?,
          updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`
-  ).run(merged.type, merged.name, merged.investedPaise, merged.currentValuePaise, merged.note, id);
+  ).run(
+    merged.type,
+    merged.name,
+    merged.investedPaise,
+    merged.currentValuePaise,
+    merged.shares,
+    merged.purchaseDate,
+    merged.note,
+    id
+  );
   return requireInvestmentSummary(id);
 }
 
@@ -665,7 +691,7 @@ function requireInvestmentRow(id: string) {
   const row = asRecord<InvestmentRow | undefined>(
     db
       .prepare(
-        `SELECT id, type, name, invested_paise, current_value_paise, note, created_at, updated_at
+        `SELECT id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at
          FROM investments
          WHERE id = ?`
       )
@@ -696,6 +722,8 @@ function mapInvestment(row: InvestmentRow): InvestmentSummary {
     currentValuePaise: row.current_value_paise,
     gainPaise,
     gainPercent,
+    shares: row.shares,
+    purchaseDate: row.purchase_date,
     note: row.note,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -1531,6 +1559,80 @@ export function getTrendReport(
   }
 
   return { mode, typeId, typeName: type.name, color: type.color, points };
+}
+
+export type PaymentHistorySource = "loan" | "autopay" | "mutual_fund";
+
+export type PaymentHistory = {
+  source: string;
+  id: string;
+  year: number;
+  months: boolean[];
+};
+
+const PAYMENT_HISTORY_SOURCES = new Set<PaymentHistorySource>(["loan", "autopay", "mutual_fund"]);
+
+export function getPaymentHistory(
+  source: PaymentHistorySource,
+  id: string,
+  year: number
+): PaymentHistory {
+  if (!PAYMENT_HISTORY_SOURCES.has(source)) {
+    throw badRequest("Unknown payment history source.");
+  }
+
+  const safeYear = Math.min(Math.max(Math.trunc(Number(year) || 0), 2000), 2100);
+  const yearText = String(safeYear);
+
+  let rows: Array<{ month: string }>;
+  if (source === "loan") {
+    rows = asRecords<{ month: string }>(
+      db
+        .prepare(
+          `SELECT DISTINCT substr(t.date, 6, 2) AS month
+           FROM transactions t
+           JOIN loan_payments lp ON lp.transaction_id = t.id
+           WHERE lp.loan_id = ? AND substr(t.date, 1, 4) = ?`
+        )
+        .all(id, yearText)
+    );
+  } else if (source === "autopay") {
+    rows = asRecords<{ month: string }>(
+      db
+        .prepare(
+          `SELECT DISTINCT substr(t.date, 6, 2) AS month
+           FROM transactions t
+           JOIN autopay_payments ap ON ap.transaction_id = t.id
+           WHERE ap.subscription_id = ? AND substr(t.date, 1, 4) = ?`
+        )
+        .all(id, yearText)
+    );
+  } else {
+    // Investments are manual holdings with no per-holding transaction link, so the
+    // grid reflects ALL Mutual-Funds investment transactions that year (subcategory-level);
+    // `id` is accepted for a consistent signature but not used to scope the query.
+    rows = asRecords<{ month: string }>(
+      db
+        .prepare(
+          `SELECT DISTINCT substr(date, 6, 2) AS month
+           FROM transactions
+           WHERE subcategory_id = 'sub_invest_mutual_funds'
+             AND kind = 'investment'
+             AND substr(date, 1, 4) = ?`
+        )
+        .all(yearText)
+    );
+  }
+
+  const months = Array.from({ length: 12 }, () => false);
+  for (const row of rows) {
+    const index = Number(row.month) - 1;
+    if (index >= 0 && index < 12) {
+      months[index] = true;
+    }
+  }
+
+  return { source, id, year: safeYear, months };
 }
 
 export function getMonthlyReport(

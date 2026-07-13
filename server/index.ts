@@ -32,6 +32,7 @@ import {
   getCurrentBatch,
   getMonthlyReport,
   getOverview,
+  getPaymentHistory,
   getTrendReport,
   getProfile,
   getSettings,
@@ -271,6 +272,15 @@ app.get("/api/reports/trends", async (request) => {
     blankToUndefined(query.accountId),
     query.typeId ?? "",
     query.mode === "year" ? "year" : "month"
+  );
+});
+
+app.get("/api/payment-history", async (request) => {
+  const query = request.query as { source?: string; id?: string; year?: string };
+  return getPaymentHistory(
+    (blankToUndefined(query.source) ?? "") as never,
+    blankToUndefined(query.id) ?? "",
+    query.year ? Number(query.year) : new Date().getFullYear()
   );
 });
 

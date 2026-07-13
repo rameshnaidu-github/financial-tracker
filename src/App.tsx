@@ -6,6 +6,8 @@ import {
   Check,
   CircleHelp,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
   CreditCard,
   Download,
@@ -60,6 +62,7 @@ import type {
   LoanPaymentType,
   MonthlyReport,
   Overview,
+  PaymentHistory,
   PaymentMethod,
   Subcategory,
   TaxonomyBehavior,
@@ -2258,6 +2261,94 @@ function TrendChart({
   );
 }
 
+const PAYMENT_HISTORY_MONTHS = [
+  "JAN",
+  "FEB",
+  "MAR",
+  "APR",
+  "MAY",
+  "JUN",
+  "JUL",
+  "AUG",
+  "SEP",
+  "OCT",
+  "NOV",
+  "DEC"
+];
+
+function PaymentHistoryGrid({
+  source,
+  id
+}: {
+  source: "loan" | "autopay" | "mutual_fund";
+  id: string;
+}) {
+  const [year, setYear] = useState(() => new Date().getFullYear());
+  const [months, setMonths] = useState<boolean[]>(() => Array.from({ length: 12 }, () => false));
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    Api.paymentHistory(source, id, year)
+      .then((history: PaymentHistory) => {
+        if (!active) return;
+        const next = Array.from({ length: 12 }, (_, index) => Boolean(history.months?.[index]));
+        setMonths(next);
+      })
+      .catch(() => {
+        if (active) setMonths(Array.from({ length: 12 }, () => false));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [source, id, year]);
+
+  return (
+    <div className="payment-history">
+      <div className="payment-history-header">
+        <span className="payment-history-title">Payment history</span>
+        <div className="payment-history-stepper">
+          <button
+            type="button"
+            aria-label="Previous year"
+            onClick={() => setYear((value) => value - 1)}
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <span className="payment-history-year">{year}</span>
+          <button
+            type="button"
+            aria-label="Next year"
+            onClick={() => setYear((value) => value + 1)}
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      </div>
+      <div className="payment-history-grid" aria-busy={loading}>
+        {PAYMENT_HISTORY_MONTHS.map((label, index) => {
+          const paid = months[index];
+          return (
+            <div className="payment-history-cell" key={label}>
+              <span
+                className={`payment-history-circle${paid ? " is-paid" : ""}`}
+                aria-label={`${label} ${paid ? "paid" : "not paid"}`}
+              >
+                {paid ? <Check size={18} strokeWidth={3} /> : null}
+              </span>
+              <span className="payment-history-month">{label}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function BudgetPlannerPage({
   refreshKey,
   showNotice,
@@ -3050,6 +3141,8 @@ function LoanCard({
           </button>
         )}
       </div>
+
+      <PaymentHistoryGrid source="loan" id={loan.id} />
       </>}
     </article>
   );
@@ -3188,7 +3281,12 @@ function InvestmentCard({
           </span>
           <div>
             <strong>{investment.name}</strong>
-            <span>{investment.typeLabel}</span>
+            <span>
+              {investment.typeLabel}
+              {investment.type === "stocks" && investment.shares != null
+                ? ` · ${investment.shares} shares`
+                : ""}
+            </span>
           </div>
         </div>
         <span className={`investment-gain-badge ${positive ? "up" : "down"}`}>
@@ -3212,6 +3310,10 @@ function InvestmentCard({
         </div>
       </div>
 
+      {investment.purchaseDate && (
+        <p className="investment-note">Invested on {formatDateWithYear(investment.purchaseDate)}</p>
+      )}
+
       {investment.note && <p className="investment-note">{investment.note}</p>}
 
       <div className="loan-actions">
@@ -3224,6 +3326,8 @@ function InvestmentCard({
           Remove
         </button>
       </div>
+
+      {investment.type === "mutual_funds" && <PaymentHistoryGrid source="mutual_fund" id={investment.id} />}
     </article>
   );
 }
@@ -3243,6 +3347,10 @@ function InvestmentForm({
   const [currentValue, setCurrentValue] = useState(
     investment ? amountInputFromPaise(investment.currentValuePaise) : ""
   );
+  const [sharesInput, setSharesInput] = useState(
+    investment?.shares != null ? String(investment.shares) : ""
+  );
+  const [purchaseDate, setPurchaseDate] = useState(investment?.purchaseDate ?? todayISO());
   const [note, setNote] = useState(investment?.note ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -3256,11 +3364,15 @@ function InvestmentForm({
     setSaving(true);
     setError("");
     try {
+      const shares =
+        type === "stocks" && sharesInput.trim() !== "" ? Number(sharesInput) : undefined;
       const payload = {
         type,
         name: name.trim(),
         investedPaise: parseAmountToPaise(invested),
         currentValuePaise: parseAmountToPaise(currentValue),
+        shares,
+        purchaseDate: purchaseDate || undefined,
         note: note.trim() || undefined
       };
       if (investment) {
@@ -3271,6 +3383,8 @@ function InvestmentForm({
         setName("");
         setInvested("");
         setCurrentValue("");
+        setSharesInput("");
+        setPurchaseDate(todayISO());
         setNote("");
         await onSaved("Investment added.");
       }
@@ -3304,6 +3418,24 @@ function InvestmentForm({
       <label>
         Current value
         <input value={currentValue} onChange={(event) => setCurrentValue(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+      </label>
+      {type === "stocks" && (
+        <label>
+          Number of shares (optional)
+          <input
+            value={sharesInput}
+            onChange={(event) => setSharesInput(event.target.value)}
+            placeholder="e.g. 10.5"
+            type="number"
+            min="0"
+            step="any"
+            inputMode="decimal"
+          />
+        </label>
+      )}
+      <label>
+        Date invested
+        <input type="date" value={purchaseDate} onChange={(event) => setPurchaseDate(event.target.value)} />
       </label>
       <label>
         Note (optional)
@@ -3523,6 +3655,8 @@ function SubscriptionCard({
           </button>
         )}
       </div>
+
+      <PaymentHistoryGrid source="autopay" id={subscription.id} />
       </>}
     </article>
   );

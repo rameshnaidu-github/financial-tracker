@@ -249,6 +249,8 @@ export type Investment = {
   currentValuePaise: number;
   gainPaise: number;
   gainPercent: number;
+  shares: number | null;
+  purchaseDate: string | null;
   note: string | null;
   createdAt: string;
   updatedAt: string;
@@ -268,6 +270,8 @@ export type TrendReport = {
   color: string;
   points: TrendPoint[];
 };
+
+export type PaymentHistory = { source: string; id: string; year: number; months: boolean[] };
 
 export type BudgetStatus = "safe" | "watch" | "critical" | "over";
 

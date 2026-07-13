@@ -12,6 +12,7 @@ import type {
   InvestmentType,
   Loan,
   MonthlyReport,
+  PaymentHistory,
   Subcategory,
   Overview,
   Transaction,
@@ -134,11 +135,21 @@ export const Api = {
     name: string;
     investedPaise: number;
     currentValuePaise: number;
+    shares?: number;
+    purchaseDate?: string;
     note?: string;
   }) => api<Investment>("/api/investments", { method: "POST", body }),
   updateInvestment: (
     id: string,
-    body: Partial<{ type: InvestmentType; name: string; investedPaise: number; currentValuePaise: number; note: string }>
+    body: Partial<{
+      type: InvestmentType;
+      name: string;
+      investedPaise: number;
+      currentValuePaise: number;
+      shares: number;
+      purchaseDate: string;
+      note: string;
+    }>
   ) => api<Investment>(`/api/investments/${id}`, { method: "PATCH", body }),
   deleteInvestment: (id: string) => api<{ ok: true }>(`/api/investments/${id}`, { method: "DELETE" }),
   currentBatch: (weekStart: string, weekEnd: string) => {
@@ -177,6 +188,10 @@ export const Api = {
     const params = new URLSearchParams({ typeId, mode });
     if (accountId) params.set("accountId", accountId);
     return api<TrendReport>(`/api/reports/trends?${params}`);
+  },
+  paymentHistory: (source: "loan" | "autopay" | "mutual_fund", id: string, year: number) => {
+    const params = new URLSearchParams({ source, id, year: String(year) });
+    return api<PaymentHistory>(`/api/payment-history?${params}`);
   },
   budgetPlan: (month?: string) => {
     const params = new URLSearchParams();
