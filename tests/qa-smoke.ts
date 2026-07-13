@@ -1251,6 +1251,40 @@ test("stores the card utilization alert threshold with validation", async () => 
   );
 });
 
+test("tracks investment holdings with computed gain and validation", async () => {
+  const stock = services.createInvestment({
+    type: "stocks",
+    name: "QA Reliance",
+    investedPaise: 1_00_000_00,
+    currentValuePaise: 1_35_000_00
+  });
+  assert(stock.gainPaise === 35_000_00, "Gain should be current minus invested.");
+  assert(stock.gainPercent === 35, "Gain percent should be computed.");
+  assert(stock.typeLabel === "Stocks", "Type label should resolve from metadata.");
+
+  const mf = services.createInvestment({
+    type: "mutual_funds",
+    name: "QA Flexicap",
+    investedPaise: 2_00_000_00,
+    currentValuePaise: 1_80_000_00
+  });
+  assert(mf.gainPaise === -20_000_00 && mf.gainPercent === -10, "Losses should be negative.");
+
+  const updated = services.updateInvestment(stock.id, { currentValuePaise: 90_000_00 });
+  assert(updated.gainPaise === -10_000_00, "Updating current value should recompute the gain.");
+
+  const list = services.listInvestments();
+  assert(list.length >= 2, "Investments should be listed.");
+
+  await assertRejects("unknown investment type", () =>
+    services.createInvestment({ type: "crypto" as never, name: "X", investedPaise: 100, currentValuePaise: 200 })
+  );
+
+  services.deleteInvestment(mf.id);
+  assert(!services.listInvestments().some((item) => item.id === mf.id), "Deleted investment should be gone.");
+  await assertRejects("delete missing investment", () => services.deleteInvestment(mf.id));
+});
+
 let failed = 0;
 
 for (const item of tests) {

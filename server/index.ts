@@ -13,6 +13,7 @@ import {
   createBackup,
   createBudgetLine,
   createCategoryType,
+  createInvestment,
   createLoan,
   createSubcategory,
   createTransaction,
@@ -21,6 +22,7 @@ import {
   deleteAccount,
   deleteBudgetLine,
   deleteCategoryType,
+  deleteInvestment,
   deleteSubcategory,
   deleteTransaction,
   buildImportTemplate,
@@ -37,6 +39,7 @@ import {
   listAccounts,
   listAutopaySubscriptions,
   listCategoryTypes,
+  listInvestments,
   listLoans,
   listTransactions,
   saveBatch,
@@ -46,6 +49,7 @@ import {
   updateAppSettings,
   updateAutopaySubscription,
   updateBudgetLine,
+  updateInvestment,
   updateLoan,
   updateProfile,
   updateTransaction
@@ -105,7 +109,8 @@ app.get("/api/bootstrap", async () => ({
   accounts: listAccounts().filter((account) => !account.isArchived),
   categoryTypes: listCategoryTypes(),
   loans: listLoans(true),
-  subscriptions: listAutopaySubscriptions(true)
+  subscriptions: listAutopaySubscriptions(true),
+  investments: listInvestments()
 }));
 
 app.get("/api/profile", async () => getProfile());
@@ -287,6 +292,23 @@ app.patch("/api/budgets/:id", async (request) => {
 app.delete("/api/budgets/:id", async (request) => {
   const params = request.params as { id: string };
   return deleteBudgetLine(params.id);
+});
+
+app.get("/api/investments", async () => listInvestments());
+
+app.post("/api/investments", async (request, reply) => {
+  const investment = createInvestment(request.body as never);
+  return reply.status(201).send(investment);
+});
+
+app.patch("/api/investments/:id", async (request) => {
+  const params = request.params as { id: string };
+  return updateInvestment(params.id, request.body as never);
+});
+
+app.delete("/api/investments/:id", async (request) => {
+  const params = request.params as { id: string };
+  return deleteInvestment(params.id);
 });
 
 app.get("/api/backup/status", async () => getBackupStatus());

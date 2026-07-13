@@ -9,32 +9,38 @@ import {
   createBudgetLineSchema,
   createBatchSchema,
   createCategoryTypeSchema,
+  createInvestmentSchema,
   createLoanSchema,
   createSubcategorySchema,
   createTransactionSchema,
   updateAccountSchema,
   updateAutopaySubscriptionSchema,
   updateBudgetLineSchema,
+  updateInvestmentSchema,
   updateLoanSchema,
   updateProfileSchema,
   updateSettingsSchema,
   updateTransactionSchema,
+  INVESTMENT_TYPES,
   type AccountType,
   type BudgetScopeType,
   type CreateAccountInput,
   type CreateAutopaySubscriptionInput,
   type CreateBudgetLineInput,
   type CreateCategoryTypeInput,
+  type CreateInvestmentInput,
   type CreateLoanInput,
   type CreateSubcategoryInput,
   type CreateTransactionInput,
   type Direction,
+  type InvestmentType,
   type LoanPaymentType,
   type TaxonomyBehavior,
   type TransactionKind,
   type UpdateAccountInput,
   type UpdateAutopaySubscriptionInput,
   type UpdateBudgetLineInput,
+  type UpdateInvestmentInput,
   type UpdateLoanInput,
   type UpdateProfileInput,
   type UpdateSettingsInput,
@@ -576,6 +582,124 @@ export function archiveAutopaySubscription(id: string) {
     "UPDATE autopay_subscriptions SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
   ).run(id);
   return { ok: true, mode: "archived" as const };
+}
+
+type InvestmentRow = {
+  id: string;
+  type: InvestmentType;
+  name: string;
+  invested_paise: number;
+  current_value_paise: number;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InvestmentSummary = {
+  id: string;
+  type: InvestmentType;
+  typeLabel: string;
+  icon: string;
+  color: string;
+  name: string;
+  investedPaise: number;
+  currentValuePaise: number;
+  gainPaise: number;
+  gainPercent: number;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export function listInvestments(): InvestmentSummary[] {
+  const rows = asRecords<InvestmentRow>(
+    db
+      .prepare(
+        `SELECT id, type, name, invested_paise, current_value_paise, note, created_at, updated_at
+         FROM investments
+         ORDER BY created_at, id`
+      )
+      .all()
+  );
+  return rows.map(mapInvestment);
+}
+
+export function createInvestment(input: CreateInvestmentInput): InvestmentSummary {
+  const parsed = createInvestmentSchema.parse(input);
+  const id = randomUUID();
+  db.prepare(
+    `INSERT INTO investments (id, type, name, invested_paise, current_value_paise, note)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, parsed.type, parsed.name, parsed.investedPaise, parsed.currentValuePaise, parsed.note ?? null);
+  return requireInvestmentSummary(id);
+}
+
+export function updateInvestment(id: string, input: UpdateInvestmentInput): InvestmentSummary {
+  const existing = requireInvestmentRow(id);
+  const patch = updateInvestmentSchema.parse(input);
+  const merged = {
+    type: patch.type ?? existing.type,
+    name: patch.name ?? existing.name,
+    investedPaise: patch.investedPaise ?? existing.invested_paise,
+    currentValuePaise: patch.currentValuePaise ?? existing.current_value_paise,
+    note: Object.prototype.hasOwnProperty.call(patch, "note") ? patch.note ?? null : existing.note
+  };
+  db.prepare(
+    `UPDATE investments
+     SET type = ?, name = ?, invested_paise = ?, current_value_paise = ?, note = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  ).run(merged.type, merged.name, merged.investedPaise, merged.currentValuePaise, merged.note, id);
+  return requireInvestmentSummary(id);
+}
+
+export function deleteInvestment(id: string) {
+  const result = db.prepare("DELETE FROM investments WHERE id = ?").run(id);
+  if (result.changes === 0) {
+    throw notFound("Investment not found.");
+  }
+  return { ok: true };
+}
+
+function requireInvestmentRow(id: string) {
+  const row = asRecord<InvestmentRow | undefined>(
+    db
+      .prepare(
+        `SELECT id, type, name, invested_paise, current_value_paise, note, created_at, updated_at
+         FROM investments
+         WHERE id = ?`
+      )
+      .get(id)
+  );
+  if (!row) {
+    throw notFound("Investment not found.");
+  }
+  return row;
+}
+
+function requireInvestmentSummary(id: string) {
+  return mapInvestment(requireInvestmentRow(id));
+}
+
+function mapInvestment(row: InvestmentRow): InvestmentSummary {
+  const meta = INVESTMENT_TYPES.find((type) => type.id === row.type) ?? INVESTMENT_TYPES[INVESTMENT_TYPES.length - 1];
+  const gainPaise = row.current_value_paise - row.invested_paise;
+  const gainPercent = row.invested_paise > 0 ? Math.round((gainPaise / row.invested_paise) * 100) : 0;
+  return {
+    id: row.id,
+    type: row.type,
+    typeLabel: meta.label,
+    icon: meta.icon,
+    color: meta.color,
+    name: row.name,
+    investedPaise: row.invested_paise,
+    currentValuePaise: row.current_value_paise,
+    gainPaise,
+    gainPercent,
+    note: row.note,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
 }
 
 export function getBackupStatus() {

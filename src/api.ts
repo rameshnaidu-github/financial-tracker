@@ -8,6 +8,8 @@ import type {
   BudgetPlan,
   CategoryType,
   CreateTransactionPayload,
+  Investment,
+  InvestmentType,
   Loan,
   MonthlyReport,
   Subcategory,
@@ -126,6 +128,19 @@ export const Api = {
   ) => api<AutopaySubscription>(`/api/subscriptions/${id}`, { method: "PATCH", body }),
   archiveSubscription: (id: string) =>
     api<{ ok: true; mode: "archived" }>(`/api/subscriptions/${id}`, { method: "DELETE" }),
+  investments: () => api<Investment[]>("/api/investments"),
+  createInvestment: (body: {
+    type: InvestmentType;
+    name: string;
+    investedPaise: number;
+    currentValuePaise: number;
+    note?: string;
+  }) => api<Investment>("/api/investments", { method: "POST", body }),
+  updateInvestment: (
+    id: string,
+    body: Partial<{ type: InvestmentType; name: string; investedPaise: number; currentValuePaise: number; note: string }>
+  ) => api<Investment>(`/api/investments/${id}`, { method: "PATCH", body }),
+  deleteInvestment: (id: string) => api<{ ok: true }>(`/api/investments/${id}`, { method: "DELETE" }),
   currentBatch: (weekStart: string, weekEnd: string) => {
     const params = new URLSearchParams({ weekStart, weekEnd });
     return api<Batch>(`/api/batches/current?${params}`);

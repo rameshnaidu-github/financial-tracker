@@ -136,6 +136,17 @@ export function initDatabase() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS investments (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'other')),
+      name TEXT NOT NULL,
+      invested_paise INTEGER NOT NULL CHECK (invested_paise >= 0),
+      current_value_paise INTEGER NOT NULL CHECK (current_value_paise >= 0),
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS budget_lines (
       id TEXT PRIMARY KEY,
       month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
@@ -161,6 +172,7 @@ export function initDatabase() {
   ensureLoanIndexes();
   ensureAutopayIndexes();
   ensureBudgetIndexes();
+  ensureInvestmentIndexes();
   ensureTaxonomyIndexes();
   seedSettings();
   pruneBackupFiles();
@@ -187,6 +199,12 @@ function ensureBudgetIndexes() {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_budget_lines_month ON budget_lines(month);
     CREATE INDEX IF NOT EXISTS idx_budget_lines_scope ON budget_lines(scope_type, scope_id);
+  `);
+}
+
+function ensureInvestmentIndexes() {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_investments_type ON investments(type);
   `);
 }
 

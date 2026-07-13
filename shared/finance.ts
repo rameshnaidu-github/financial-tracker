@@ -6,6 +6,18 @@ export const WEEK_START = "monday";
 export const AUTOPAY_SUBCATEGORY_ID = "sub_autopay";
 export const AUTOPAY_DURATION_MONTH_OPTIONS = [1, 3, 6, 12, 24, 36] as const;
 
+export const INVESTMENT_TYPES = [
+  { id: "stocks", label: "Stocks", icon: "trending-up", color: "#4f46e5" },
+  { id: "mutual_funds", label: "Mutual Funds", icon: "trending-up", color: "#0284c7" },
+  { id: "gold", label: "Gold", icon: "landmark", color: "#d97706" },
+  { id: "land", label: "Land", icon: "home", color: "#0f766e" },
+  { id: "property", label: "Property", icon: "home", color: "#7c3aed" },
+  { id: "pf", label: "PF", icon: "landmark", color: "#059669" },
+  { id: "other", label: "Other", icon: "wallet", color: "#64748b" }
+] as const;
+
+export const INVESTMENT_TYPE_IDS = INVESTMENT_TYPES.map((type) => type.id) as [string, ...string[]];
+
 export const ICON_OPTIONS = [
   "shopping-basket",
   "utensils",
@@ -300,6 +312,26 @@ export const updateBudgetLineSchema = z
   })
   .refine((value) => Object.keys(value).length > 0, "No budget changes provided.");
 
+export const investmentTypeSchema = z.enum(INVESTMENT_TYPE_IDS);
+
+export const createInvestmentSchema = z.object({
+  type: investmentTypeSchema,
+  name: z.string().trim().min(1).max(90),
+  investedPaise: paiseSchema,
+  currentValuePaise: paiseSchema,
+  note: optionalTextSchema
+});
+
+export const updateInvestmentSchema = z
+  .object({
+    type: investmentTypeSchema.optional(),
+    name: z.string().trim().min(1).max(90).optional(),
+    investedPaise: paiseSchema.optional(),
+    currentValuePaise: paiseSchema.optional(),
+    note: optionalTextSchema
+  })
+  .refine((value) => Object.keys(value).length > 0, "No investment changes provided.");
+
 export const updateSettingsSchema = z.object({
   cardUtilizationAlertPercent: z.number().int().min(1).max(100)
 });
@@ -458,6 +490,9 @@ export type CreateBudgetLineInput = z.infer<typeof createBudgetLineSchema>;
 export type UpdateBudgetLineInput = z.infer<typeof updateBudgetLineSchema>;
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
+export type InvestmentType = z.infer<typeof investmentTypeSchema>;
+export type CreateInvestmentInput = z.infer<typeof createInvestmentSchema>;
+export type UpdateInvestmentInput = z.infer<typeof updateInvestmentSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
 export type CreateBatchInput = z.infer<typeof createBatchSchema>;

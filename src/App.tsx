@@ -54,6 +54,8 @@ import type {
   Category,
   CategoryType,
   CreateTransactionPayload,
+  Investment,
+  InvestmentType,
   Loan,
   LoanPaymentType,
   MonthlyReport,
@@ -68,9 +70,9 @@ import type {
   TrendReport,
   UserProfile
 } from "./types";
-import { AUTOPAY_DURATION_MONTH_OPTIONS, AUTOPAY_SUBCATEGORY_ID } from "../shared/finance";
+import { AUTOPAY_DURATION_MONTH_OPTIONS, AUTOPAY_SUBCATEGORY_ID, INVESTMENT_TYPES } from "../shared/finance";
 
-type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "subscriptions" | "categories" | "faq" | "profile";
+type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "subscriptions" | "categories" | "faq" | "profile";
 type Theme = "light" | "dark";
 type DonutSegment = {
   id: string;
@@ -101,6 +103,7 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home }> = [
   { page: "budgets", label: "Budget Planner", icon: Target },
   { page: "accounts", label: "Accounts", icon: WalletCards },
   { page: "loans", label: "Loans", icon: Landmark },
+  { page: "investments", label: "Investments", icon: TrendingUp },
   { page: "subscriptions", label: "AutoPay", icon: CalendarClock },
   { page: "categories", label: "Categories", icon: Tags },
   { page: "faq", label: "FAQ", icon: CircleHelp },
@@ -115,6 +118,7 @@ const mobileLabels: Record<Page, string> = {
   budgets: "Bdgt",
   accounts: "Accts",
   loans: "Loan",
+  investments: "Invest",
   subscriptions: "Auto",
   categories: "Cats",
   faq: "FAQ",
@@ -129,6 +133,7 @@ const pagePaths: Record<Page, string> = {
   budgets: "/budgets",
   accounts: "/accounts",
   loans: "/loans",
+  investments: "/investments",
   subscriptions: "/subscriptions",
   categories: "/categories",
   faq: "/faq",
@@ -313,6 +318,7 @@ export default function App() {
   const accounts = bootstrap?.accounts ?? [];
   const loans = bootstrap?.loans ?? [];
   const subscriptions = bootstrap?.subscriptions ?? [];
+  const investments = bootstrap?.investments ?? [];
   const categoryTypes = bootstrap?.categoryTypes ?? [];
   const categories = flattenSubcategories(categoryTypes);
   const profile = bootstrap?.profile ?? emptyProfile;
@@ -326,6 +332,7 @@ export default function App() {
     activePage !== "accounts" &&
     activePage !== "budgets" &&
     activePage !== "loans" &&
+    activePage !== "investments" &&
     activePage !== "subscriptions" &&
     activePage !== "categories" &&
     activePage !== "faq" &&
@@ -473,6 +480,14 @@ export default function App() {
             <LoansPage
               loans={loans}
               categoryTypes={categoryTypes}
+              refresh={refresh}
+              showNotice={showNotice}
+              requestConfirm={requestConfirm}
+            />
+          )}
+          {activePage === "investments" && (
+            <InvestmentsPage
+              investments={investments}
               refresh={refresh}
               showNotice={showNotice}
               requestConfirm={requestConfirm}
@@ -3037,6 +3052,276 @@ function LoanCard({
       </div>
       </>}
     </article>
+  );
+}
+
+function InvestmentsPage({
+  investments,
+  refresh,
+  showNotice,
+  requestConfirm
+}: {
+  investments: Investment[];
+  refresh: () => Promise<void>;
+  showNotice: (message: string) => void;
+  requestConfirm: (request: ConfirmRequest) => void;
+}) {
+  const [editing, setEditing] = useState<Investment | null>(null);
+  const totalInvested = investments.reduce((sum, item) => sum + item.investedPaise, 0);
+  const totalCurrent = investments.reduce((sum, item) => sum + item.currentValuePaise, 0);
+  const totalGain = totalCurrent - totalInvested;
+  const returnPercent = totalInvested > 0 ? Math.round((totalGain / totalInvested) * 100) : 0;
+  const groups = INVESTMENT_TYPES.map((type) => ({
+    type,
+    items: investments.filter((item) => item.type === type.id)
+  })).filter((group) => group.items.length > 0);
+
+  function remove(investment: Investment) {
+    requestConfirm({
+      message: "Remove this investment?",
+      detail: `${investment.name} will be removed from your portfolio.`,
+      confirmLabel: "Remove",
+      tone: "danger",
+      onConfirm: async () => {
+        try {
+          await Api.deleteInvestment(investment.id);
+          if (editing?.id === investment.id) setEditing(null);
+          await refresh();
+          showNotice("Investment removed.");
+        } catch (err) {
+          showNotice(err instanceof Error ? err.message : "Could not remove investment.");
+        }
+      }
+    });
+  }
+
+  return (
+    <div className="page-grid loans-page">
+      <section className="summary-grid report-summary">
+        <SummaryCard label="Invested" value={formatINR(totalInvested)} icon={<WalletCards />} />
+        <SummaryCard label="Current value" value={formatINR(totalCurrent)} icon={<BarChart3 />} />
+        <SummaryCard
+          label="Total gain"
+          value={signedImpact(totalGain)}
+          icon={<TrendingUp />}
+          tone={totalGain >= 0 ? "good" : "warning"}
+        />
+        <SummaryCard
+          label="Return"
+          value={`${returnPercent >= 0 ? "+" : ""}${returnPercent}%`}
+          icon={<ArrowDownUp />}
+          tone={totalGain >= 0 ? "good" : "warning"}
+        />
+      </section>
+
+      <div className="two-column loans-layout">
+        <Panel title="Portfolio">
+          {groups.length === 0 ? (
+            <EmptyState text="No investments yet. Add your first holding on the right." />
+          ) : (
+            <div className="investment-groups">
+              {groups.map((group) => {
+                const invested = group.items.reduce((sum, item) => sum + item.investedPaise, 0);
+                const current = group.items.reduce((sum, item) => sum + item.currentValuePaise, 0);
+                return (
+                  <div className="investment-group" key={group.type.id}>
+                    <div className="investment-group-head">
+                      <span className="investment-group-name" style={{ color: group.type.color }}>
+                        <IconGlyph name={group.type.icon} size={15} />
+                        {group.type.label}
+                      </span>
+                      <strong>{formatINR(current)}</strong>
+                      <small className={current - invested >= 0 ? "amount-in" : "amount-out"}>
+                        {signedImpact(current - invested)}
+                      </small>
+                    </div>
+                    <div className="loan-card-grid">
+                      {group.items.map((investment) => (
+                        <InvestmentCard
+                          key={investment.id}
+                          investment={investment}
+                          onEdit={setEditing}
+                          onDelete={remove}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Panel>
+
+        <Panel title={editing ? "Edit investment" : "Add investment"}>
+          <InvestmentForm
+            key={editing?.id ?? "new-investment"}
+            investment={editing}
+            onCancel={editing ? () => setEditing(null) : undefined}
+            onSaved={async (message) => {
+              setEditing(null);
+              await refresh();
+              showNotice(message);
+            }}
+          />
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function InvestmentCard({
+  investment,
+  onEdit,
+  onDelete
+}: {
+  investment: Investment;
+  onEdit: (investment: Investment) => void;
+  onDelete: (investment: Investment) => void;
+}) {
+  const positive = investment.gainPaise >= 0;
+  return (
+    <article className="loan-card investment-card">
+      <div className="loan-card-header">
+        <div className="loan-title">
+          <span className="loan-icon" style={{ color: investment.color, background: `${investment.color}18` }}>
+            <IconGlyph name={investment.icon} size={18} />
+          </span>
+          <div>
+            <strong>{investment.name}</strong>
+            <span>{investment.typeLabel}</span>
+          </div>
+        </div>
+        <span className={`investment-gain-badge ${positive ? "up" : "down"}`}>
+          {positive ? "+" : ""}
+          {investment.gainPercent}%
+        </span>
+      </div>
+
+      <div className="investment-values">
+        <div>
+          <span>Invested</span>
+          <strong>{formatINR(investment.investedPaise)}</strong>
+        </div>
+        <div>
+          <span>Current</span>
+          <strong>{formatINR(investment.currentValuePaise)}</strong>
+        </div>
+        <div>
+          <span>Gain / loss</span>
+          <strong className={positive ? "amount-in" : "amount-out"}>{signedImpact(investment.gainPaise)}</strong>
+        </div>
+      </div>
+
+      {investment.note && <p className="investment-note">{investment.note}</p>}
+
+      <div className="loan-actions">
+        <button type="button" className="secondary-action" onClick={() => onEdit(investment)}>
+          <Pencil size={16} />
+          Edit
+        </button>
+        <button type="button" className="secondary-action danger-action" onClick={() => onDelete(investment)}>
+          <Trash2 size={16} />
+          Remove
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function InvestmentForm({
+  investment,
+  onSaved,
+  onCancel
+}: {
+  investment: Investment | null;
+  onSaved: (message: string) => Promise<void>;
+  onCancel?: () => void;
+}) {
+  const [type, setType] = useState<InvestmentType>(investment?.type ?? "stocks");
+  const [name, setName] = useState(investment?.name ?? "");
+  const [invested, setInvested] = useState(investment ? amountInputFromPaise(investment.investedPaise) : "");
+  const [currentValue, setCurrentValue] = useState(
+    investment ? amountInputFromPaise(investment.currentValuePaise) : ""
+  );
+  const [note, setNote] = useState(investment?.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!name.trim()) {
+      setError("Enter a name for this investment.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const payload = {
+        type,
+        name: name.trim(),
+        investedPaise: parseAmountToPaise(invested),
+        currentValuePaise: parseAmountToPaise(currentValue),
+        note: note.trim() || undefined
+      };
+      if (investment) {
+        await Api.updateInvestment(investment.id, { ...payload, note: note.trim() });
+        await onSaved("Investment updated.");
+      } else {
+        await Api.createInvestment(payload);
+        setName("");
+        setInvested("");
+        setCurrentValue("");
+        setNote("");
+        await onSaved("Investment added.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save investment.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="stack-form loan-form" onSubmit={submit}>
+      <label>
+        Type
+        <select value={type} onChange={(event) => setType(event.target.value as InvestmentType)}>
+          {INVESTMENT_TYPES.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Name
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Reliance, HDFC Flexicap, Plot in Mysore..." required />
+      </label>
+      <label>
+        Amount invested
+        <input value={invested} onChange={(event) => setInvested(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+      </label>
+      <label>
+        Current value
+        <input value={currentValue} onChange={(event) => setCurrentValue(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+      </label>
+      <label>
+        Note (optional)
+        <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="e.g. broker, folio, plot size" />
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <div className="loan-form-actions">
+        {onCancel && (
+          <button type="button" className="secondary-action" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+        )}
+        <button className="primary-action" disabled={saving}>
+          <Plus size={18} />
+          {saving ? "Saving..." : investment ? "Save investment" : "Add investment"}
+        </button>
+      </div>
+    </form>
   );
 }
 

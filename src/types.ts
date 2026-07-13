@@ -155,6 +155,7 @@ export type Bootstrap = {
   categoryTypes: CategoryType[];
   loans: Loan[];
   subscriptions: AutopaySubscription[];
+  investments: Investment[];
 };
 
 export type UserProfile = {
@@ -233,6 +234,24 @@ export type MonthlyReport = {
   investmentPaise: number;
   categories: ReportCategory[];
   types: ReportType[];
+};
+
+export type InvestmentType = "stocks" | "mutual_funds" | "gold" | "land" | "property" | "pf" | "other";
+
+export type Investment = {
+  id: string;
+  type: InvestmentType;
+  typeLabel: string;
+  icon: string;
+  color: string;
+  name: string;
+  investedPaise: number;
+  currentValuePaise: number;
+  gainPaise: number;
+  gainPercent: number;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type TrendMode = "month" | "year";

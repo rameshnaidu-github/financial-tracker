@@ -950,6 +950,82 @@ a {
   justify-content: flex-end;
 }
 
+.investment-groups {
+  display: grid;
+  gap: 20px;
+}
+
+.investment-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.investment-group-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9rem;
+  font-weight: 900;
+}
+
+.investment-group-head strong {
+  margin-left: auto;
+  font-size: 0.95rem;
+}
+
+.investment-group-head small {
+  font-weight: 850;
+}
+
+.investment-values {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.investment-values span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.investment-values strong {
+  display: block;
+  white-space: nowrap;
+}
+
+.investment-gain-badge {
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 0.72rem;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.investment-gain-badge.up {
+  border: 1px solid rgba(5, 150, 105, 0.28);
+  background: rgba(5, 150, 105, 0.1);
+  color: var(--good);
+}
+
+.investment-gain-badge.down {
+  border: 1px solid rgba(220, 38, 38, 0.28);
+  background: rgba(220, 38, 38, 0.1);
+  color: var(--danger);
+}
+
+.investment-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
 .trend-controls {
   display: flex;
   align-items: stretch;
