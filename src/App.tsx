@@ -71,7 +71,8 @@ import type {
   TrendMode,
   TrendPoint,
   TrendReport,
-  UserProfile
+  UserProfile,
+  WealthSummary
 } from "./types";
 import { AUTOPAY_DURATION_MONTH_OPTIONS, AUTOPAY_SUBCATEGORY_ID, INVESTMENT_TYPES } from "../shared/finance";
 
@@ -612,6 +613,7 @@ function OverviewPage({
   const [loadError, setLoadError] = useState("");
   const [allExpanded, setAllExpanded] = useState(true);
   const [budgetPlan, setBudgetPlan] = useState<BudgetPlan | null>(null);
+  const [wealth, setWealth] = useState<WealthSummary | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -635,6 +637,20 @@ function OverviewPage({
       })
       .catch(() => {
         if (active) setBudgetPlan(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [refreshKey]);
+
+  useEffect(() => {
+    let active = true;
+    Api.wealth()
+      .then((next) => {
+        if (active) setWealth(next);
+      })
+      .catch(() => {
+        if (active) setWealth(null);
       });
     return () => {
       active = false;
@@ -791,6 +807,113 @@ function OverviewPage({
           <BudgetGuardrails plan={budgetPlan} uncategorizedCount={overview.summary.uncategorizedCount} />
         </CollapsiblePanel>
       </section>
+
+      <section className="two-column overview-analytics">
+        <CollapsiblePanel title="Net worth" expanded={allExpanded}>
+          {wealth ? (
+            <NetWorthPanel wealth={wealth} />
+          ) : (
+            <EmptyState text="Net worth is loading." />
+          )}
+        </CollapsiblePanel>
+
+        <CollapsiblePanel title="Asset allocation" expanded={allExpanded}>
+          {wealth && wealth.allocation.length > 0 ? (
+            <DonutChart
+              segments={wealth.allocation.map((segment) => ({
+                id: segment.key,
+                name: segment.label,
+                color: segment.color,
+                amountPaise: segment.valuePaise
+              }))}
+              totalPaise={wealth.allocation.reduce((sum, segment) => sum + segment.valuePaise, 0)}
+              ariaLabel="Asset allocation"
+              centerLabel="Assets"
+              centerValue={formatINR(wealth.allocation.reduce((sum, segment) => sum + segment.valuePaise, 0))}
+              className="overview-donut-chart"
+            />
+          ) : (
+            <EmptyState text="Add accounts or investments to see your allocation." />
+          )}
+        </CollapsiblePanel>
+      </section>
+
+      <section className="overview-report-section">
+        <CollapsiblePanel title={`This month's cashflow · ${formatMonth(overview.month)}`} expanded={allExpanded}>
+          {wealth ? <CashflowPanel wealth={wealth} /> : <EmptyState text="Cashflow is loading." />}
+        </CollapsiblePanel>
+      </section>
+    </div>
+  );
+}
+
+function NetWorthPanel({ wealth }: { wealth: WealthSummary }) {
+  const { netWorth, history } = wealth;
+  const points = history.map((row) => ({ label: formatMonth(row.month).slice(0, 3), amountPaise: row.netWorthPaise }));
+  return (
+    <div className="net-worth-panel">
+      <div className="net-worth-headline">
+        <span>Total net worth</span>
+        <strong className={netWorth.netWorthPaise >= 0 ? "amount-in" : "amount-out"}>
+          {formatINR(netWorth.netWorthPaise)}
+        </strong>
+      </div>
+      <div className="net-worth-breakdown">
+        <div>
+          <span>Liquid cash</span>
+          <strong>{formatINR(netWorth.liquidPaise)}</strong>
+        </div>
+        <div>
+          <span>Investments</span>
+          <strong>{formatINR(netWorth.investmentsPaise)}</strong>
+        </div>
+        <div>
+          <span>Liabilities</span>
+          <strong className="amount-out">−{formatINR(netWorth.liabilitiesPaise)}</strong>
+        </div>
+      </div>
+      {points.length >= 2 ? (
+        <TrendChart points={points} variant="line" color="#0284c7" />
+      ) : (
+        <p className="helper-text net-worth-hint">
+          A month-by-month net-worth chart builds here as you keep using the app.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function CashflowPanel({ wealth }: { wealth: WealthSummary }) {
+  const { cashflow, runwayMonths } = wealth;
+  return (
+    <div className="cashflow-panel">
+      <div className="cashflow-metrics">
+        <div>
+          <span>Income</span>
+          <strong className="amount-in">{formatINR(cashflow.incomePaise)}</strong>
+        </div>
+        <div>
+          <span>Spending</span>
+          <strong className="amount-out">{formatINR(cashflow.expensePaise)}</strong>
+        </div>
+        <div>
+          <span>Saved</span>
+          <strong className={cashflow.savedPaise >= 0 ? "amount-in" : "amount-out"}>
+            {signedImpact(cashflow.savedPaise)}
+          </strong>
+        </div>
+        <div>
+          <span>Savings rate</span>
+          <strong className={cashflow.savingsRatePercent >= 0 ? "amount-in" : "amount-out"}>
+            {cashflow.savingsRatePercent}%
+          </strong>
+        </div>
+      </div>
+      <div className="cashflow-runway">
+        <span>Emergency-fund runway</span>
+        <strong>{runwayMonths === null ? "—" : `${runwayMonths} months`}</strong>
+        <small>How long your liquid cash covers your recent average monthly spending.</small>
+      </div>
     </div>
   );
 }

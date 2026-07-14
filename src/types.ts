@@ -236,6 +236,24 @@ export type MonthlyReport = {
   types: ReportType[];
 };
 
+export type WealthSummary = {
+  netWorth: {
+    liquidPaise: number;
+    investmentsPaise: number;
+    liabilitiesPaise: number;
+    netWorthPaise: number;
+  };
+  history: Array<{ month: string; netWorthPaise: number }>;
+  allocation: Array<{ key: string; label: string; color: string; valuePaise: number }>;
+  cashflow: {
+    incomePaise: number;
+    expensePaise: number;
+    savedPaise: number;
+    savingsRatePercent: number;
+  };
+  runwayMonths: number | null;
+};
+
 export type InvestmentType = "stocks" | "mutual_funds" | "gold" | "land" | "property" | "pf" | "other";
 
 export type Investment = {

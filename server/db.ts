@@ -149,6 +149,15 @@ export function initDatabase() {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS net_worth_snapshots (
+      month TEXT PRIMARY KEY CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
+      liquid_paise INTEGER NOT NULL,
+      investments_paise INTEGER NOT NULL,
+      liabilities_paise INTEGER NOT NULL,
+      net_worth_paise INTEGER NOT NULL,
+      captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS budget_lines (
       id TEXT PRIMARY KEY,
       month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),

@@ -1409,6 +1409,108 @@ export function getOverview(accountId?: string, month = currentMonth()) {
   };
 }
 
+export type WealthAllocationSegment = {
+  key: string;
+  label: string;
+  color: string;
+  valuePaise: number;
+};
+
+export type WealthSummary = {
+  netWorth: {
+    liquidPaise: number;
+    investmentsPaise: number;
+    liabilitiesPaise: number;
+    netWorthPaise: number;
+  };
+  history: Array<{ month: string; netWorthPaise: number }>;
+  allocation: WealthAllocationSegment[];
+  cashflow: {
+    incomePaise: number;
+    expensePaise: number;
+    savedPaise: number;
+    savingsRatePercent: number;
+  };
+  runwayMonths: number | null;
+};
+
+function computeNetWorthNow() {
+  const accounts = listAccounts().filter((account) => !account.isArchived);
+  const liquidPaise = accounts
+    .filter((account) => account.type === "bank" || account.type === "food_card")
+    .reduce((sum, account) => sum + account.balancePaise, 0);
+  const creditPaise = accounts
+    .filter((account) => account.type === "credit_card")
+    .reduce((sum, account) => sum + account.outstandingPaise, 0);
+  const investmentsPaise = listInvestments().reduce((sum, item) => sum + item.currentValuePaise, 0);
+  const loanPaise = listLoans(false).reduce((sum, loan) => sum + loan.outstandingPaise, 0);
+  const liabilitiesPaise = creditPaise + loanPaise;
+  return {
+    liquidPaise,
+    investmentsPaise,
+    liabilitiesPaise,
+    netWorthPaise: liquidPaise + investmentsPaise - liabilitiesPaise
+  };
+}
+
+export function getWealthSummary(): WealthSummary {
+  const month = currentMonth();
+  const netWorth = computeNetWorthNow();
+
+  // Freeze this month's snapshot so a net-worth history builds over time.
+  db.prepare(
+    `INSERT INTO net_worth_snapshots (month, liquid_paise, investments_paise, liabilities_paise, net_worth_paise)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(month) DO UPDATE SET
+       liquid_paise = excluded.liquid_paise,
+       investments_paise = excluded.investments_paise,
+       liabilities_paise = excluded.liabilities_paise,
+       net_worth_paise = excluded.net_worth_paise,
+       captured_at = CURRENT_TIMESTAMP`
+  ).run(month, netWorth.liquidPaise, netWorth.investmentsPaise, netWorth.liabilitiesPaise, netWorth.netWorthPaise);
+
+  const history = asRecords<{ month: string; net_worth_paise: number }>(
+    db
+      .prepare("SELECT month, net_worth_paise FROM net_worth_snapshots ORDER BY month ASC")
+      .all()
+  ).map((row) => ({ month: row.month, netWorthPaise: row.net_worth_paise }));
+
+  // Asset allocation — where the wealth currently sits (positive holdings only).
+  const investments = listInvestments();
+  const byType = (types: string[]) =>
+    investments.filter((item) => types.includes(item.type)).reduce((sum, item) => sum + item.currentValuePaise, 0);
+  const allocation: WealthAllocationSegment[] = [
+    { key: "cash", label: "Cash", color: "#0284c7", valuePaise: netWorth.liquidPaise },
+    { key: "equity", label: "Equity (stocks + MF)", color: "#4f46e5", valuePaise: byType(["stocks", "mutual_funds"]) },
+    { key: "gold", label: "Gold", color: "#d97706", valuePaise: byType(["gold"]) },
+    { key: "realestate", label: "Real estate", color: "#0f766e", valuePaise: byType(["land", "property"]) },
+    { key: "pf", label: "PF", color: "#059669", valuePaise: byType(["pf"]) },
+    { key: "other", label: "Other", color: "#64748b", valuePaise: byType(["other"]) }
+  ].filter((segment) => segment.valuePaise > 0);
+
+  // Cashflow this month.
+  const monthReport = getMonthlyReport(undefined, month);
+  const incomePaise = monthReport.incomePaise;
+  const expensePaise = monthReport.totalSpendingPaise;
+  const savedPaise = incomePaise - expensePaise;
+  const savingsRatePercent = incomePaise > 0 ? Math.round((savedPaise / incomePaise) * 100) : 0;
+
+  // Emergency-fund runway = liquid cash ÷ average monthly expense over the trailing 3 months.
+  const trailingExpenses = [0, 1, 2].map(
+    (back) => getMonthlyReport(undefined, addMonths(month, -back)).totalSpendingPaise
+  );
+  const avgExpense = trailingExpenses.reduce((sum, value) => sum + value, 0) / trailingExpenses.length;
+  const runwayMonths = avgExpense > 0 ? Math.round((netWorth.liquidPaise / avgExpense) * 10) / 10 : null;
+
+  return {
+    netWorth,
+    history,
+    allocation,
+    cashflow: { incomePaise, expensePaise, savedPaise, savingsRatePercent },
+    runwayMonths
+  };
+}
+
 export function getBudgetPlan(month = currentMonth(), asOfDate = localIsoDate(new Date())): BudgetPlan {
   const safeMonth = /^\d{4}-\d{2}$/.test(month) ? month : currentMonth();
   const start = `${safeMonth}-01`;

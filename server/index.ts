@@ -34,6 +34,7 @@ import {
   getOverview,
   getPaymentHistory,
   getTrendReport,
+  getWealthSummary,
   getProfile,
   getSettings,
   importTransactionsWorkbook,
@@ -265,6 +266,8 @@ app.get("/api/reports/monthly", async (request) => {
     blankToUndefined(query.to)
   );
 });
+
+app.get("/api/wealth", async () => getWealthSummary());
 
 app.get("/api/reports/trends", async (request) => {
   const query = request.query as { accountId?: string; typeId?: string; mode?: string };

@@ -17,7 +17,8 @@ import type {
   Overview,
   Transaction,
   TrendReport,
-  UserProfile
+  UserProfile,
+  WealthSummary
 } from "./types";
 
 type ApiOptions = Omit<RequestInit, "body"> & {
@@ -58,6 +59,7 @@ export const Api = {
     api<UserProfile>("/api/profile", { method: "PATCH", body }),
   updateSettings: (body: { cardUtilizationAlertPercent: number }) =>
     api<Record<string, string>>("/api/settings", { method: "PATCH", body }),
+  wealth: () => api<WealthSummary>("/api/wealth"),
   overview: (accountId?: string, month?: string) => {
     const params = new URLSearchParams();
     if (accountId) params.set("accountId", accountId);

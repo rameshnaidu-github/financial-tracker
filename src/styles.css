@@ -950,6 +950,91 @@ a {
   justify-content: flex-end;
 }
 
+.net-worth-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.net-worth-headline {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.net-worth-headline span {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.net-worth-headline strong {
+  font-size: 1.5rem;
+}
+
+.net-worth-breakdown {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.net-worth-breakdown span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.net-worth-breakdown strong {
+  display: block;
+  white-space: nowrap;
+}
+
+.net-worth-hint {
+  margin: 0;
+}
+
+.cashflow-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.cashflow-metrics span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.cashflow-metrics strong {
+  display: block;
+  font-size: 1.05rem;
+  white-space: nowrap;
+}
+
+.cashflow-runway {
+  display: grid;
+  gap: 3px;
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.cashflow-runway span {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.cashflow-runway strong {
+  font-size: 1.15rem;
+}
+
+.cashflow-runway small {
+  color: var(--muted);
+}
+
 .investment-groups {
   display: grid;
   gap: 20px;

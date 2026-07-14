@@ -1348,6 +1348,49 @@ test("builds a monthly payment-history grid and rejects unknown sources", async 
   );
 });
 
+test("computes net worth, asset allocation, cashflow and runway", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Wealth Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 3_00_000_00
+  });
+  services.createInvestment({
+    type: "stocks",
+    name: `QA Wealth Stock ${suffix}`,
+    investedPaise: 1_00_000_00,
+    currentValuePaise: 1_50_000_00
+  });
+  services.createInvestment({
+    type: "gold",
+    name: `QA Wealth Gold ${suffix}`,
+    investedPaise: 50_000_00,
+    currentValuePaise: 60_000_00
+  });
+
+  const before = services.getWealthSummary();
+  // Net worth = liquid + investments − liabilities (no loans/cards here).
+  assert(
+    before.netWorth.netWorthPaise === before.netWorth.liquidPaise + before.netWorth.investmentsPaise - before.netWorth.liabilitiesPaise,
+    "Net worth must equal liquid + investments − liabilities."
+  );
+  assert(before.netWorth.investmentsPaise >= 2_10_000_00, "Investments should include both holdings' current value.");
+  const equity = before.allocation.find((segment) => segment.key === "equity");
+  const gold = before.allocation.find((segment) => segment.key === "gold");
+  assert(equity && equity.valuePaise >= 1_50_000_00, "Equity allocation should include the stock's current value.");
+  assert(gold && gold.valuePaise === 60_000_00, "Gold allocation should equal the gold holding value.");
+
+  // Snapshot persisted and reflected in history for the current month.
+  assert(before.history.length >= 1, "A net-worth snapshot should be recorded for the current month.");
+  assert(
+    before.history[before.history.length - 1].netWorthPaise === before.netWorth.netWorthPaise,
+    "The latest history point should equal the live net worth."
+  );
+
+  assert(typeof before.cashflow.savingsRatePercent === "number", "Savings rate should be a number.");
+  assert(before.runwayMonths === null || before.runwayMonths >= 0, "Runway should be null or non-negative.");
+});
+
 let failed = 0;
 
 for (const item of tests) {
