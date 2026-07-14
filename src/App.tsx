@@ -13,6 +13,7 @@ import {
   Download,
   FileSpreadsheet,
   Home,
+  Info,
   Landmark,
   Loader2,
   Archive,
@@ -74,7 +75,7 @@ import type {
   UserProfile,
   WealthSummary
 } from "./types";
-import { AUTOPAY_DURATION_MONTH_OPTIONS, AUTOPAY_SUBCATEGORY_ID, INVESTMENT_TYPES } from "../shared/finance";
+import { AUTOPAY_DURATION_MONTH_OPTIONS, AUTOPAY_SUBCATEGORY_ID, MUTUAL_FUNDS_SUBCATEGORY_ID, INVESTMENT_TYPES } from "../shared/finance";
 
 type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "subscriptions" | "categories" | "faq" | "profile";
 type Theme = "light" | "dark";
@@ -440,6 +441,7 @@ export default function App() {
               accounts={activeAccounts}
               loans={loans.filter((loan) => !loan.isArchived)}
               subscriptions={subscriptions.filter((subscription) => !subscription.isArchived)}
+              mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
               categoryTypes={categoryTypes}
               refresh={refresh}
               refreshKey={refreshKey}
@@ -454,6 +456,7 @@ export default function App() {
               accounts={activeAccounts}
               loans={loans.filter((loan) => !loan.isArchived)}
               subscriptions={subscriptions}
+              mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
               categoryTypes={categoryTypes}
               refresh={refresh}
               refreshKey={refreshKey}
@@ -790,11 +793,12 @@ function OverviewPage({
           )}
         </CollapsiblePanel>
 
-        <CollapsiblePanel title="Income vs spending" expanded={allExpanded}>
-          <IncomeSpendingBars
-            incomePaise={overview.summary.incomePaise}
-            spendingPaise={overview.summary.totalSpendingPaise}
-          />
+        <CollapsiblePanel title="Net worth" expanded={allExpanded}>
+          {wealth ? (
+            <NetWorthPanel wealth={wealth} />
+          ) : (
+            <EmptyState text="Net worth is loading." />
+          )}
         </CollapsiblePanel>
       </section>
 
@@ -808,15 +812,7 @@ function OverviewPage({
         </CollapsiblePanel>
       </section>
 
-      <section className="two-column overview-analytics">
-        <CollapsiblePanel title="Net worth" expanded={allExpanded}>
-          {wealth ? (
-            <NetWorthPanel wealth={wealth} />
-          ) : (
-            <EmptyState text="Net worth is loading." />
-          )}
-        </CollapsiblePanel>
-
+      <section className="overview-report-section">
         <CollapsiblePanel title="Asset allocation" expanded={allExpanded}>
           {wealth && wealth.allocation.length > 0 ? (
             <DonutChart
@@ -830,7 +826,7 @@ function OverviewPage({
               ariaLabel="Asset allocation"
               centerLabel="Assets"
               centerValue={formatINR(wealth.allocation.reduce((sum, segment) => sum + segment.valuePaise, 0))}
-              className="overview-donut-chart"
+              className="overview-donut-chart overview-donut-chart--large"
             />
           ) : (
             <EmptyState text="Add accounts or investments to see your allocation." />
@@ -918,38 +914,6 @@ function CashflowPanel({ wealth }: { wealth: WealthSummary }) {
   );
 }
 
-function IncomeSpendingBars({
-  incomePaise,
-  spendingPaise
-}: {
-  incomePaise: number;
-  spendingPaise: number;
-}) {
-  if (incomePaise <= 0 && spendingPaise <= 0) {
-    return <EmptyState text="No income or spending yet this month." />;
-  }
-
-  const max = Math.max(incomePaise, spendingPaise, 1);
-  const rows = [
-    { label: "Income", value: incomePaise, color: "var(--good)" },
-    { label: "Spending", value: spendingPaise, color: "var(--warning)" }
-  ];
-
-  return (
-    <div className="compare-bars">
-      {rows.map((row) => (
-        <div className="compare-row" key={row.label}>
-          <span className="compare-label">{row.label}</span>
-          <div className="bar-track">
-            <div style={{ width: `${(row.value / max) * 100}%`, background: row.color }} />
-          </div>
-          <strong>{formatINR(row.value)}</strong>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function BudgetGuardrails({
   plan,
   uncategorizedCount
@@ -1003,6 +967,7 @@ function WeeklyEntryPage({
   accounts,
   loans,
   subscriptions,
+  mutualFunds,
   categoryTypes,
   refresh,
   refreshKey,
@@ -1014,6 +979,7 @@ function WeeklyEntryPage({
   accounts: Account[];
   loans: Loan[];
   subscriptions: AutopaySubscription[];
+  mutualFunds: Investment[];
   categoryTypes: CategoryType[];
   refresh: () => Promise<void>;
   refreshKey: number;
@@ -1046,7 +1012,8 @@ function WeeklyEntryPage({
     transferAccountId: accounts.find((account) => account.type === "credit_card")?.id ?? "",
     loanId: "",
     loanPaymentType: "emi" as LoanPaymentType,
-    subscriptionId: ""
+    subscriptionId: "",
+    investmentId: ""
   });
 
   const reloadWeek = useCallback(async () => {
@@ -1091,6 +1058,7 @@ function WeeklyEntryPage({
   const selectedBehavior = selectedType?.behavior ?? "expense";
   const availableLoans = loans.filter((loan) => loan.subcategoryId === form.subcategoryId);
   const isAutopaySelected = form.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
+  const isMutualFundsSelected = form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
   const expenseTotal = transactions
     .filter((transaction) => transaction.kind === "expense")
     .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
@@ -1131,7 +1099,9 @@ function WeeklyEntryPage({
         loanId: behavior === "loan" ? form.loanId || undefined : undefined,
         loanPaymentType: behavior === "loan" && form.loanId ? form.loanPaymentType : undefined,
         subscriptionId:
-          form.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? form.subscriptionId || undefined : undefined
+          form.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? form.subscriptionId || undefined : undefined,
+        investmentId:
+          form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? form.investmentId || undefined : undefined
       };
 
       const result = await Api.createTransaction(payload);
@@ -1144,7 +1114,8 @@ function WeeklyEntryPage({
         subcategoryId: "",
         loanId: "",
         loanPaymentType: "emi",
-        subscriptionId: ""
+        subscriptionId: "",
+        investmentId: ""
       }));
       await reloadWeek();
       await refresh();
@@ -1270,7 +1241,7 @@ function WeeklyEntryPage({
                   <select
                     value={form.subcategoryId}
                     onChange={(event) =>
-                      setForm({ ...form, subcategoryId: event.target.value, loanId: "", subscriptionId: "" })
+                      setForm({ ...form, subcategoryId: event.target.value, loanId: "", subscriptionId: "", investmentId: "" })
                     }
                   >
                     <option value="">Decide later</option>
@@ -1297,6 +1268,22 @@ function WeeklyEntryPage({
                           {subscription.name} · {formatINR(subscription.amountPaise)}
                         </option>
                       ))}
+                  </select>
+                </label>
+              )}
+              {isMutualFundsSelected && (
+                <label>
+                  Mutual fund
+                  <select
+                    value={form.investmentId}
+                    onChange={(event) => setForm({ ...form, investmentId: event.target.value })}
+                  >
+                    <option value="">Not linked yet</option>
+                    {mutualFunds.map((fund) => (
+                      <option key={fund.id} value={fund.id}>
+                        {fund.name}
+                      </option>
+                    ))}
                   </select>
                 </label>
               )}
@@ -1387,11 +1374,20 @@ function WeeklyEntryPage({
         </Panel>
 
         <Panel title="Account impact">
-          <div className="impact-stack">
-            {accounts.slice(0, 4).map((account) => (
-              <AccountImpactCard key={account.id} account={account} transactions={transactions} />
-            ))}
-          </div>
+          {(() => {
+            const impactedAccounts = accounts
+              .filter((account) => accountImpact(account, transactions).amountPaise !== 0)
+              .slice(0, 4);
+            return impactedAccounts.length === 0 ? (
+              <EmptyState text="No account activity this week yet." />
+            ) : (
+              <div className="impact-stack">
+                {impactedAccounts.map((account) => (
+                  <AccountImpactCard key={account.id} account={account} transactions={transactions} />
+                ))}
+              </div>
+            );
+          })()}
         </Panel>
       </aside>
     </div>
@@ -1444,6 +1440,7 @@ type TransactionEditDraft = {
   loanId: string;
   loanPaymentType: LoanPaymentType;
   subscriptionId: string;
+  investmentId: string;
 };
 
 function TransactionsPage({
@@ -1451,6 +1448,7 @@ function TransactionsPage({
   accounts,
   loans,
   subscriptions,
+  mutualFunds,
   categoryTypes,
   refresh,
   refreshKey,
@@ -1461,6 +1459,7 @@ function TransactionsPage({
   accounts: Account[];
   loans: Loan[];
   subscriptions: AutopaySubscription[];
+  mutualFunds: Investment[];
   categoryTypes: CategoryType[];
   refresh: () => Promise<void>;
   refreshKey: number;
@@ -1573,7 +1572,9 @@ function TransactionsPage({
         loanId: behavior === "loan" ? editDraft.loanId : "",
         loanPaymentType: behavior === "loan" && editDraft.loanId ? editDraft.loanPaymentType : undefined,
         subscriptionId:
-          editDraft.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? editDraft.subscriptionId : ""
+          editDraft.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? editDraft.subscriptionId : "",
+        investmentId:
+          editDraft.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? editDraft.investmentId : ""
       });
       setEditDraft(null);
       await loadPage();
@@ -1681,6 +1682,7 @@ function TransactionsPage({
                     accounts={accounts}
                     loans={loans}
                     subscriptions={subscriptions}
+                    mutualFunds={mutualFunds}
                     categoryTypes={categoryTypes}
                     cardAccounts={cardAccounts}
                     saving={savingEdit}
@@ -1757,6 +1759,7 @@ function TransactionEditRow({
   accounts,
   loans,
   subscriptions,
+  mutualFunds,
   categoryTypes,
   cardAccounts,
   saving,
@@ -1769,6 +1772,7 @@ function TransactionEditRow({
   accounts: Account[];
   loans: Loan[];
   subscriptions: AutopaySubscription[];
+  mutualFunds: Investment[];
   categoryTypes: CategoryType[];
   cardAccounts: Account[];
   saving: boolean;
@@ -1783,6 +1787,7 @@ function TransactionEditRow({
   const availableSubcategories = selectedType?.subcategories ?? [];
   const availableLoans = loans.filter((loan) => loan.subcategoryId === draft.subcategoryId);
   const isAutopaySelected = draft.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
+  const isMutualFundsSelected = draft.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
   const availableSubscriptions = subscriptions.filter(
     (subscription) => subscription.status === "active" || subscription.id === draft.subscriptionId
   );
@@ -1830,7 +1835,8 @@ function TransactionEditRow({
                 transferAccountId: cardAccounts[0]?.id ?? "",
                 loanId: "",
                 loanPaymentType: "emi",
-                subscriptionId: ""
+                subscriptionId: "",
+                investmentId: ""
               });
             }}
           >
@@ -1890,7 +1896,7 @@ function TransactionEditRow({
             <select
               value={draft.subcategoryId}
               onChange={(event) =>
-                onChange({ ...draft, subcategoryId: event.target.value, loanId: "", subscriptionId: "" })
+                onChange({ ...draft, subcategoryId: event.target.value, loanId: "", subscriptionId: "", investmentId: "" })
               }
               disabled={!selectedType}
             >
@@ -1914,6 +1920,22 @@ function TransactionEditRow({
               {availableSubscriptions.map((subscription) => (
                 <option key={subscription.id} value={subscription.id}>
                   {subscription.name} · {formatINR(subscription.amountPaise)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {isMutualFundsSelected && (
+          <label>
+            Mutual fund
+            <select
+              value={draft.investmentId}
+              onChange={(event) => onChange({ ...draft, investmentId: event.target.value })}
+            >
+              <option value="">Not linked yet</option>
+              {mutualFunds.map((fund) => (
+                <option key={fund.id} value={fund.id}>
+                  {fund.name}
                 </option>
               ))}
             </select>
@@ -2216,6 +2238,7 @@ function ReportsPage({
               <SummaryCard label="Investment" value={formatINR(report.investmentPaise)} icon={<ArrowDownUp />} />
               <SummaryCard label="Income" value={formatINR(report.incomePaise)} icon={<WalletCards />} />
             </div>
+            <CashflowSummary types={report.types} />
             <ReportTypeAnalytics
               types={report.types}
               selectedTypeId={selectedType?.typeId ?? ""}
@@ -3291,6 +3314,10 @@ function InvestmentsPage({
     type,
     items: investments.filter((item) => item.type === type.id)
   })).filter((group) => group.items.length > 0);
+  const lastUpdated = investments.reduce(
+    (latest, item) => (item.updatedAt > latest ? item.updatedAt : latest),
+    ""
+  );
 
   function remove(investment: Investment) {
     requestConfirm({
@@ -3329,6 +3356,14 @@ function InvestmentsPage({
           tone={totalGain >= 0 ? "good" : "warning"}
         />
       </section>
+
+      {lastUpdated && (
+        <p className="helper-text investments-asof">
+          <Info size={14} />
+          Values are entered manually — figures reflect what you last saved on{" "}
+          {formatDateWithYear(lastUpdated.slice(0, 10))}.
+        </p>
+      )}
 
       <div className="two-column loans-layout">
         <Panel title="Portfolio">
@@ -3395,6 +3430,7 @@ function InvestmentCard({
   onDelete: (investment: Investment) => void;
 }) {
   const positive = investment.gainPaise >= 0;
+  const [expanded, setExpanded] = useState(false);
   return (
     <article className="loan-card investment-card">
       <div className="loan-card-header">
@@ -3412,12 +3448,30 @@ function InvestmentCard({
             </span>
           </div>
         </div>
-        <span className={`investment-gain-badge ${positive ? "up" : "down"}`}>
-          {positive ? "+" : ""}
-          {investment.gainPercent}%
-        </span>
+        <div className="loan-header-actions">
+          <span className={`investment-gain-badge ${positive ? "up" : "down"}`}>
+            {positive ? "+" : ""}
+            {investment.gainPercent}%
+          </span>
+          <button
+            type="button"
+            className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
+            aria-label={expanded ? `Collapse ${investment.name}` : `Expand ${investment.name}`}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            <ChevronDown size={18} />
+          </button>
+        </div>
       </div>
 
+      <div className="loan-card-quick">
+        <span>Current value</span>
+        <strong>{formatINR(investment.currentValuePaise)}</strong>
+        <small className={positive ? "amount-in" : "amount-out"}>{signedImpact(investment.gainPaise)}</small>
+      </div>
+
+      {expanded && <>
       <div className="investment-values">
         <div>
           <span>Invested</span>
@@ -3451,6 +3505,7 @@ function InvestmentCard({
       </div>
 
       {investment.type === "mutual_funds" && <PaymentHistoryGrid source="mutual_fund" id={investment.id} />}
+      </>}
     </article>
   );
 }
@@ -4233,6 +4288,51 @@ function CategoryBars({ categories }: { categories: Array<{ name: string; icon: 
   );
 }
 
+const INFLOW_BEHAVIORS = new Set(["income", "refund"]);
+
+function CashflowSummary({ types }: { types: MonthlyReport["types"] }) {
+  const inflowTypes = types.filter((type) => INFLOW_BEHAVIORS.has(type.behavior));
+  const outflowTypes = types.filter((type) => !INFLOW_BEHAVIORS.has(type.behavior));
+  const inflowPaise = inflowTypes.reduce((sum, type) => sum + type.amountPaise, 0);
+  const outflowPaise = outflowTypes.reduce((sum, type) => sum + type.amountPaise, 0);
+  const savingsPaise = inflowPaise - outflowPaise;
+
+  const nameList = (list: MonthlyReport["types"]) =>
+    list.length ? list.map((type) => type.name).join(" + ") : "Nothing yet";
+
+  return (
+    <div className="cashflow-summary">
+      <div className="cashflow-summary-row">
+        <div className="cashflow-summary-line inflow">
+          <div className="cashflow-summary-head">
+            <span>Inflow</span>
+            <strong className="amount-in">{formatINR(inflowPaise)}</strong>
+          </div>
+          <small>{nameList(inflowTypes)}</small>
+        </div>
+        <span className="cashflow-summary-operator">−</span>
+        <div className="cashflow-summary-line outflow">
+          <div className="cashflow-summary-head">
+            <span>Outflow</span>
+            <strong className="amount-out">{formatINR(outflowPaise)}</strong>
+          </div>
+          <small>{nameList(outflowTypes)}</small>
+        </div>
+        <span className="cashflow-summary-operator">=</span>
+        <div className="cashflow-summary-line savings">
+          <div className="cashflow-summary-head">
+            <span>Savings</span>
+            <strong className={savingsPaise >= 0 ? "amount-in" : "amount-out"}>
+              {signedImpact(savingsPaise)}
+            </strong>
+          </div>
+          <small>Inflow − Outflow</small>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ReportTypeAnalytics({
   types,
   selectedTypeId,
@@ -4599,6 +4699,21 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
     question: "How does AutoPay 'Payments made' count work?",
     answer:
       "Each time you add a transaction, choose SubType = AutoPay, and link it to a subscription, that subscription's counter goes up by one. Deleting or unlinking the transaction lowers the count again."
+  },
+  {
+    question: "How does a mutual fund's monthly payment history (the ticks) work?",
+    answer:
+      "It works just like AutoPay. When you add an investment transaction, choose SubType = Mutual Funds and pick which fund it belongs to from the 'Mutual fund' dropdown. A month is ticked only for the specific fund that has a linked transaction that month — funds without a tracked payment stay unticked. Older transactions that were never linked to a fund won't tick until you edit them and choose the fund."
+  },
+  {
+    question: "Are my investment values updated automatically?",
+    answer:
+      "No. Stocks, mutual funds, gold, land, property and PF values are entered by you and stay fixed until you edit them. The Investments page shows the date you last saved a change so you know how current the figures are. Open a holding with the chevron (▾) to see its full details and payment history."
+  },
+  {
+    question: "How are Inflow, Outflow and Savings in Reports calculated?",
+    answer:
+      "Inflow adds up everything that brought money in for the period (income and refunds across all their categories). Outflow adds up everything that took money out (expense, loan, investment, transfer and any other outflow categories). Savings is simply Inflow minus Outflow — positive means you kept money, negative means you spent more than came in."
   },
   {
     question: "How is the 'Spending mix' chart calculated?",
@@ -5103,7 +5218,8 @@ function draftFromTransaction(
       "",
     loanId: transaction.loanId ?? "",
     loanPaymentType: transaction.loanPaymentType ?? "emi",
-    subscriptionId: transaction.subscriptionId ?? ""
+    subscriptionId: transaction.subscriptionId ?? "",
+    investmentId: transaction.investmentId ?? ""
   };
 }
 

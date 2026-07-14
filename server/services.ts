@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import ExcelJS from "exceljs";
 import {
   AUTOPAY_SUBCATEGORY_ID,
+  MUTUAL_FUNDS_SUBCATEGORY_ID,
   createAccountSchema,
   createAutopaySubscriptionSchema,
   createBudgetLineSchema,
@@ -188,6 +189,8 @@ export type TransactionSummary = {
   loanInterestPaise: number | null;
   subscriptionId: string | null;
   subscriptionName: string | null;
+  investmentId: string | null;
+  investmentName: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -1141,6 +1144,8 @@ export function listTransactions(query: TransactionQuery = {}): TransactionSumma
          LEFT JOIN loans l ON l.id = lp.loan_id
          LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
          LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
+         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
+         LEFT JOIN investments iv ON iv.id = ip.investment_id
 ${where}
          ORDER BY t.date DESC, t.created_at DESC
          LIMIT ${limit} OFFSET ${offset}`
@@ -1166,6 +1171,8 @@ export function getTransaction(id: string) {
          LEFT JOIN loans l ON l.id = lp.loan_id
          LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
          LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
+         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
+         LEFT JOIN investments iv ON iv.id = ip.investment_id
 WHERE t.id = ?`
       )
       .get(id)
@@ -1249,6 +1256,7 @@ function insertValidatedTransaction(parsed: CreateTransactionInput) {
   }
 
   syncAutopayPaymentForTransaction(id, parsed);
+  syncInvestmentPaymentForTransaction(id, parsed);
 
   return id;
 }
@@ -1260,6 +1268,7 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
   }
   const existingLoanPayment = getLoanPaymentForTransaction(id);
   const existingAutopayPayment = getAutopayPaymentForTransaction(id);
+  const existingInvestmentPayment = getInvestmentPaymentForTransaction(id);
   const existingSplits = getTransactionSplits(id);
   const patch = updateTransactionSchema.parse(input);
   if (Object.prototype.hasOwnProperty.call(patch, "loanId") && !patch.loanId) {
@@ -1284,11 +1293,15 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
     loanId: existingLoanPayment?.loan_id ?? undefined,
     loanPaymentType: existingLoanPayment?.payment_type ?? undefined,
     subscriptionId: existingAutopayPayment?.subscription_id ?? undefined,
+    investmentId: existingInvestmentPayment?.investment_id ?? undefined,
     splits: existingSplits.length ? existingSplits : undefined
   };
   Object.assign(mergedInput, patch);
   if (mergedInput.subcategoryId !== AUTOPAY_SUBCATEGORY_ID) {
     mergedInput.subscriptionId = undefined;
+  }
+  if (mergedInput.subcategoryId !== MUTUAL_FUNDS_SUBCATEGORY_ID) {
+    mergedInput.investmentId = undefined;
   }
   const merged = createTransactionSchema.parse(mergedInput);
   if (merged.kind !== "emi") {
@@ -1348,6 +1361,9 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
 
     db.prepare("DELETE FROM autopay_payments WHERE transaction_id = ?").run(id);
     syncAutopayPaymentForTransaction(id, merged, existingAutopayPayment?.subscription_id);
+
+    db.prepare("DELETE FROM investment_payments WHERE transaction_id = ?").run(id);
+    syncInvestmentPaymentForTransaction(id, merged);
   });
 
   return {
@@ -1710,19 +1726,17 @@ export function getPaymentHistory(
         .all(id, yearText)
     );
   } else {
-    // Investments are manual holdings with no per-holding transaction link, so the
-    // grid reflects ALL Mutual-Funds investment transactions that year (subcategory-level);
-    // `id` is accepted for a consistent signature but not used to scope the query.
+    // A month ticks only when a Mutual-Funds investment transaction is explicitly
+    // linked to THIS holding (via the investment picker), mirroring AutoPay/loan linking.
     rows = asRecords<{ month: string }>(
       db
         .prepare(
-          `SELECT DISTINCT substr(date, 6, 2) AS month
-           FROM transactions
-           WHERE subcategory_id = 'sub_invest_mutual_funds'
-             AND kind = 'investment'
-             AND substr(date, 1, 4) = ?`
+          `SELECT DISTINCT substr(t.date, 6, 2) AS month
+           FROM transactions t
+           JOIN investment_payments iph ON iph.transaction_id = t.id
+           WHERE iph.investment_id = ? AND substr(t.date, 1, 4) = ?`
         )
-        .all(yearText)
+        .all(id, yearText)
     );
   }
 
@@ -3056,6 +3070,37 @@ function syncAutopayPaymentForTransaction(
   ).run(randomUUID(), subscription.id, transactionId);
 }
 
+function getInvestmentPaymentForTransaction(transactionId: string) {
+  return asRecord<{ id: string; investment_id: string; transaction_id: string } | undefined>(
+    db
+      .prepare(
+        `SELECT id, investment_id, transaction_id
+         FROM investment_payments
+         WHERE transaction_id = ?
+         LIMIT 1`
+      )
+      .get(transactionId)
+  );
+}
+
+function syncInvestmentPaymentForTransaction(transactionId: string, input: CreateTransactionInput) {
+  if (!input.investmentId) {
+    return;
+  }
+  if (input.subcategoryId !== MUTUAL_FUNDS_SUBCATEGORY_ID) {
+    throw badRequest("Only Mutual Funds transactions can be linked to a holding.");
+  }
+
+  const investment = requireInvestmentRow(input.investmentId);
+  if (investment.type !== "mutual_funds") {
+    throw badRequest("Linked holding must be a mutual fund.");
+  }
+  db.prepare(
+    `INSERT INTO investment_payments (id, investment_id, transaction_id)
+     VALUES (?, ?, ?)`
+  ).run(randomUUID(), investment.id, transactionId);
+}
+
 function syncLoanPaymentForTransaction(transactionId: string, input: CreateTransactionInput) {
   if (!input.loanId) {
     return;
@@ -3937,6 +3982,8 @@ function findDuplicateCandidates(input: {
          LEFT JOIN loans l ON l.id = lp.loan_id
          LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
          LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
+         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
+         LEFT JOIN investments iv ON iv.id = ip.investment_id
 WHERE t.id != ?
            AND t.account_id = ?
            AND t.amount_paise = ?
@@ -4056,6 +4103,8 @@ type JoinedFields = {
   loan_interest_paise: number | null;
   subscription_id: string | null;
   subscription_name: string | null;
+  investment_id: string | null;
+  investment_name: string | null;
 };
 
 const transactionSelectFields = `
@@ -4096,7 +4145,9 @@ const transactionSelectFields = `
   lp.principal_paise AS loan_principal_paise,
   lp.interest_paise AS loan_interest_paise,
   ap.subscription_id AS subscription_id,
-  s.name AS subscription_name
+  s.name AS subscription_name,
+  ip.investment_id AS investment_id,
+  iv.name AS investment_name
 `;
 
 function mapTransaction(row: TransactionRow & JoinedFields): TransactionSummary {
@@ -4137,6 +4188,8 @@ function mapTransaction(row: TransactionRow & JoinedFields): TransactionSummary 
     loanInterestPaise: row.loan_interest_paise,
     subscriptionId: row.subscription_id,
     subscriptionName: row.subscription_name,
+    investmentId: row.investment_id,
+    investmentName: row.investment_name,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

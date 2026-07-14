@@ -1348,6 +1348,77 @@ test("builds a monthly payment-history grid and rejects unknown sources", async 
   );
 });
 
+test("scopes mutual-fund payment history to the linked holding only", async () => {
+  assert(state.bankId, "Bank should exist.");
+  const fundA = services.createInvestment({
+    type: "mutual_funds",
+    name: "QA Fund Alpha",
+    investedPaise: 5_000_00,
+    currentValuePaise: 5_500_00
+  });
+  const fundB = services.createInvestment({
+    type: "mutual_funds",
+    name: "QA Fund Beta",
+    investedPaise: 3_000_00,
+    currentValuePaise: 2_900_00
+  });
+
+  // A SIP into fund A during April 2031, explicitly linked to that holding.
+  services.createTransaction({
+    date: "2031-04-12",
+    accountId: state.bankId,
+    method: "upi",
+    merchant: "QA SIP Alpha",
+    typeId: typeId("Investment"),
+    subcategoryId: subcategoryId("Investment", "Mutual Funds"),
+    amountPaise: 250_000,
+    direction: "outflow",
+    kind: "investment",
+    investmentId: fundA.id
+  });
+
+  // A mutual-fund investment that is NOT linked to any holding must not tick anyone.
+  services.createTransaction({
+    date: "2031-06-01",
+    accountId: state.bankId,
+    method: "upi",
+    merchant: "QA unlinked MF",
+    typeId: typeId("Investment"),
+    subcategoryId: subcategoryId("Investment", "Mutual Funds"),
+    amountPaise: 100_000,
+    direction: "outflow",
+    kind: "investment"
+  });
+
+  const alpha = services.getPaymentHistory("mutual_fund", fundA.id, 2031);
+  assert(alpha.months[3] === true, "April (index 3) should tick for the linked fund.");
+  assert(
+    alpha.months.filter((paid) => paid).length === 1,
+    "Only the linked month should tick for fund A."
+  );
+
+  const beta = services.getPaymentHistory("mutual_fund", fundB.id, 2031);
+  assert(
+    beta.months.every((paid) => paid === false),
+    "A fund with no linked payments must show no ticks (not all funds)."
+  );
+
+  await assertRejects("mutual-fund link requires the Mutual Funds subtype", () =>
+    services.createTransaction({
+      date: "2031-04-15",
+      accountId: state.bankId!,
+      method: "upi",
+      merchant: "QA wrong subtype",
+      typeId: typeId("Expense"),
+      subcategoryId: subcategoryId("Expense", "Groceries"),
+      amountPaise: 50_000,
+      direction: "outflow",
+      kind: "expense",
+      investmentId: fundA.id
+    })
+  );
+});
+
 test("computes net worth, asset allocation, cashflow and runway", async () => {
   const suffix = Date.now().toString().slice(-5);
   const bank = services.createAccount({

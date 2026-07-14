@@ -149,6 +149,13 @@ export function initDatabase() {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS investment_payments (
+      id TEXT PRIMARY KEY,
+      investment_id TEXT NOT NULL REFERENCES investments(id) ON DELETE CASCADE,
+      transaction_id TEXT NOT NULL UNIQUE REFERENCES transactions(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS net_worth_snapshots (
       month TEXT PRIMARY KEY CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
       liquid_paise INTEGER NOT NULL,
@@ -217,6 +224,8 @@ function ensureBudgetIndexes() {
 function ensureInvestmentIndexes() {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_investments_type ON investments(type);
+    CREATE INDEX IF NOT EXISTS idx_investment_payments_investment ON investment_payments(investment_id);
+    CREATE INDEX IF NOT EXISTS idx_investment_payments_transaction ON investment_payments(transaction_id);
   `);
 }
 

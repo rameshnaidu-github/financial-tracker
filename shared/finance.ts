@@ -4,6 +4,7 @@ export const CURRENCY = "INR";
 export const CURRENCY_SYMBOL = "₹";
 export const WEEK_START = "monday";
 export const AUTOPAY_SUBCATEGORY_ID = "sub_autopay";
+export const MUTUAL_FUNDS_SUBCATEGORY_ID = "sub_invest_mutual_funds";
 export const AUTOPAY_DURATION_MONTH_OPTIONS = [1, 3, 6, 12, 24, 36] as const;
 
 export const INVESTMENT_TYPES = [
@@ -387,6 +388,7 @@ const transactionObjectSchema = z.object({
     loanId: optionalIdSchema.optional(),
     loanPaymentType: loanPaymentTypeSchema.optional(),
     subscriptionId: optionalIdSchema.optional(),
+    investmentId: optionalIdSchema.optional(),
     splits: z.array(transactionSplitSchema).optional()
   });
 
@@ -434,6 +436,14 @@ export const createTransactionSchema = transactionObjectSchema.superRefine((valu
       });
     }
 
+    if (value.investmentId && value.subcategoryId !== MUTUAL_FUNDS_SUBCATEGORY_ID) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["investmentId"],
+        message: "Linked mutual funds require SubType = Mutual Funds."
+      });
+    }
+
     if (
       (value.kind === "expense" || value.kind === "investment" || value.kind === "emi") &&
       value.direction !== "outflow"
@@ -463,7 +473,8 @@ export const updateTransactionSchema = transactionObjectSchema.partial().extend(
   transferAccountId: clearableIdSchema,
   linkedTransactionId: clearableIdSchema,
   loanId: clearableIdSchema,
-  subscriptionId: clearableIdSchema
+  subscriptionId: clearableIdSchema,
+  investmentId: clearableIdSchema
 }).refine(
   (value) => Object.keys(value).length > 0,
   "No transaction changes provided."

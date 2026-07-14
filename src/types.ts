@@ -103,6 +103,8 @@ export type Transaction = {
   loanInterestPaise: number | null;
   subscriptionId: string | null;
   subscriptionName: string | null;
+  investmentId: string | null;
+  investmentName: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -362,6 +364,7 @@ export type CreateTransactionPayload = {
   loanId?: string;
   loanPaymentType?: LoanPaymentType;
   subscriptionId?: string;
+  investmentId?: string;
   splits?: Array<{
     categoryId: string;
     amountPaise: number;
