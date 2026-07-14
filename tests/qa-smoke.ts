@@ -3,6 +3,8 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
+import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
+import type { ReportType } from "../src/types.ts";
 
 const testDbPath = path.join(tmpdir(), `finance-tracker-qa-${Date.now()}.db`);
 const testBackupDir = path.join(tmpdir(), `finance-tracker-backups-${Date.now()}`);
@@ -215,6 +217,146 @@ test("creates bank and credit-card accounts with limits", () => {
   assert(bank.balancePaise === 10_000_000, "Bank starting balance should be tracked.");
   assert(card.creditLimitPaise === 15_000_000, "Credit limit should be tracked.");
   assert(card.availableLimitPaise === 15_000_000, "Available card limit should equal limit before spends.");
+});
+
+test("keeps monthly inflow source SubTypes separate in reports", () => {
+  assert(state.bankId, "Bank should exist.");
+  const createdIds: string[] = [];
+  const addIncome = (subcategoryName: string, amountPaise: number) => {
+    const created = services.createTransaction({
+      date: "2026-06-08",
+      accountId: state.bankId!,
+      method: "bank_transfer",
+      merchant: `QA ${subcategoryName} income`,
+      typeId: typeId("Income"),
+      subcategoryId: subcategoryId("Income", subcategoryName),
+      amountPaise,
+      direction: "inflow",
+      kind: "income"
+    });
+    const id = created.transaction?.id;
+    assert(id, `${subcategoryName} income transaction should be created.`);
+    createdIds.push(id);
+  };
+
+  try {
+    addIncome("Loan", 300_000);
+    addIncome("Mutual Funds", 450_000);
+    addIncome("Other income", 300_000);
+
+    const report = services.getMonthlyReport(undefined, "2026-06");
+    const incomeType = report.types.find((type) => type.name === "Income");
+    assert(incomeType, "Income Type should be present in report breakdown.");
+    const incomeSources = new Map(
+      incomeType.subcategories.map((subcategory) => [subcategory.name, subcategory.amountPaise])
+    );
+
+    assert(report.incomePaise === 1_050_000, "Report income should include every inflow source.");
+    assert(incomeType.amountPaise === 1_050_000, "Income Type total should equal all income SubTypes.");
+    assert(incomeSources.get("Loan") === 300_000, "Loan income should remain a separate inflow source.");
+    assert(incomeSources.get("Mutual Funds") === 450_000, "Mutual Funds income should remain a separate inflow source.");
+    assert(incomeSources.get("Other income") === 300_000, "Other income should remain a separate inflow source.");
+  } finally {
+    for (const id of createdIds) {
+      services.deleteTransaction(id);
+    }
+  }
+});
+
+test("builds report cashflow from inflow SubTypes and outflow Types", () => {
+  const reportTypes: ReportType[] = [
+    {
+      typeId: "income",
+      name: "Income",
+      behavior: "income",
+      icon: "wallet",
+      color: "#059669",
+      amountPaise: 700_000,
+      share: 70,
+      subcategories: [
+        {
+          subcategoryId: "salary",
+          name: "Salary",
+          icon: "wallet",
+          color: "#059669",
+          amountPaise: 500_000,
+          share: 50
+        },
+        {
+          subcategoryId: "mutual-funds",
+          name: "Mutual Funds",
+          icon: "trending-up",
+          color: "#2563eb",
+          amountPaise: 200_000,
+          share: 20
+        }
+      ]
+    },
+    {
+      typeId: "expense",
+      name: "Expense",
+      behavior: "expense",
+      icon: "receipt",
+      color: "#dc2626",
+      amountPaise: 120_000,
+      share: 12,
+      subcategories: [
+        {
+          subcategoryId: "groceries",
+          name: "Groceries",
+          icon: "shopping-cart",
+          color: "#dc2626",
+          amountPaise: 120_000,
+          share: 12
+        }
+      ]
+    },
+    {
+      typeId: "transfer",
+      name: "Transfer",
+      behavior: "transfer",
+      icon: "arrow-right-left",
+      color: "#0f766e",
+      amountPaise: 80_000,
+      share: 8,
+      subcategories: []
+    },
+    {
+      typeId: "card-payment",
+      name: "Credit Card Payment",
+      behavior: "card_payment",
+      icon: "credit-card",
+      color: "#7c3aed",
+      amountPaise: 100_000,
+      share: 10,
+      subcategories: [
+        {
+          subcategoryId: "axis-card",
+          name: "Axis Card",
+          icon: "credit-card",
+          color: "#7c3aed",
+          amountPaise: 100_000,
+          share: 10
+        }
+      ]
+    }
+  ];
+
+  const inflowParts = cashflowPartsFromTypes(reportTypes, "in");
+  const outflowParts = cashflowPartsFromTypes(reportTypes, "out");
+
+  assert(
+    inflowParts.map((part) => part.name).join(",") === "Salary,Mutual Funds",
+    "Inflow should expand Income into its SubTypes."
+  );
+  assert(
+    outflowParts.map((part) => part.name).join(",") === "Expense,Credit Card Payment,Transfer",
+    "Outflow should remain grouped by Type, including Credit Card Payment and Transfer."
+  );
+  assert(
+    outflowParts.reduce((sum, part) => sum + part.amountPaise, 0) === 300_000,
+    "Outflow total should include every outflow Type."
+  );
 });
 
 test("rejects credit-card account without credit limit", async () => {

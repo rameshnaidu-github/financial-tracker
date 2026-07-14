@@ -46,6 +46,7 @@ import {
   todayISO
 } from "./format";
 import { IconGlyph } from "./icons";
+import { cashflowPartsFromTypes, INFLOW_BEHAVIORS, type CashflowPart } from "./report-cashflow";
 import type {
   Account,
   AutopaySubscription,
@@ -747,7 +748,7 @@ function OverviewPage({
           tone="warning"
         />
         <SummaryCard
-          label="This month spending"
+          label="Tracked spending"
           value={formatINR(overview.summary.totalSpendingPaise)}
           icon={<BarChart3 />}
         />
@@ -757,6 +758,10 @@ function OverviewPage({
           icon={<TrendingUp />}
         />
       </section>
+      <p className="helper-text overview-summary-note">
+        Tracked spending includes Expense, Loan, Investment and uncategorized report lines after refunds. It excludes
+        credit-card payments and transfers so money movement is not double-counted as spending.
+      </p>
       </OverviewDisclosure>
 
       <section className="two-column">
@@ -2199,6 +2204,11 @@ function ReportsPage({
   }, [report, selectedTypeId]);
 
   const selectedType = report?.types.find((type) => type.typeId === selectedTypeId) ?? report?.types[0];
+  const trendModeLabels: Record<TrendMode, string> = {
+    week: "Week on week",
+    month: "Month on month",
+    year: "Year on year"
+  };
 
   return (
     <div className="page-grid">
@@ -2235,11 +2245,14 @@ function ReportsPage({
               {formatShortDate(report.start)} to {formatShortDate(report.end)}
             </p>
             <CashflowSummary types={report.types} />
-            <ReportTypeAnalytics
-              types={report.types}
-              selectedTypeId={selectedType?.typeId ?? ""}
-              onSelect={setSelectedTypeId}
-            />
+            <div className="report-chart-grid">
+              <OutflowMixChart types={report.types} />
+              <ReportTypeAnalytics
+                types={report.types}
+                selectedTypeId={selectedType?.typeId ?? ""}
+                onSelect={setSelectedTypeId}
+              />
+            </div>
             <CategoryBars categories={report.categories} />
             <a className="secondary-action export-link" href="/api/export/transactions.csv">
               <Download size={18} />
@@ -2251,17 +2264,16 @@ function ReportsPage({
 
       <Panel title="Trends">
         <div className="trend-controls">
-          <div className="segmented-control">
-            <button type="button" className={trendMode === "week" ? "active" : ""} onClick={() => setTrendMode("week")}>
-              Week on week
-            </button>
-            <button type="button" className={trendMode === "month" ? "active" : ""} onClick={() => setTrendMode("month")}>
-              Month on month
-            </button>
-            <button type="button" className={trendMode === "year" ? "active" : ""} onClick={() => setTrendMode("year")}>
-              Year on year
-            </button>
-          </div>
+          <label className="control-field toolbar-control trend-mode-control">
+            <span className="control-label">Period</span>
+            <select value={trendMode} onChange={(event) => setTrendMode(event.target.value as TrendMode)}>
+              {(["week", "month", "year"] as TrendMode[]).map((mode) => (
+                <option key={mode} value={mode}>
+                  {trendModeLabels[mode]}
+                </option>
+              ))}
+            </select>
+          </label>
           {trendMode === "week" && (
             <label className="control-field toolbar-control trend-month-control">
               <span className="control-label">Month</span>
@@ -2274,14 +2286,13 @@ function ReportsPage({
               </select>
             </label>
           )}
-          <div className="segmented-control">
-            <button type="button" className={trendStyle === "bar" ? "active" : ""} onClick={() => setTrendStyle("bar")}>
-              Bar
-            </button>
-            <button type="button" className={trendStyle === "line" ? "active" : ""} onClick={() => setTrendStyle("line")}>
-              Line
-            </button>
-          </div>
+          <label className="control-field toolbar-control trend-style-control">
+            <span className="control-label">Chart</span>
+            <select value={trendStyle} onChange={(event) => setTrendStyle(event.target.value as "bar" | "line")}>
+              <option value="bar">Bar</option>
+              <option value="line">Line</option>
+            </select>
+          </label>
           <label className="control-field toolbar-control trend-type-control">
             <span className="control-label">Type</span>
             <select value={trendTypeId} onChange={(event) => setTrendTypeId(event.target.value)}>
@@ -4308,36 +4319,30 @@ function CategoryBars({ categories }: { categories: Array<{ name: string; icon: 
   );
 }
 
-const INFLOW_BEHAVIORS = new Set(["income", "refund"]);
-
 function CashflowSummary({ types }: { types: MonthlyReport["types"] }) {
-  const inflowTypes = [...types.filter((type) => INFLOW_BEHAVIORS.has(type.behavior))].sort(
-    (a, b) => b.amountPaise - a.amountPaise
-  );
-  const outflowTypes = [...types.filter((type) => !INFLOW_BEHAVIORS.has(type.behavior))].sort(
-    (a, b) => b.amountPaise - a.amountPaise
-  );
-  const inflowPaise = inflowTypes.reduce((sum, type) => sum + type.amountPaise, 0);
-  const outflowPaise = outflowTypes.reduce((sum, type) => sum + type.amountPaise, 0);
+  const inflowParts = cashflowPartsFromTypes(types, "in");
+  const outflowParts = cashflowPartsFromTypes(types, "out");
+  const inflowPaise = inflowParts.reduce((sum, part) => sum + part.amountPaise, 0);
+  const outflowPaise = outflowParts.reduce((sum, part) => sum + part.amountPaise, 0);
   const savingsPaise = inflowPaise - outflowPaise;
 
   return (
-    <div className="cashflow-summary">
-      <div className="cashflow-summary-row">
-        <div className="cashflow-summary-line inflow">
-          <div className="cashflow-summary-head">
-            <span>Inflow</span>
-            <strong className="amount-in">{formatINR(inflowPaise)}</strong>
+    <div className="cashflow-summary" aria-label="Inflow, outflow and savings breakdown">
+      <div className="cashflow-summary-row cashflow-section">
+        <div className="cashflow-formula-left" aria-label="Inflow minus outflow">
+          <div className="cashflow-summary-line inflow">
+            <div className="cashflow-summary-head">
+              <span>Inflow</span>
+              <strong className="amount-in">{formatINR(inflowPaise)}</strong>
+            </div>
           </div>
-          <small>Money in</small>
-        </div>
-        <span className="cashflow-summary-operator">−</span>
-        <div className="cashflow-summary-line outflow">
-          <div className="cashflow-summary-head">
-            <span>Outflow</span>
-            <strong className="amount-out">{formatINR(outflowPaise)}</strong>
+          <span className="cashflow-summary-operator">−</span>
+          <div className="cashflow-summary-line outflow">
+            <div className="cashflow-summary-head">
+              <span>Outflow</span>
+              <strong className="amount-out">{formatINR(outflowPaise)}</strong>
+            </div>
           </div>
-          <small>Money out</small>
         </div>
         <span className="cashflow-summary-operator">=</span>
         <div className="cashflow-summary-line savings">
@@ -4347,14 +4352,11 @@ function CashflowSummary({ types }: { types: MonthlyReport["types"] }) {
               {signedImpact(savingsPaise)}
             </strong>
           </div>
-          <small>Inflow − Outflow</small>
         </div>
       </div>
 
-      <div className="cashflow-equations">
-        <CashflowEquation label="Inflow" total={inflowPaise} parts={inflowTypes} tone="in" />
-        <CashflowEquation label="Outflow" total={outflowPaise} parts={outflowTypes} tone="out" />
-      </div>
+      <CashflowEquation label="Inflow" total={inflowPaise} parts={inflowParts} tone="in" />
+      <CashflowEquation label="Outflow" total={outflowPaise} parts={outflowParts} tone="out" />
     </div>
   );
 }
@@ -4367,29 +4369,74 @@ function CashflowEquation({
 }: {
   label: string;
   total: number;
-  parts: MonthlyReport["types"];
+  parts: CashflowPart[];
   tone: "in" | "out";
 }) {
   return (
-    <p className="cashflow-equation">
-      <span className="cashflow-equation-total">
-        {label} <strong className={tone === "in" ? "amount-in" : "amount-out"}>{formatINR(total)}</strong>
-      </span>
-      <span className="cashflow-equation-eq">=</span>
-      {parts.length === 0 ? (
-        <span className="cashflow-equation-empty">Nothing yet</span>
-      ) : (
-        <span className="cashflow-equation-parts">
-          {parts.map((part, index) => (
-            <span className="cashflow-equation-part" key={part.typeId}>
+    <div className={`cashflow-equation-row cashflow-section ${tone}`}>
+      <div className="cashflow-equation-parts" aria-label={`${label} components`}>
+        {parts.length === 0 ? (
+          <span className="cashflow-equation-empty">Nothing yet</span>
+        ) : (
+          parts.map((part, index) => (
+            <span className="cashflow-equation-piece" key={part.id}>
               {index > 0 && <span className="cashflow-equation-plus">+</span>}
-              <span className="cashflow-equation-name">{part.name}</span>
-              <span className="cashflow-equation-amount">{formatINR(part.amountPaise)}</span>
+              <span className="cashflow-equation-part" style={{ "--cat-color": part.color } as React.CSSProperties}>
+                <span className="cashflow-equation-name">{part.name}</span>
+                <span className="cashflow-equation-amount">{formatINR(part.amountPaise)}</span>
+              </span>
             </span>
-          ))}
-        </span>
-      )}
-    </p>
+          ))
+        )}
+      </div>
+      <span className="cashflow-equation-eq">=</span>
+      <div className="cashflow-equation-total-card">
+        <span>{label}</span>
+        <strong className={tone === "in" ? "amount-in" : "amount-out"}>{formatINR(total)}</strong>
+      </div>
+    </div>
+  );
+}
+
+function OutflowMixChart({ types }: { types: MonthlyReport["types"] }) {
+  const outflowTypes = [...types.filter((type) => !INFLOW_BEHAVIORS.has(type.behavior))].sort(
+    (a, b) => b.amountPaise - a.amountPaise
+  );
+  const outflowPaise = outflowTypes.reduce((sum, type) => sum + type.amountPaise, 0);
+  const outflowSegments = consolidateDonutSegments(
+    outflowTypes.map((type) => ({
+      id: type.typeId,
+      name: type.name,
+      color: type.color,
+      amountPaise: type.amountPaise
+    }))
+  );
+
+  return (
+    <div className="report-analytics outflow-mix-analytics">
+      <div className="report-chart-header">
+        <div>
+          <span>Outflow mix</span>
+          <strong>{formatINR(outflowPaise)}</strong>
+        </div>
+      </div>
+      <div className="pie-panel">
+        <div className="pie-chart">
+          {outflowSegments.length === 0 || outflowPaise <= 0 ? (
+            <EmptyState text="No outflow yet for this period." />
+          ) : (
+            <DonutChart
+              segments={outflowSegments}
+              totalPaise={outflowPaise}
+              ariaLabel="Outflow mix by Type"
+              centerLabel="Outflow"
+              centerValue={formatINR(outflowPaise)}
+              className="report-donut-chart"
+            />
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -4419,6 +4466,12 @@ function ReportTypeAnalytics({
 
   return (
     <div className="report-analytics">
+      <div className="report-chart-header">
+        <div>
+          <span>SubType mix</span>
+          <strong>{selected.name}</strong>
+        </div>
+      </div>
       <div className="type-filter-chips">
         {types.map((type) => (
           <button
@@ -4439,6 +4492,7 @@ function ReportTypeAnalytics({
             ariaLabel={`${selected.name} SubType percentage chart`}
             centerLabel="Total"
             centerValue={formatINR(selected.amountPaise)}
+            className="report-donut-chart"
           />
         </div>
       </div>
