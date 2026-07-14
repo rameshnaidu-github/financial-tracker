@@ -189,6 +189,7 @@ export type Overview = {
     availableCashPaise: number;
     creditOutstandingPaise: number;
     totalSpendingPaise: number;
+    totalOutflowPaise: number;
     incomePaise: number;
     uncategorizedCount: number;
   };
@@ -230,6 +231,7 @@ export type MonthlyReport = {
   start: string;
   end: string;
   totalSpendingPaise: number;
+  totalOutflowPaise: number;
   incomePaise: number;
   emiPaise: number;
   loanPaise: number;

@@ -1,7 +1,12 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { DEFAULT_CATEGORY_TYPES, WEEK_START, CURRENCY } from "../shared/finance.ts";
+import {
+  DEFAULT_CATEGORY_TYPES,
+  SELF_TRANSFER_SUBCATEGORY_ID,
+  WEEK_START,
+  CURRENCY
+} from "../shared/finance.ts";
 import { ensureBackupDir, pruneBackupFiles } from "./backup-files.ts";
 
 const configuredDbPath = process.env.FINANCE_DB_PATH;
@@ -521,7 +526,7 @@ function seedTaxonomy() {
         subcategory.name,
         subcategory.icon,
         subcategory.color,
-        0,
+        subcategory.id === SELF_TRANSFER_SUBCATEGORY_ID ? 1 : 0,
         subIndex + 1
       );
     });

@@ -76,7 +76,13 @@ import type {
   UserProfile,
   WealthSummary
 } from "./types";
-import { AUTOPAY_DURATION_MONTH_OPTIONS, AUTOPAY_SUBCATEGORY_ID, MUTUAL_FUNDS_SUBCATEGORY_ID, INVESTMENT_TYPES } from "../shared/finance";
+import {
+  AUTOPAY_DURATION_MONTH_OPTIONS,
+  AUTOPAY_SUBCATEGORY_ID,
+  MUTUAL_FUNDS_SUBCATEGORY_ID,
+  SELF_TRANSFER_SUBCATEGORY_ID,
+  INVESTMENT_TYPES
+} from "../shared/finance";
 
 type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "subscriptions" | "categories" | "faq" | "profile";
 type Theme = "light" | "dark";
@@ -677,9 +683,6 @@ function OverviewPage({
       amountPaise: category.amountPaise
     }))
   );
-  const budgetAlerts =
-    budgetPlan?.lines.filter((line) => line.status === "critical" || line.status === "over") ?? [];
-
   return (
     <div className="page-grid">
       <div className="overview-toolbar">
@@ -693,42 +696,6 @@ function OverviewPage({
           {allExpanded ? "Collapse all" : "Expand all"}
         </button>
       </div>
-
-      {budgetAlerts.length > 0 && (
-        <section className="overview-budget-alert">
-          <div className="budget-alert-head">
-            <CircleAlert size={18} />
-            <strong>Budgets to watch</strong>
-            <button type="button" className="budget-alert-link" onClick={() => onNavigate("budgets")}>
-              Open budget planner
-            </button>
-          </div>
-          <table className="budget-alert-table">
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>SubType</th>
-                <th>Status</th>
-                <th className="budget-alert-percent">% Used</th>
-              </tr>
-            </thead>
-            <tbody>
-              {budgetAlerts.map((line) => (
-                <tr className={`budget-alert-row ${line.status}`} key={line.id}>
-                  <td>{line.typeName}</td>
-                  <td>{budgetSubLabel(line)}</td>
-                  <td>
-                    <span className={`budget-alert-status ${line.status}`}>{line.statusLabel}</span>
-                  </td>
-                  <td className="budget-alert-percent">
-                    <span>{line.usedPercent}%</span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
 
       <OverviewDisclosure title="Financial highlights" expanded={allExpanded}>
       <section className="summary-grid overview-summary">
@@ -748,8 +715,8 @@ function OverviewPage({
           tone="warning"
         />
         <SummaryCard
-          label="Tracked spending"
-          value={formatINR(overview.summary.totalSpendingPaise)}
+          label="Outflow"
+          value={formatINR(overview.summary.totalOutflowPaise)}
           icon={<BarChart3 />}
         />
         <SummaryCard
@@ -758,10 +725,6 @@ function OverviewPage({
           icon={<TrendingUp />}
         />
       </section>
-      <p className="helper-text overview-summary-note">
-        Tracked spending includes Expense, Loan, Investment and uncategorized report lines after refunds. It excludes
-        credit-card payments and transfers so money movement is not double-counted as spending.
-      </p>
       </OverviewDisclosure>
 
       <section className="two-column">
@@ -894,7 +857,7 @@ function CashflowPanel({ wealth }: { wealth: WealthSummary }) {
           <strong className="amount-in">{formatINR(cashflow.incomePaise)}</strong>
         </div>
         <div>
-          <span>Spending</span>
+          <span>Outflow</span>
           <strong className="amount-out">{formatINR(cashflow.expensePaise)}</strong>
         </div>
         <div>
@@ -1064,6 +1027,8 @@ function WeeklyEntryPage({
   const availableLoans = loans.filter((loan) => loan.subcategoryId === form.subcategoryId);
   const isAutopaySelected = form.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
   const isMutualFundsSelected = form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
+  const isSelfTransferSelected = form.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID;
+  const selfTransferTargets = selfTransferTargetAccounts(accounts, form.accountId);
   const expenseTotal = transactions
     .filter((transaction) => transaction.kind === "expense")
     .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
@@ -1100,7 +1065,8 @@ function WeeklyEntryPage({
         amountPaise: parseAmountToPaise(form.amount),
         direction: directionForBehavior(behavior),
         kind,
-        transferAccountId: behavior === "card_payment" ? form.transferAccountId : undefined,
+        transferAccountId:
+          behavior === "card_payment" || isSelfTransferSelected ? form.transferAccountId : undefined,
         loanId: behavior === "loan" ? form.loanId || undefined : undefined,
         loanPaymentType: behavior === "loan" && form.loanId ? form.loanPaymentType : undefined,
         subscriptionId:
@@ -1170,7 +1136,11 @@ function WeeklyEntryPage({
                     setForm({
                       ...form,
                       accountId: event.target.value,
-                      method: account?.type === "credit_card" ? "credit_card" : form.method
+                      method: account?.type === "credit_card" ? "credit_card" : form.method,
+                      transferAccountId:
+                        isSelfTransferSelected && form.transferAccountId === event.target.value
+                          ? ""
+                          : form.transferAccountId
                     });
                   }}
                   required
@@ -1246,7 +1216,14 @@ function WeeklyEntryPage({
                   <select
                     value={form.subcategoryId}
                     onChange={(event) =>
-                      setForm({ ...form, subcategoryId: event.target.value, loanId: "", subscriptionId: "", investmentId: "" })
+                      setForm({
+                        ...form,
+                        subcategoryId: event.target.value,
+                        transferAccountId: "",
+                        loanId: "",
+                        subscriptionId: "",
+                        investmentId: ""
+                      })
                     }
                   >
                     <option value="">Decide later</option>
@@ -1258,6 +1235,23 @@ function WeeklyEntryPage({
                   </select>
                 )}
               </label>
+              {isSelfTransferSelected && (
+                <label>
+                  Account
+                  <select
+                    value={form.transferAccountId}
+                    onChange={(event) => setForm({ ...form, transferAccountId: event.target.value })}
+                    required
+                  >
+                    <option value="">Choose account</option>
+                    {selfTransferTargets.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {isAutopaySelected && (
                 <label>
                   Subscription
@@ -1573,7 +1567,10 @@ function TransactionsPage({
         amountPaise,
         direction: directionForBehavior(behavior),
         kind,
-        transferAccountId: behavior === "card_payment" ? editDraft.transferAccountId : "",
+        transferAccountId:
+          behavior === "card_payment" || editDraft.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID
+            ? editDraft.transferAccountId
+            : "",
         loanId: behavior === "loan" ? editDraft.loanId : "",
         loanPaymentType: behavior === "loan" && editDraft.loanId ? editDraft.loanPaymentType : undefined,
         subscriptionId:
@@ -1793,6 +1790,8 @@ function TransactionEditRow({
   const availableLoans = loans.filter((loan) => loan.subcategoryId === draft.subcategoryId);
   const isAutopaySelected = draft.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
   const isMutualFundsSelected = draft.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
+  const isSelfTransferSelected = draft.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID;
+  const selfTransferTargets = selfTransferTargetAccounts(accounts, draft.accountId);
   const availableSubscriptions = subscriptions.filter(
     (subscription) => subscription.status === "active" || subscription.id === draft.subscriptionId
   );
@@ -1817,7 +1816,11 @@ function TransactionEditRow({
               onChange({
                 ...draft,
                 accountId: event.target.value,
-                method: nextAccount?.type === "credit_card" ? "credit_card" : draft.method
+                method: nextAccount?.type === "credit_card" ? "credit_card" : draft.method,
+                transferAccountId:
+                  isSelfTransferSelected && draft.transferAccountId === event.target.value
+                    ? ""
+                    : draft.transferAccountId
               });
             }}
           >
@@ -1901,7 +1904,14 @@ function TransactionEditRow({
             <select
               value={draft.subcategoryId}
               onChange={(event) =>
-                onChange({ ...draft, subcategoryId: event.target.value, loanId: "", subscriptionId: "", investmentId: "" })
+                onChange({
+                  ...draft,
+                  subcategoryId: event.target.value,
+                  transferAccountId: "",
+                  loanId: "",
+                  subscriptionId: "",
+                  investmentId: ""
+                })
               }
               disabled={!selectedType}
             >
@@ -1914,6 +1924,22 @@ function TransactionEditRow({
             </select>
           )}
         </label>
+        {isSelfTransferSelected && (
+          <label>
+            Account
+            <select
+              value={draft.transferAccountId}
+              onChange={(event) => onChange({ ...draft, transferAccountId: event.target.value })}
+            >
+              <option value="">Choose account</option>
+              {selfTransferTargets.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {isAutopaySelected && (
           <label>
             Subscription
@@ -3689,7 +3715,6 @@ function SubscriptionsPage({
   const monthlyTotal = active
     .filter((subscription) => subscription.status === "active")
     .reduce((sum, subscription) => sum + subscription.amountPaise, 0);
-  const totalPayments = subscriptions.reduce((sum, subscription) => sum + subscription.paymentCount, 0);
 
   function archive(subscription: AutopaySubscription) {
     requestConfirm({
@@ -3725,7 +3750,6 @@ function SubscriptionsPage({
       <section className="summary-grid mini loan-summary-grid">
         <SummaryCard label="Active subscriptions" value={String(activeCount)} icon={<CalendarClock />} />
         <SummaryCard label="Monthly total" value={formatINR(monthlyTotal)} icon={<ArrowDownUp />} tone="warning" />
-        <SummaryCard label="Payments logged" value={String(totalPayments)} icon={<Check />} />
       </section>
 
       <div className="two-column loans-layout">
@@ -4827,7 +4851,17 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "How are Inflow, Outflow and Savings in Reports calculated?",
     answer:
-      "Inflow adds up everything that brought money in for the period (income and refunds across all their categories). Outflow adds up everything that took money out (expense, loan, investment, transfer and any other outflow categories). Savings is simply Inflow minus Outflow — positive means you kept money, negative means you spent more than came in."
+      "Inflow adds up everything that brought money in for the period (income and refunds across all their categories). Outflow adds up everything that took money out (expense, loan, investment, transfer, credit-card payment and any other outflow categories). Savings is simply Inflow minus Outflow — positive means you kept money, negative means you spent more than came in. Self transfers are left out of both sides, because moving money between your own accounts is not income or spending. The Outflow figure on the Overview uses this exact same calculation."
+  },
+  {
+    question: "How do I move money between my own bank accounts?",
+    answer:
+      "Add a transaction on the account the money leaves, choose Type = Transfer and SubType = Self transfer, then pick the receiving bank account in the 'Account' dropdown that appears. Saving it lowers the source account's balance and raises the receiving account's balance by the same amount. Because the money never left you, a self transfer is not counted as Outflow or spending anywhere in Reports or the Overview."
+  },
+  {
+    question: "How is the Emergency-fund runway calculated?",
+    answer:
+      "It divides your liquid cash (the balance across your non-credit-card accounts) by your average monthly Outflow over the last three months, including the current one. For example, ₹3,00,000 of liquid cash against an average outflow of ₹60,000 a month gives a runway of 5 months. If there was no outflow in those three months there is nothing to divide by, so the runway shows as '—'."
   },
   {
     question: "How is the 'Spending mix' chart calculated?",
@@ -5339,8 +5373,9 @@ function draftFromTransaction(
     amount: (transaction.amountPaise / 100).toFixed(2),
     transferAccountId:
       transaction.transferAccountId ??
-      accounts.find((account) => account.type === "credit_card")?.id ??
-      "",
+      (transaction.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID
+        ? ""
+        : accounts.find((account) => account.type === "credit_card")?.id ?? ""),
     loanId: transaction.loanId ?? "",
     loanPaymentType: transaction.loanPaymentType ?? "emi",
     subscriptionId: transaction.subscriptionId ?? "",
@@ -5411,6 +5446,14 @@ function typeToCategory(type: CategoryType | MonthlyReport["types"][number]): Ca
   };
 }
 
+function selfTransferTargetAccounts(accounts: Account[], sourceAccountId: string) {
+  return accounts.filter((account) => account.type === "bank" && account.id !== sourceAccountId);
+}
+
+function isSelfTransfer(transaction: Transaction) {
+  return transaction.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID && Boolean(transaction.transferAccountId);
+}
+
 function accountImpact(account: Account, transactions: Transaction[]) {
   const amountPaise = transactions.reduce((sum, transaction) => {
     if (account.type === "credit_card") {
@@ -5420,7 +5463,11 @@ function accountImpact(account: Account, transactions: Transaction[]) {
       return sum;
     }
 
-    if (transaction.accountId !== account.id) return sum;
+    if (transaction.accountId !== account.id) {
+      return isSelfTransfer(transaction) && transaction.transferAccountId === account.id
+        ? sum + transaction.amountPaise
+        : sum;
+    }
     return sum + (transaction.direction === "inflow" ? transaction.amountPaise : -transaction.amountPaise);
   }, 0);
 

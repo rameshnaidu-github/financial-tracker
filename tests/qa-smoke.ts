@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
 import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
+import { SELF_TRANSFER_SUBCATEGORY_ID } from "../shared/finance.ts";
 import type { ReportType } from "../src/types.ts";
 
 const testDbPath = path.join(tmpdir(), `finance-tracker-qa-${Date.now()}.db`);
@@ -1617,6 +1618,229 @@ test("computes net worth, asset allocation, cashflow and runway", async () => {
 
   assert(typeof before.cashflow.savingsRatePercent === "number", "Savings rate should be a number.");
   assert(before.runwayMonths === null || before.runwayMonths >= 0, "Runway should be null or non-negative.");
+});
+
+test("self transfers move money between accounts without counting as outflow", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const source = services.createAccount({
+    name: `QA Self Source ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 50_000_00
+  });
+  const target = services.createAccount({
+    name: `QA Self Target ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 10_000_00
+  });
+  const card = services.createAccount({
+    name: `QA Self Card ${suffix}`,
+    type: "credit_card",
+    startingBalancePaise: 0,
+    creditLimitPaise: 1_00_000_00
+  });
+
+  const before = services.getMonthlyReport(undefined, "2026-09");
+
+  services.createTransaction({
+    date: "2026-09-10",
+    accountId: source.id,
+    method: "bank_transfer",
+    typeId: typeId("Transfer"),
+    subcategoryId: SELF_TRANSFER_SUBCATEGORY_ID,
+    amountPaise: 15_000_00,
+    direction: "outflow",
+    kind: "transfer",
+    transferAccountId: target.id
+  });
+
+  const accounts = services.listAccounts();
+  const sourceAfter = accounts.find((account) => account.id === source.id);
+  const targetAfter = accounts.find((account) => account.id === target.id);
+  assert(sourceAfter?.balancePaise === 35_000_00, "The source balance should drop by the transferred amount.");
+  assert(targetAfter?.balancePaise === 25_000_00, "The target balance should rise by the transferred amount.");
+
+  const after = services.getMonthlyReport(undefined, "2026-09");
+  assert(
+    after.totalOutflowPaise === before.totalOutflowPaise,
+    "A self transfer must not change the report outflow."
+  );
+  assert(
+    after.totalSpendingPaise === before.totalSpendingPaise,
+    "A self transfer must not change tracked spending."
+  );
+  assert(
+    !after.types.some((type) => type.subcategories.some((sub) => sub.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID)),
+    "Self transfers must not appear as a report line."
+  );
+
+  await assertRejects("Self transfer without a destination", () =>
+    services.createTransaction({
+      date: "2026-09-11",
+      accountId: source.id,
+      method: "bank_transfer",
+      typeId: typeId("Transfer"),
+      subcategoryId: SELF_TRANSFER_SUBCATEGORY_ID,
+      amountPaise: 1_000_00,
+      direction: "outflow",
+      kind: "transfer"
+    })
+  );
+
+  await assertRejects("Self transfer into the same account", () =>
+    services.createTransaction({
+      date: "2026-09-11",
+      accountId: source.id,
+      method: "bank_transfer",
+      typeId: typeId("Transfer"),
+      subcategoryId: SELF_TRANSFER_SUBCATEGORY_ID,
+      amountPaise: 1_000_00,
+      direction: "outflow",
+      kind: "transfer",
+      transferAccountId: source.id
+    })
+  );
+
+  await assertRejects("Self transfer into a credit card", () =>
+    services.createTransaction({
+      date: "2026-09-11",
+      accountId: source.id,
+      method: "bank_transfer",
+      typeId: typeId("Transfer"),
+      subcategoryId: SELF_TRANSFER_SUBCATEGORY_ID,
+      amountPaise: 1_000_00,
+      direction: "outflow",
+      kind: "transfer",
+      transferAccountId: card.id
+    })
+  );
+});
+
+test("report outflow covers every non-inflow type and matches the overview", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Outflow Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 5_00_000_00
+  });
+  const card = services.createAccount({
+    name: `QA Outflow Card ${suffix}`,
+    type: "credit_card",
+    startingBalancePaise: 0,
+    creditLimitPaise: 2_00_000_00
+  });
+
+  services.createTransaction({
+    date: "2026-10-05",
+    accountId: bank.id,
+    method: "upi",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 4_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+  services.createTransaction({
+    date: "2026-10-06",
+    accountId: bank.id,
+    method: "bank_transfer",
+    typeId: typeId("Transfer"),
+    subcategoryId: subcategoryId("Transfer", "Parents"),
+    amountPaise: 3_000_00,
+    direction: "outflow",
+    kind: "transfer"
+  });
+  services.createTransaction({
+    date: "2026-10-07",
+    accountId: card.id,
+    method: "credit_card",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Shopping"),
+    amountPaise: 2_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+  services.createTransaction({
+    date: "2026-10-08",
+    accountId: bank.id,
+    method: "bank_transfer",
+    typeId: typeId("Credit Card Payment"),
+    amountPaise: 2_000_00,
+    direction: "outflow",
+    kind: "card_payment",
+    transferAccountId: card.id
+  });
+
+  const report = services.getMonthlyReport(undefined, "2026-10");
+  const outflowFromTypes = cashflowPartsFromTypes(report.types as ReportType[], "out").reduce(
+    (sum, part) => sum + part.amountPaise,
+    0
+  );
+
+  // 4,000 expense + 3,000 transfer + 2,000 card expense + 2,000 card payment.
+  assert(report.totalOutflowPaise === 11_000_00, "Outflow should add up every non-inflow type.");
+  assert(
+    report.totalOutflowPaise === outflowFromTypes,
+    "The outflow total must equal the Reports outflow breakdown."
+  );
+
+  const overview = services.getOverview(undefined, "2026-10");
+  assert(
+    overview.summary.totalOutflowPaise === report.totalOutflowPaise,
+    "The overview outflow must match the report outflow."
+  );
+});
+
+test("budget totals keep budgeted equal to used plus remaining", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Budget Remaining Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 1_00_000_00
+  });
+
+  // Deliberately overspend one line so its remaining goes negative.
+  services.createTransaction({
+    date: "2026-11-05",
+    accountId: bank.id,
+    method: "upi",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 9_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+  services.createTransaction({
+    date: "2026-11-06",
+    accountId: bank.id,
+    method: "upi",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Transport"),
+    amountPaise: 1_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  services.createBudgetLine({
+    month: "2026-11",
+    scopeType: "subcategory",
+    scopeId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 5_000_00
+  });
+  services.createBudgetLine({
+    month: "2026-11",
+    scopeType: "subcategory",
+    scopeId: subcategoryId("Expense", "Transport"),
+    amountPaise: 4_000_00
+  });
+
+  const plan = services.getBudgetPlan("2026-11", "2026-11-30");
+  assert(plan.totals.amountPaise === 9_000_00, "Budgeted should be the sum of the budget lines.");
+  assert(plan.totals.actualPaise === 10_000_00, "Used should be the sum of the actuals.");
+  assert(
+    plan.totals.amountPaise === plan.totals.actualPaise + plan.totals.remainingPaise,
+    "Budgeted must equal used plus remaining, even when a line is over budget."
+  );
+  assert(plan.totals.remainingPaise === -1_000_00, "Remaining should go negative once spending passes the budget.");
 });
 
 let failed = 0;
