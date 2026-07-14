@@ -4,37 +4,44 @@ import { randomUUID } from "node:crypto";
 import ExcelJS from "exceljs";
 import {
   AUTOPAY_SUBCATEGORY_ID,
+  MUTUAL_FUNDS_SUBCATEGORY_ID,
   createAccountSchema,
   createAutopaySubscriptionSchema,
   createBudgetLineSchema,
   createBatchSchema,
   createCategoryTypeSchema,
+  createInvestmentSchema,
   createLoanSchema,
   createSubcategorySchema,
   createTransactionSchema,
   updateAccountSchema,
   updateAutopaySubscriptionSchema,
   updateBudgetLineSchema,
+  updateInvestmentSchema,
   updateLoanSchema,
   updateProfileSchema,
   updateSettingsSchema,
   updateTransactionSchema,
+  INVESTMENT_TYPES,
   type AccountType,
   type BudgetScopeType,
   type CreateAccountInput,
   type CreateAutopaySubscriptionInput,
   type CreateBudgetLineInput,
   type CreateCategoryTypeInput,
+  type CreateInvestmentInput,
   type CreateLoanInput,
   type CreateSubcategoryInput,
   type CreateTransactionInput,
   type Direction,
+  type InvestmentType,
   type LoanPaymentType,
   type TaxonomyBehavior,
   type TransactionKind,
   type UpdateAccountInput,
   type UpdateAutopaySubscriptionInput,
   type UpdateBudgetLineInput,
+  type UpdateInvestmentInput,
   type UpdateLoanInput,
   type UpdateProfileInput,
   type UpdateSettingsInput,
@@ -182,6 +189,8 @@ export type TransactionSummary = {
   loanInterestPaise: number | null;
   subscriptionId: string | null;
   subscriptionName: string | null;
+  investmentId: string | null;
+  investmentName: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -576,6 +585,152 @@ export function archiveAutopaySubscription(id: string) {
     "UPDATE autopay_subscriptions SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
   ).run(id);
   return { ok: true, mode: "archived" as const };
+}
+
+type InvestmentRow = {
+  id: string;
+  type: InvestmentType;
+  name: string;
+  invested_paise: number;
+  current_value_paise: number;
+  shares: number | null;
+  purchase_date: string | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InvestmentSummary = {
+  id: string;
+  type: InvestmentType;
+  typeLabel: string;
+  icon: string;
+  color: string;
+  name: string;
+  investedPaise: number;
+  currentValuePaise: number;
+  gainPaise: number;
+  gainPercent: number;
+  shares: number | null;
+  purchaseDate: string | null;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export function listInvestments(): InvestmentSummary[] {
+  const rows = asRecords<InvestmentRow>(
+    db
+      .prepare(
+        `SELECT id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at
+         FROM investments
+         ORDER BY created_at, id`
+      )
+      .all()
+  );
+  return rows.map(mapInvestment);
+}
+
+export function createInvestment(input: CreateInvestmentInput): InvestmentSummary {
+  const parsed = createInvestmentSchema.parse(input);
+  const id = randomUUID();
+  db.prepare(
+    `INSERT INTO investments (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    parsed.type,
+    parsed.name,
+    parsed.investedPaise,
+    parsed.currentValuePaise,
+    parsed.shares ?? null,
+    parsed.purchaseDate ?? null,
+    parsed.note ?? null
+  );
+  return requireInvestmentSummary(id);
+}
+
+export function updateInvestment(id: string, input: UpdateInvestmentInput): InvestmentSummary {
+  const existing = requireInvestmentRow(id);
+  const patch = updateInvestmentSchema.parse(input);
+  const merged = {
+    type: patch.type ?? existing.type,
+    name: patch.name ?? existing.name,
+    investedPaise: patch.investedPaise ?? existing.invested_paise,
+    currentValuePaise: patch.currentValuePaise ?? existing.current_value_paise,
+    shares: Object.prototype.hasOwnProperty.call(patch, "shares") ? patch.shares ?? null : existing.shares,
+    purchaseDate: Object.prototype.hasOwnProperty.call(patch, "purchaseDate")
+      ? patch.purchaseDate ?? null
+      : existing.purchase_date,
+    note: Object.prototype.hasOwnProperty.call(patch, "note") ? patch.note ?? null : existing.note
+  };
+  db.prepare(
+    `UPDATE investments
+     SET type = ?, name = ?, invested_paise = ?, current_value_paise = ?, shares = ?, purchase_date = ?, note = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  ).run(
+    merged.type,
+    merged.name,
+    merged.investedPaise,
+    merged.currentValuePaise,
+    merged.shares,
+    merged.purchaseDate,
+    merged.note,
+    id
+  );
+  return requireInvestmentSummary(id);
+}
+
+export function deleteInvestment(id: string) {
+  const result = db.prepare("DELETE FROM investments WHERE id = ?").run(id);
+  if (result.changes === 0) {
+    throw notFound("Investment not found.");
+  }
+  return { ok: true };
+}
+
+function requireInvestmentRow(id: string) {
+  const row = asRecord<InvestmentRow | undefined>(
+    db
+      .prepare(
+        `SELECT id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at
+         FROM investments
+         WHERE id = ?`
+      )
+      .get(id)
+  );
+  if (!row) {
+    throw notFound("Investment not found.");
+  }
+  return row;
+}
+
+function requireInvestmentSummary(id: string) {
+  return mapInvestment(requireInvestmentRow(id));
+}
+
+function mapInvestment(row: InvestmentRow): InvestmentSummary {
+  const meta = INVESTMENT_TYPES.find((type) => type.id === row.type) ?? INVESTMENT_TYPES[INVESTMENT_TYPES.length - 1];
+  const gainPaise = row.current_value_paise - row.invested_paise;
+  const gainPercent = row.invested_paise > 0 ? Math.round((gainPaise / row.invested_paise) * 100) : 0;
+  return {
+    id: row.id,
+    type: row.type,
+    typeLabel: meta.label,
+    icon: meta.icon,
+    color: meta.color,
+    name: row.name,
+    investedPaise: row.invested_paise,
+    currentValuePaise: row.current_value_paise,
+    gainPaise,
+    gainPercent,
+    shares: row.shares,
+    purchaseDate: row.purchase_date,
+    note: row.note,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
 }
 
 export function getBackupStatus() {
@@ -989,6 +1144,8 @@ export function listTransactions(query: TransactionQuery = {}): TransactionSumma
          LEFT JOIN loans l ON l.id = lp.loan_id
          LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
          LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
+         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
+         LEFT JOIN investments iv ON iv.id = ip.investment_id
 ${where}
          ORDER BY t.date DESC, t.created_at DESC
          LIMIT ${limit} OFFSET ${offset}`
@@ -1014,6 +1171,8 @@ export function getTransaction(id: string) {
          LEFT JOIN loans l ON l.id = lp.loan_id
          LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
          LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
+         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
+         LEFT JOIN investments iv ON iv.id = ip.investment_id
 WHERE t.id = ?`
       )
       .get(id)
@@ -1097,6 +1256,7 @@ function insertValidatedTransaction(parsed: CreateTransactionInput) {
   }
 
   syncAutopayPaymentForTransaction(id, parsed);
+  syncInvestmentPaymentForTransaction(id, parsed);
 
   return id;
 }
@@ -1108,6 +1268,7 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
   }
   const existingLoanPayment = getLoanPaymentForTransaction(id);
   const existingAutopayPayment = getAutopayPaymentForTransaction(id);
+  const existingInvestmentPayment = getInvestmentPaymentForTransaction(id);
   const existingSplits = getTransactionSplits(id);
   const patch = updateTransactionSchema.parse(input);
   if (Object.prototype.hasOwnProperty.call(patch, "loanId") && !patch.loanId) {
@@ -1132,11 +1293,15 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
     loanId: existingLoanPayment?.loan_id ?? undefined,
     loanPaymentType: existingLoanPayment?.payment_type ?? undefined,
     subscriptionId: existingAutopayPayment?.subscription_id ?? undefined,
+    investmentId: existingInvestmentPayment?.investment_id ?? undefined,
     splits: existingSplits.length ? existingSplits : undefined
   };
   Object.assign(mergedInput, patch);
   if (mergedInput.subcategoryId !== AUTOPAY_SUBCATEGORY_ID) {
     mergedInput.subscriptionId = undefined;
+  }
+  if (mergedInput.subcategoryId !== MUTUAL_FUNDS_SUBCATEGORY_ID) {
+    mergedInput.investmentId = undefined;
   }
   const merged = createTransactionSchema.parse(mergedInput);
   if (merged.kind !== "emi") {
@@ -1196,6 +1361,9 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
 
     db.prepare("DELETE FROM autopay_payments WHERE transaction_id = ?").run(id);
     syncAutopayPaymentForTransaction(id, merged, existingAutopayPayment?.subscription_id);
+
+    db.prepare("DELETE FROM investment_payments WHERE transaction_id = ?").run(id);
+    syncInvestmentPaymentForTransaction(id, merged);
   });
 
   return {
@@ -1254,6 +1422,108 @@ export function getOverview(accountId?: string, month = currentMonth()) {
     },
     recentTransactions: listTransactions({ accountId, limit: 8 }),
     categoryReport: monthly.categories.slice(0, 6)
+  };
+}
+
+export type WealthAllocationSegment = {
+  key: string;
+  label: string;
+  color: string;
+  valuePaise: number;
+};
+
+export type WealthSummary = {
+  netWorth: {
+    liquidPaise: number;
+    investmentsPaise: number;
+    liabilitiesPaise: number;
+    netWorthPaise: number;
+  };
+  history: Array<{ month: string; netWorthPaise: number }>;
+  allocation: WealthAllocationSegment[];
+  cashflow: {
+    incomePaise: number;
+    expensePaise: number;
+    savedPaise: number;
+    savingsRatePercent: number;
+  };
+  runwayMonths: number | null;
+};
+
+function computeNetWorthNow() {
+  const accounts = listAccounts().filter((account) => !account.isArchived);
+  const liquidPaise = accounts
+    .filter((account) => account.type === "bank" || account.type === "food_card")
+    .reduce((sum, account) => sum + account.balancePaise, 0);
+  const creditPaise = accounts
+    .filter((account) => account.type === "credit_card")
+    .reduce((sum, account) => sum + account.outstandingPaise, 0);
+  const investmentsPaise = listInvestments().reduce((sum, item) => sum + item.currentValuePaise, 0);
+  const loanPaise = listLoans(false).reduce((sum, loan) => sum + loan.outstandingPaise, 0);
+  const liabilitiesPaise = creditPaise + loanPaise;
+  return {
+    liquidPaise,
+    investmentsPaise,
+    liabilitiesPaise,
+    netWorthPaise: liquidPaise + investmentsPaise - liabilitiesPaise
+  };
+}
+
+export function getWealthSummary(): WealthSummary {
+  const month = currentMonth();
+  const netWorth = computeNetWorthNow();
+
+  // Freeze this month's snapshot so a net-worth history builds over time.
+  db.prepare(
+    `INSERT INTO net_worth_snapshots (month, liquid_paise, investments_paise, liabilities_paise, net_worth_paise)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(month) DO UPDATE SET
+       liquid_paise = excluded.liquid_paise,
+       investments_paise = excluded.investments_paise,
+       liabilities_paise = excluded.liabilities_paise,
+       net_worth_paise = excluded.net_worth_paise,
+       captured_at = CURRENT_TIMESTAMP`
+  ).run(month, netWorth.liquidPaise, netWorth.investmentsPaise, netWorth.liabilitiesPaise, netWorth.netWorthPaise);
+
+  const history = asRecords<{ month: string; net_worth_paise: number }>(
+    db
+      .prepare("SELECT month, net_worth_paise FROM net_worth_snapshots ORDER BY month ASC")
+      .all()
+  ).map((row) => ({ month: row.month, netWorthPaise: row.net_worth_paise }));
+
+  // Asset allocation — where the wealth currently sits (positive holdings only).
+  const investments = listInvestments();
+  const byType = (types: string[]) =>
+    investments.filter((item) => types.includes(item.type)).reduce((sum, item) => sum + item.currentValuePaise, 0);
+  const allocation: WealthAllocationSegment[] = [
+    { key: "cash", label: "Cash", color: "#0284c7", valuePaise: netWorth.liquidPaise },
+    { key: "equity", label: "Equity (stocks + MF)", color: "#4f46e5", valuePaise: byType(["stocks", "mutual_funds"]) },
+    { key: "gold", label: "Gold", color: "#d97706", valuePaise: byType(["gold"]) },
+    { key: "realestate", label: "Real estate", color: "#0f766e", valuePaise: byType(["land", "property"]) },
+    { key: "pf", label: "PF", color: "#059669", valuePaise: byType(["pf"]) },
+    { key: "other", label: "Other", color: "#64748b", valuePaise: byType(["other"]) }
+  ].filter((segment) => segment.valuePaise > 0);
+
+  // Cashflow this month.
+  const monthReport = getMonthlyReport(undefined, month);
+  const incomePaise = monthReport.incomePaise;
+  const expensePaise = monthReport.totalSpendingPaise;
+  const savedPaise = incomePaise - expensePaise;
+  const savingsRatePercent = incomePaise > 0 ? Math.round((savedPaise / incomePaise) * 100) : 0;
+
+  // Emergency-fund runway = liquid cash ÷ average monthly expense over the trailing 3 months.
+  const trailingExpenses = [0, 1, 2].map(
+    (back) => getMonthlyReport(undefined, addMonths(month, -back)).totalSpendingPaise
+  );
+  const avgExpense = trailingExpenses.reduce((sum, value) => sum + value, 0) / trailingExpenses.length;
+  const runwayMonths = avgExpense > 0 ? Math.round((netWorth.liquidPaise / avgExpense) * 10) / 10 : null;
+
+  return {
+    netWorth,
+    history,
+    allocation,
+    cashflow: { incomePaise, expensePaise, savedPaise, savingsRatePercent },
+    runwayMonths
   };
 }
 
@@ -1354,7 +1624,7 @@ export function deleteBudgetLine(id: string) {
   return { ok: true };
 }
 
-export type TrendMode = "month" | "year";
+export type TrendMode = "month" | "year" | "week";
 
 export type TrendPoint = {
   label: string;
@@ -1366,18 +1636,21 @@ export type TrendReport = {
   typeId: string;
   typeName: string;
   color: string;
+  month: string | null;
   points: TrendPoint[];
 };
 
 export function getTrendReport(
   accountId: string | undefined,
   typeId: string,
-  mode: TrendMode
+  mode: TrendMode,
+  month?: string
 ): TrendReport {
   const type = requireCategoryType(typeId);
   const now = new Date();
   const currentYear = now.getFullYear();
   const points: TrendPoint[] = [];
+  let selectedMonth: string | null = null;
 
   const amountForType = (report: ReturnType<typeof getMonthlyReport>) =>
     report.types.find((item) => item.typeId === typeId)?.amountPaise ?? 0;
@@ -1388,6 +1661,20 @@ export function getTrendReport(
       points.push({
         label: new Date(currentYear, index, 1).toLocaleDateString("en-IN", { month: "short" }),
         amountPaise: amountForType(getMonthlyReport(accountId, month))
+      });
+    }
+  } else if (mode === "week") {
+    // Week-on-week within a single month: split the month into 7-day windows
+    // so the chart stays readable instead of plotting every week of the year.
+    selectedMonth = /^\d{4}-\d{2}$/.test(month ?? "") ? (month as string) : currentMonth();
+    const daysInMonth = Number(monthEndDate(selectedMonth).slice(8, 10));
+    for (let startDay = 1; startDay <= daysInMonth; startDay += 7) {
+      const endDay = Math.min(startDay + 6, daysInMonth);
+      const from = `${selectedMonth}-${String(startDay).padStart(2, "0")}`;
+      const to = `${selectedMonth}-${String(endDay).padStart(2, "0")}`;
+      points.push({
+        label: `${startDay}–${endDay}`,
+        amountPaise: amountForType(getMonthlyReport(accountId, selectedMonth, from, to))
       });
     }
   } else {
@@ -1406,7 +1693,79 @@ export function getTrendReport(
     }
   }
 
-  return { mode, typeId, typeName: type.name, color: type.color, points };
+  return { mode, typeId, typeName: type.name, color: type.color, month: selectedMonth, points };
+}
+
+export type PaymentHistorySource = "loan" | "autopay" | "mutual_fund";
+
+export type PaymentHistory = {
+  source: string;
+  id: string;
+  year: number;
+  months: boolean[];
+};
+
+const PAYMENT_HISTORY_SOURCES = new Set<PaymentHistorySource>(["loan", "autopay", "mutual_fund"]);
+
+export function getPaymentHistory(
+  source: PaymentHistorySource,
+  id: string,
+  year: number
+): PaymentHistory {
+  if (!PAYMENT_HISTORY_SOURCES.has(source)) {
+    throw badRequest("Unknown payment history source.");
+  }
+
+  const safeYear = Math.min(Math.max(Math.trunc(Number(year) || 0), 2000), 2100);
+  const yearText = String(safeYear);
+
+  let rows: Array<{ month: string }>;
+  if (source === "loan") {
+    rows = asRecords<{ month: string }>(
+      db
+        .prepare(
+          `SELECT DISTINCT substr(t.date, 6, 2) AS month
+           FROM transactions t
+           JOIN loan_payments lp ON lp.transaction_id = t.id
+           WHERE lp.loan_id = ? AND substr(t.date, 1, 4) = ?`
+        )
+        .all(id, yearText)
+    );
+  } else if (source === "autopay") {
+    rows = asRecords<{ month: string }>(
+      db
+        .prepare(
+          `SELECT DISTINCT substr(t.date, 6, 2) AS month
+           FROM transactions t
+           JOIN autopay_payments ap ON ap.transaction_id = t.id
+           WHERE ap.subscription_id = ? AND substr(t.date, 1, 4) = ?`
+        )
+        .all(id, yearText)
+    );
+  } else {
+    // A month ticks only when a Mutual-Funds investment transaction is explicitly
+    // linked to THIS holding (via the investment picker), mirroring AutoPay/loan linking.
+    rows = asRecords<{ month: string }>(
+      db
+        .prepare(
+          `SELECT DISTINCT substr(t.date, 6, 2) AS month
+           FROM transactions t
+           JOIN investment_payments iph ON iph.transaction_id = t.id
+           WHERE iph.investment_id = ? AND substr(t.date, 1, 4) = ?`
+        )
+        .all(id, yearText)
+    );
+  }
+
+  const months = Array.from({ length: 12 }, () => false);
+  for (const row of rows) {
+    const index = Number(row.month) - 1;
+    if (index >= 0 && index < 12) {
+      months[index] = true;
+    }
+  }
+
+  return { source, id, year: safeYear, months };
 }
 
 export function getMonthlyReport(
@@ -2728,6 +3087,37 @@ function syncAutopayPaymentForTransaction(
   ).run(randomUUID(), subscription.id, transactionId);
 }
 
+function getInvestmentPaymentForTransaction(transactionId: string) {
+  return asRecord<{ id: string; investment_id: string; transaction_id: string } | undefined>(
+    db
+      .prepare(
+        `SELECT id, investment_id, transaction_id
+         FROM investment_payments
+         WHERE transaction_id = ?
+         LIMIT 1`
+      )
+      .get(transactionId)
+  );
+}
+
+function syncInvestmentPaymentForTransaction(transactionId: string, input: CreateTransactionInput) {
+  if (!input.investmentId) {
+    return;
+  }
+  if (input.subcategoryId !== MUTUAL_FUNDS_SUBCATEGORY_ID) {
+    throw badRequest("Only Mutual Funds transactions can be linked to a holding.");
+  }
+
+  const investment = requireInvestmentRow(input.investmentId);
+  if (investment.type !== "mutual_funds") {
+    throw badRequest("Linked holding must be a mutual fund.");
+  }
+  db.prepare(
+    `INSERT INTO investment_payments (id, investment_id, transaction_id)
+     VALUES (?, ?, ?)`
+  ).run(randomUUID(), investment.id, transactionId);
+}
+
 function syncLoanPaymentForTransaction(transactionId: string, input: CreateTransactionInput) {
   if (!input.loanId) {
     return;
@@ -3609,6 +3999,8 @@ function findDuplicateCandidates(input: {
          LEFT JOIN loans l ON l.id = lp.loan_id
          LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
          LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
+         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
+         LEFT JOIN investments iv ON iv.id = ip.investment_id
 WHERE t.id != ?
            AND t.account_id = ?
            AND t.amount_paise = ?
@@ -3728,6 +4120,8 @@ type JoinedFields = {
   loan_interest_paise: number | null;
   subscription_id: string | null;
   subscription_name: string | null;
+  investment_id: string | null;
+  investment_name: string | null;
 };
 
 const transactionSelectFields = `
@@ -3768,7 +4162,9 @@ const transactionSelectFields = `
   lp.principal_paise AS loan_principal_paise,
   lp.interest_paise AS loan_interest_paise,
   ap.subscription_id AS subscription_id,
-  s.name AS subscription_name
+  s.name AS subscription_name,
+  ip.investment_id AS investment_id,
+  iv.name AS investment_name
 `;
 
 function mapTransaction(row: TransactionRow & JoinedFields): TransactionSummary {
@@ -3809,6 +4205,8 @@ function mapTransaction(row: TransactionRow & JoinedFields): TransactionSummary 
     loanInterestPaise: row.loan_interest_paise,
     subscriptionId: row.subscription_id,
     subscriptionName: row.subscription_name,
+    investmentId: row.investment_id,
+    investmentName: row.investment_name,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

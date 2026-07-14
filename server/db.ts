@@ -136,6 +136,35 @@ export function initDatabase() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS investments (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'other')),
+      name TEXT NOT NULL,
+      invested_paise INTEGER NOT NULL CHECK (invested_paise >= 0),
+      current_value_paise INTEGER NOT NULL CHECK (current_value_paise >= 0),
+      shares REAL,
+      purchase_date TEXT,
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS investment_payments (
+      id TEXT PRIMARY KEY,
+      investment_id TEXT NOT NULL REFERENCES investments(id) ON DELETE CASCADE,
+      transaction_id TEXT NOT NULL UNIQUE REFERENCES transactions(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS net_worth_snapshots (
+      month TEXT PRIMARY KEY CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
+      liquid_paise INTEGER NOT NULL,
+      investments_paise INTEGER NOT NULL,
+      liabilities_paise INTEGER NOT NULL,
+      net_worth_paise INTEGER NOT NULL,
+      captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS budget_lines (
       id TEXT PRIMARY KEY,
       month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
@@ -161,6 +190,8 @@ export function initDatabase() {
   ensureLoanIndexes();
   ensureAutopayIndexes();
   ensureBudgetIndexes();
+  ensureInvestmentIndexes();
+  ensureInvestmentColumns();
   ensureTaxonomyIndexes();
   seedSettings();
   pruneBackupFiles();
@@ -188,6 +219,19 @@ function ensureBudgetIndexes() {
     CREATE INDEX IF NOT EXISTS idx_budget_lines_month ON budget_lines(month);
     CREATE INDEX IF NOT EXISTS idx_budget_lines_scope ON budget_lines(scope_type, scope_id);
   `);
+}
+
+function ensureInvestmentIndexes() {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_investments_type ON investments(type);
+    CREATE INDEX IF NOT EXISTS idx_investment_payments_investment ON investment_payments(investment_id);
+    CREATE INDEX IF NOT EXISTS idx_investment_payments_transaction ON investment_payments(transaction_id);
+  `);
+}
+
+function ensureInvestmentColumns() {
+  addColumnIfMissing("investments", "shares", "REAL");
+  addColumnIfMissing("investments", "purchase_date", "TEXT");
 }
 
 function migrateAccountNameConstraint() {

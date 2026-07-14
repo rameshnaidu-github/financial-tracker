@@ -8,13 +8,17 @@ import type {
   BudgetPlan,
   CategoryType,
   CreateTransactionPayload,
+  Investment,
+  InvestmentType,
   Loan,
   MonthlyReport,
+  PaymentHistory,
   Subcategory,
   Overview,
   Transaction,
   TrendReport,
-  UserProfile
+  UserProfile,
+  WealthSummary
 } from "./types";
 
 type ApiOptions = Omit<RequestInit, "body"> & {
@@ -55,6 +59,7 @@ export const Api = {
     api<UserProfile>("/api/profile", { method: "PATCH", body }),
   updateSettings: (body: { cardUtilizationAlertPercent: number }) =>
     api<Record<string, string>>("/api/settings", { method: "PATCH", body }),
+  wealth: () => api<WealthSummary>("/api/wealth"),
   overview: (accountId?: string, month?: string) => {
     const params = new URLSearchParams();
     if (accountId) params.set("accountId", accountId);
@@ -126,6 +131,29 @@ export const Api = {
   ) => api<AutopaySubscription>(`/api/subscriptions/${id}`, { method: "PATCH", body }),
   archiveSubscription: (id: string) =>
     api<{ ok: true; mode: "archived" }>(`/api/subscriptions/${id}`, { method: "DELETE" }),
+  investments: () => api<Investment[]>("/api/investments"),
+  createInvestment: (body: {
+    type: InvestmentType;
+    name: string;
+    investedPaise: number;
+    currentValuePaise: number;
+    shares?: number;
+    purchaseDate?: string;
+    note?: string;
+  }) => api<Investment>("/api/investments", { method: "POST", body }),
+  updateInvestment: (
+    id: string,
+    body: Partial<{
+      type: InvestmentType;
+      name: string;
+      investedPaise: number;
+      currentValuePaise: number;
+      shares: number;
+      purchaseDate: string;
+      note: string;
+    }>
+  ) => api<Investment>(`/api/investments/${id}`, { method: "PATCH", body }),
+  deleteInvestment: (id: string) => api<{ ok: true }>(`/api/investments/${id}`, { method: "DELETE" }),
   currentBatch: (weekStart: string, weekEnd: string) => {
     const params = new URLSearchParams({ weekStart, weekEnd });
     return api<Batch>(`/api/batches/current?${params}`);
@@ -158,10 +186,15 @@ export const Api = {
     if (to) params.set("to", to);
     return api<MonthlyReport>(`/api/reports/monthly?${params}`);
   },
-  trendReport: (typeId: string, mode: "month" | "year", accountId?: string) => {
+  trendReport: (typeId: string, mode: "month" | "year" | "week", accountId?: string, month?: string) => {
     const params = new URLSearchParams({ typeId, mode });
     if (accountId) params.set("accountId", accountId);
+    if (mode === "week" && month) params.set("month", month);
     return api<TrendReport>(`/api/reports/trends?${params}`);
+  },
+  paymentHistory: (source: "loan" | "autopay" | "mutual_fund", id: string, year: number) => {
+    const params = new URLSearchParams({ source, id, year: String(year) });
+    return api<PaymentHistory>(`/api/payment-history?${params}`);
   },
   budgetPlan: (month?: string) => {
     const params = new URLSearchParams();

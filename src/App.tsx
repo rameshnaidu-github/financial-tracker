@@ -6,11 +6,14 @@ import {
   Check,
   CircleHelp,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
   CreditCard,
   Download,
   FileSpreadsheet,
   Home,
+  Info,
   Landmark,
   Loader2,
   Archive,
@@ -43,6 +46,7 @@ import {
   todayISO
 } from "./format";
 import { IconGlyph } from "./icons";
+import { cashflowPartsFromTypes, INFLOW_BEHAVIORS, type CashflowPart } from "./report-cashflow";
 import type {
   Account,
   AutopaySubscription,
@@ -54,10 +58,13 @@ import type {
   Category,
   CategoryType,
   CreateTransactionPayload,
+  Investment,
+  InvestmentType,
   Loan,
   LoanPaymentType,
   MonthlyReport,
   Overview,
+  PaymentHistory,
   PaymentMethod,
   Subcategory,
   TaxonomyBehavior,
@@ -66,11 +73,12 @@ import type {
   TrendMode,
   TrendPoint,
   TrendReport,
-  UserProfile
+  UserProfile,
+  WealthSummary
 } from "./types";
-import { AUTOPAY_DURATION_MONTH_OPTIONS, AUTOPAY_SUBCATEGORY_ID } from "../shared/finance";
+import { AUTOPAY_DURATION_MONTH_OPTIONS, AUTOPAY_SUBCATEGORY_ID, MUTUAL_FUNDS_SUBCATEGORY_ID, INVESTMENT_TYPES } from "../shared/finance";
 
-type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "subscriptions" | "categories" | "faq" | "profile";
+type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "subscriptions" | "categories" | "faq" | "profile";
 type Theme = "light" | "dark";
 type DonutSegment = {
   id: string;
@@ -101,6 +109,7 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home }> = [
   { page: "budgets", label: "Budget Planner", icon: Target },
   { page: "accounts", label: "Accounts", icon: WalletCards },
   { page: "loans", label: "Loans", icon: Landmark },
+  { page: "investments", label: "Investments", icon: TrendingUp },
   { page: "subscriptions", label: "AutoPay", icon: CalendarClock },
   { page: "categories", label: "Categories", icon: Tags },
   { page: "faq", label: "FAQ", icon: CircleHelp },
@@ -115,6 +124,7 @@ const mobileLabels: Record<Page, string> = {
   budgets: "Bdgt",
   accounts: "Accts",
   loans: "Loan",
+  investments: "Invest",
   subscriptions: "Auto",
   categories: "Cats",
   faq: "FAQ",
@@ -129,6 +139,7 @@ const pagePaths: Record<Page, string> = {
   budgets: "/budgets",
   accounts: "/accounts",
   loans: "/loans",
+  investments: "/investments",
   subscriptions: "/subscriptions",
   categories: "/categories",
   faq: "/faq",
@@ -313,6 +324,7 @@ export default function App() {
   const accounts = bootstrap?.accounts ?? [];
   const loans = bootstrap?.loans ?? [];
   const subscriptions = bootstrap?.subscriptions ?? [];
+  const investments = bootstrap?.investments ?? [];
   const categoryTypes = bootstrap?.categoryTypes ?? [];
   const categories = flattenSubcategories(categoryTypes);
   const profile = bootstrap?.profile ?? emptyProfile;
@@ -326,6 +338,7 @@ export default function App() {
     activePage !== "accounts" &&
     activePage !== "budgets" &&
     activePage !== "loans" &&
+    activePage !== "investments" &&
     activePage !== "subscriptions" &&
     activePage !== "categories" &&
     activePage !== "faq" &&
@@ -429,6 +442,7 @@ export default function App() {
               accounts={activeAccounts}
               loans={loans.filter((loan) => !loan.isArchived)}
               subscriptions={subscriptions.filter((subscription) => !subscription.isArchived)}
+              mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
               categoryTypes={categoryTypes}
               refresh={refresh}
               refreshKey={refreshKey}
@@ -443,6 +457,7 @@ export default function App() {
               accounts={activeAccounts}
               loans={loans.filter((loan) => !loan.isArchived)}
               subscriptions={subscriptions}
+              mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
               categoryTypes={categoryTypes}
               refresh={refresh}
               refreshKey={refreshKey}
@@ -473,6 +488,14 @@ export default function App() {
             <LoansPage
               loans={loans}
               categoryTypes={categoryTypes}
+              refresh={refresh}
+              showNotice={showNotice}
+              requestConfirm={requestConfirm}
+            />
+          )}
+          {activePage === "investments" && (
+            <InvestmentsPage
+              investments={investments}
               refresh={refresh}
               showNotice={showNotice}
               requestConfirm={requestConfirm}
@@ -594,6 +617,7 @@ function OverviewPage({
   const [loadError, setLoadError] = useState("");
   const [allExpanded, setAllExpanded] = useState(true);
   const [budgetPlan, setBudgetPlan] = useState<BudgetPlan | null>(null);
+  const [wealth, setWealth] = useState<WealthSummary | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -617,6 +641,20 @@ function OverviewPage({
       })
       .catch(() => {
         if (active) setBudgetPlan(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [refreshKey]);
+
+  useEffect(() => {
+    let active = true;
+    Api.wealth()
+      .then((next) => {
+        if (active) setWealth(next);
+      })
+      .catch(() => {
+        if (active) setWealth(null);
       });
     return () => {
       active = false;
@@ -710,7 +748,7 @@ function OverviewPage({
           tone="warning"
         />
         <SummaryCard
-          label="This month spending"
+          label="Tracked spending"
           value={formatINR(overview.summary.totalSpendingPaise)}
           icon={<BarChart3 />}
         />
@@ -720,6 +758,10 @@ function OverviewPage({
           icon={<TrendingUp />}
         />
       </section>
+      <p className="helper-text overview-summary-note">
+        Tracked spending includes Expense, Loan, Investment and uncategorized report lines after refunds. It excludes
+        credit-card payments and transfers so money movement is not double-counted as spending.
+      </p>
       </OverviewDisclosure>
 
       <section className="two-column">
@@ -756,11 +798,12 @@ function OverviewPage({
           )}
         </CollapsiblePanel>
 
-        <CollapsiblePanel title="Income vs spending" expanded={allExpanded}>
-          <IncomeSpendingBars
-            incomePaise={overview.summary.incomePaise}
-            spendingPaise={overview.summary.totalSpendingPaise}
-          />
+        <CollapsiblePanel title="Net worth" expanded={allExpanded}>
+          {wealth ? (
+            <NetWorthPanel wealth={wealth} />
+          ) : (
+            <EmptyState text="Net worth is loading." />
+          )}
         </CollapsiblePanel>
       </section>
 
@@ -773,38 +816,105 @@ function OverviewPage({
           <BudgetGuardrails plan={budgetPlan} uncategorizedCount={overview.summary.uncategorizedCount} />
         </CollapsiblePanel>
       </section>
+
+      <section className="overview-report-section">
+        <CollapsiblePanel title="Asset allocation" expanded={allExpanded}>
+          {wealth && wealth.allocation.length > 0 ? (
+            <DonutChart
+              segments={wealth.allocation.map((segment) => ({
+                id: segment.key,
+                name: segment.label,
+                color: segment.color,
+                amountPaise: segment.valuePaise
+              }))}
+              totalPaise={wealth.allocation.reduce((sum, segment) => sum + segment.valuePaise, 0)}
+              ariaLabel="Asset allocation"
+              centerLabel="Assets"
+              centerValue={formatINR(wealth.allocation.reduce((sum, segment) => sum + segment.valuePaise, 0))}
+              className="overview-donut-chart overview-donut-chart--large"
+            />
+          ) : (
+            <EmptyState text="Add accounts or investments to see your allocation." />
+          )}
+        </CollapsiblePanel>
+      </section>
+
+      <section className="overview-report-section">
+        <CollapsiblePanel title={`This month's cashflow · ${formatMonth(overview.month)}`} expanded={allExpanded}>
+          {wealth ? <CashflowPanel wealth={wealth} /> : <EmptyState text="Cashflow is loading." />}
+        </CollapsiblePanel>
+      </section>
     </div>
   );
 }
 
-function IncomeSpendingBars({
-  incomePaise,
-  spendingPaise
-}: {
-  incomePaise: number;
-  spendingPaise: number;
-}) {
-  if (incomePaise <= 0 && spendingPaise <= 0) {
-    return <EmptyState text="No income or spending yet this month." />;
-  }
-
-  const max = Math.max(incomePaise, spendingPaise, 1);
-  const rows = [
-    { label: "Income", value: incomePaise, color: "var(--good)" },
-    { label: "Spending", value: spendingPaise, color: "var(--warning)" }
-  ];
-
+function NetWorthPanel({ wealth }: { wealth: WealthSummary }) {
+  const { netWorth, history } = wealth;
+  const points = history.map((row) => ({ label: formatMonth(row.month).slice(0, 3), amountPaise: row.netWorthPaise }));
   return (
-    <div className="compare-bars">
-      {rows.map((row) => (
-        <div className="compare-row" key={row.label}>
-          <span className="compare-label">{row.label}</span>
-          <div className="bar-track">
-            <div style={{ width: `${(row.value / max) * 100}%`, background: row.color }} />
-          </div>
-          <strong>{formatINR(row.value)}</strong>
+    <div className="net-worth-panel">
+      <div className="net-worth-headline">
+        <span>Total net worth</span>
+        <strong className={netWorth.netWorthPaise >= 0 ? "amount-in" : "amount-out"}>
+          {formatINR(netWorth.netWorthPaise)}
+        </strong>
+      </div>
+      <div className="net-worth-breakdown">
+        <div>
+          <span>Liquid cash</span>
+          <strong>{formatINR(netWorth.liquidPaise)}</strong>
         </div>
-      ))}
+        <div>
+          <span>Investments</span>
+          <strong>{formatINR(netWorth.investmentsPaise)}</strong>
+        </div>
+        <div>
+          <span>Liabilities</span>
+          <strong className="amount-out">−{formatINR(netWorth.liabilitiesPaise)}</strong>
+        </div>
+      </div>
+      {points.length >= 2 ? (
+        <TrendChart points={points} variant="line" color="#0284c7" />
+      ) : (
+        <p className="helper-text net-worth-hint">
+          A month-by-month net-worth chart builds here as you keep using the app.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function CashflowPanel({ wealth }: { wealth: WealthSummary }) {
+  const { cashflow, runwayMonths } = wealth;
+  return (
+    <div className="cashflow-panel">
+      <div className="cashflow-metrics">
+        <div>
+          <span>Income</span>
+          <strong className="amount-in">{formatINR(cashflow.incomePaise)}</strong>
+        </div>
+        <div>
+          <span>Spending</span>
+          <strong className="amount-out">{formatINR(cashflow.expensePaise)}</strong>
+        </div>
+        <div>
+          <span>Saved</span>
+          <strong className={cashflow.savedPaise >= 0 ? "amount-in" : "amount-out"}>
+            {signedImpact(cashflow.savedPaise)}
+          </strong>
+        </div>
+        <div>
+          <span>Savings rate</span>
+          <strong className={cashflow.savingsRatePercent >= 0 ? "amount-in" : "amount-out"}>
+            {cashflow.savingsRatePercent}%
+          </strong>
+        </div>
+      </div>
+      <div className="cashflow-runway">
+        <span>Emergency-fund runway</span>
+        <strong>{runwayMonths === null ? "—" : `${runwayMonths} months`}</strong>
+        <small>How long your liquid cash covers your recent average monthly spending.</small>
+      </div>
     </div>
   );
 }
@@ -862,6 +972,7 @@ function WeeklyEntryPage({
   accounts,
   loans,
   subscriptions,
+  mutualFunds,
   categoryTypes,
   refresh,
   refreshKey,
@@ -873,6 +984,7 @@ function WeeklyEntryPage({
   accounts: Account[];
   loans: Loan[];
   subscriptions: AutopaySubscription[];
+  mutualFunds: Investment[];
   categoryTypes: CategoryType[];
   refresh: () => Promise<void>;
   refreshKey: number;
@@ -905,7 +1017,8 @@ function WeeklyEntryPage({
     transferAccountId: accounts.find((account) => account.type === "credit_card")?.id ?? "",
     loanId: "",
     loanPaymentType: "emi" as LoanPaymentType,
-    subscriptionId: ""
+    subscriptionId: "",
+    investmentId: ""
   });
 
   const reloadWeek = useCallback(async () => {
@@ -950,6 +1063,7 @@ function WeeklyEntryPage({
   const selectedBehavior = selectedType?.behavior ?? "expense";
   const availableLoans = loans.filter((loan) => loan.subcategoryId === form.subcategoryId);
   const isAutopaySelected = form.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
+  const isMutualFundsSelected = form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
   const expenseTotal = transactions
     .filter((transaction) => transaction.kind === "expense")
     .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
@@ -990,7 +1104,9 @@ function WeeklyEntryPage({
         loanId: behavior === "loan" ? form.loanId || undefined : undefined,
         loanPaymentType: behavior === "loan" && form.loanId ? form.loanPaymentType : undefined,
         subscriptionId:
-          form.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? form.subscriptionId || undefined : undefined
+          form.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? form.subscriptionId || undefined : undefined,
+        investmentId:
+          form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? form.investmentId || undefined : undefined
       };
 
       const result = await Api.createTransaction(payload);
@@ -1003,7 +1119,8 @@ function WeeklyEntryPage({
         subcategoryId: "",
         loanId: "",
         loanPaymentType: "emi",
-        subscriptionId: ""
+        subscriptionId: "",
+        investmentId: ""
       }));
       await reloadWeek();
       await refresh();
@@ -1129,7 +1246,7 @@ function WeeklyEntryPage({
                   <select
                     value={form.subcategoryId}
                     onChange={(event) =>
-                      setForm({ ...form, subcategoryId: event.target.value, loanId: "", subscriptionId: "" })
+                      setForm({ ...form, subcategoryId: event.target.value, loanId: "", subscriptionId: "", investmentId: "" })
                     }
                   >
                     <option value="">Decide later</option>
@@ -1156,6 +1273,22 @@ function WeeklyEntryPage({
                           {subscription.name} · {formatINR(subscription.amountPaise)}
                         </option>
                       ))}
+                  </select>
+                </label>
+              )}
+              {isMutualFundsSelected && (
+                <label>
+                  Mutual fund
+                  <select
+                    value={form.investmentId}
+                    onChange={(event) => setForm({ ...form, investmentId: event.target.value })}
+                  >
+                    <option value="">Not linked yet</option>
+                    {mutualFunds.map((fund) => (
+                      <option key={fund.id} value={fund.id}>
+                        {fund.name}
+                      </option>
+                    ))}
                   </select>
                 </label>
               )}
@@ -1246,11 +1379,20 @@ function WeeklyEntryPage({
         </Panel>
 
         <Panel title="Account impact">
-          <div className="impact-stack">
-            {accounts.slice(0, 4).map((account) => (
-              <AccountImpactCard key={account.id} account={account} transactions={transactions} />
-            ))}
-          </div>
+          {(() => {
+            const impactedAccounts = accounts
+              .filter((account) => accountImpact(account, transactions).amountPaise !== 0)
+              .slice(0, 4);
+            return impactedAccounts.length === 0 ? (
+              <EmptyState text="No account activity this week yet." />
+            ) : (
+              <div className="impact-stack">
+                {impactedAccounts.map((account) => (
+                  <AccountImpactCard key={account.id} account={account} transactions={transactions} />
+                ))}
+              </div>
+            );
+          })()}
         </Panel>
       </aside>
     </div>
@@ -1303,6 +1445,7 @@ type TransactionEditDraft = {
   loanId: string;
   loanPaymentType: LoanPaymentType;
   subscriptionId: string;
+  investmentId: string;
 };
 
 function TransactionsPage({
@@ -1310,6 +1453,7 @@ function TransactionsPage({
   accounts,
   loans,
   subscriptions,
+  mutualFunds,
   categoryTypes,
   refresh,
   refreshKey,
@@ -1320,6 +1464,7 @@ function TransactionsPage({
   accounts: Account[];
   loans: Loan[];
   subscriptions: AutopaySubscription[];
+  mutualFunds: Investment[];
   categoryTypes: CategoryType[];
   refresh: () => Promise<void>;
   refreshKey: number;
@@ -1432,7 +1577,9 @@ function TransactionsPage({
         loanId: behavior === "loan" ? editDraft.loanId : "",
         loanPaymentType: behavior === "loan" && editDraft.loanId ? editDraft.loanPaymentType : undefined,
         subscriptionId:
-          editDraft.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? editDraft.subscriptionId : ""
+          editDraft.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? editDraft.subscriptionId : "",
+        investmentId:
+          editDraft.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? editDraft.investmentId : ""
       });
       setEditDraft(null);
       await loadPage();
@@ -1540,6 +1687,7 @@ function TransactionsPage({
                     accounts={accounts}
                     loans={loans}
                     subscriptions={subscriptions}
+                    mutualFunds={mutualFunds}
                     categoryTypes={categoryTypes}
                     cardAccounts={cardAccounts}
                     saving={savingEdit}
@@ -1616,6 +1764,7 @@ function TransactionEditRow({
   accounts,
   loans,
   subscriptions,
+  mutualFunds,
   categoryTypes,
   cardAccounts,
   saving,
@@ -1628,6 +1777,7 @@ function TransactionEditRow({
   accounts: Account[];
   loans: Loan[];
   subscriptions: AutopaySubscription[];
+  mutualFunds: Investment[];
   categoryTypes: CategoryType[];
   cardAccounts: Account[];
   saving: boolean;
@@ -1642,6 +1792,7 @@ function TransactionEditRow({
   const availableSubcategories = selectedType?.subcategories ?? [];
   const availableLoans = loans.filter((loan) => loan.subcategoryId === draft.subcategoryId);
   const isAutopaySelected = draft.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
+  const isMutualFundsSelected = draft.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
   const availableSubscriptions = subscriptions.filter(
     (subscription) => subscription.status === "active" || subscription.id === draft.subscriptionId
   );
@@ -1689,7 +1840,8 @@ function TransactionEditRow({
                 transferAccountId: cardAccounts[0]?.id ?? "",
                 loanId: "",
                 loanPaymentType: "emi",
-                subscriptionId: ""
+                subscriptionId: "",
+                investmentId: ""
               });
             }}
           >
@@ -1749,7 +1901,7 @@ function TransactionEditRow({
             <select
               value={draft.subcategoryId}
               onChange={(event) =>
-                onChange({ ...draft, subcategoryId: event.target.value, loanId: "", subscriptionId: "" })
+                onChange({ ...draft, subcategoryId: event.target.value, loanId: "", subscriptionId: "", investmentId: "" })
               }
               disabled={!selectedType}
             >
@@ -1773,6 +1925,22 @@ function TransactionEditRow({
               {availableSubscriptions.map((subscription) => (
                 <option key={subscription.id} value={subscription.id}>
                   {subscription.name} · {formatINR(subscription.amountPaise)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {isMutualFundsSelected && (
+          <label>
+            Mutual fund
+            <select
+              value={draft.investmentId}
+              onChange={(event) => onChange({ ...draft, investmentId: event.target.value })}
+            >
+              <option value="">Not linked yet</option>
+              {mutualFunds.map((fund) => (
+                <option key={fund.id} value={fund.id}>
+                  {fund.name}
                 </option>
               ))}
             </select>
@@ -1966,7 +2134,9 @@ function ReportsPage({
   const rangeIsValid = from <= to;
   const trendTypes = categoryTypes.filter((type) => type.behavior !== "card_payment");
   const [trendMode, setTrendMode] = useState<TrendMode>("month");
+  const [trendMonth, setTrendMonth] = useState(initialMonth);
   const [trendStyle, setTrendStyle] = useState<"bar" | "line">("bar");
+  const trendMonthOptions = useMemo(() => recentMonthOptions(initialMonth, 12), [initialMonth]);
   const [trendTypeId, setTrendTypeId] = useState(
     () => trendTypes.find((type) => type.behavior === "expense")?.id ?? trendTypes[0]?.id ?? ""
   );
@@ -1986,7 +2156,7 @@ function ReportsPage({
     let active = true;
     setTrend(null);
     setTrendError("");
-    Api.trendReport(trendTypeId, trendMode, selectedAccountId || undefined)
+    Api.trendReport(trendTypeId, trendMode, selectedAccountId || undefined, trendMonth)
       .then((next) => {
         if (active) setTrend(next);
       })
@@ -1996,7 +2166,7 @@ function ReportsPage({
     return () => {
       active = false;
     };
-  }, [trendTypeId, trendMode, selectedAccountId, refreshKey]);
+  }, [trendTypeId, trendMode, trendMonth, selectedAccountId, refreshKey]);
 
   useEffect(() => {
     if (!rangeIsValid) {
@@ -2034,6 +2204,11 @@ function ReportsPage({
   }, [report, selectedTypeId]);
 
   const selectedType = report?.types.find((type) => type.typeId === selectedTypeId) ?? report?.types[0];
+  const trendModeLabels: Record<TrendMode, string> = {
+    week: "Week on week",
+    month: "Month on month",
+    year: "Year on year"
+  };
 
   return (
     <div className="page-grid">
@@ -2069,17 +2244,15 @@ function ReportsPage({
             <p className="helper-text report-range">
               {formatShortDate(report.start)} to {formatShortDate(report.end)}
             </p>
-            <div className="summary-grid report-summary">
-              <SummaryCard label="Tracked outflow" value={formatINR(report.totalSpendingPaise)} icon={<BarChart3 />} />
-              <SummaryCard label="Loan" value={formatINR(report.loanPaise ?? report.emiPaise)} icon={<CreditCard />} tone="warning" />
-              <SummaryCard label="Investment" value={formatINR(report.investmentPaise)} icon={<ArrowDownUp />} />
-              <SummaryCard label="Income" value={formatINR(report.incomePaise)} icon={<WalletCards />} />
+            <CashflowSummary types={report.types} />
+            <div className="report-chart-grid">
+              <OutflowMixChart types={report.types} />
+              <ReportTypeAnalytics
+                types={report.types}
+                selectedTypeId={selectedType?.typeId ?? ""}
+                onSelect={setSelectedTypeId}
+              />
             </div>
-            <ReportTypeAnalytics
-              types={report.types}
-              selectedTypeId={selectedType?.typeId ?? ""}
-              onSelect={setSelectedTypeId}
-            />
             <CategoryBars categories={report.categories} />
             <a className="secondary-action export-link" href="/api/export/transactions.csv">
               <Download size={18} />
@@ -2091,22 +2264,35 @@ function ReportsPage({
 
       <Panel title="Trends">
         <div className="trend-controls">
-          <div className="segmented-control">
-            <button type="button" className={trendMode === "month" ? "active" : ""} onClick={() => setTrendMode("month")}>
-              Month on month
-            </button>
-            <button type="button" className={trendMode === "year" ? "active" : ""} onClick={() => setTrendMode("year")}>
-              Year on year
-            </button>
-          </div>
-          <div className="segmented-control">
-            <button type="button" className={trendStyle === "bar" ? "active" : ""} onClick={() => setTrendStyle("bar")}>
-              Bar
-            </button>
-            <button type="button" className={trendStyle === "line" ? "active" : ""} onClick={() => setTrendStyle("line")}>
-              Line
-            </button>
-          </div>
+          <label className="control-field toolbar-control trend-mode-control">
+            <span className="control-label">Period</span>
+            <select value={trendMode} onChange={(event) => setTrendMode(event.target.value as TrendMode)}>
+              {(["week", "month", "year"] as TrendMode[]).map((mode) => (
+                <option key={mode} value={mode}>
+                  {trendModeLabels[mode]}
+                </option>
+              ))}
+            </select>
+          </label>
+          {trendMode === "week" && (
+            <label className="control-field toolbar-control trend-month-control">
+              <span className="control-label">Month</span>
+              <select value={trendMonth} onChange={(event) => setTrendMonth(event.target.value)}>
+                {trendMonthOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="control-field toolbar-control trend-style-control">
+            <span className="control-label">Chart</span>
+            <select value={trendStyle} onChange={(event) => setTrendStyle(event.target.value as "bar" | "line")}>
+              <option value="bar">Bar</option>
+              <option value="line">Line</option>
+            </select>
+          </label>
           <label className="control-field toolbar-control trend-type-control">
             <span className="control-label">Type</span>
             <select value={trendTypeId} onChange={(event) => setTrendTypeId(event.target.value)}>
@@ -2127,12 +2313,21 @@ function ReportsPage({
           <PanelLoader label="Loading trend" />
         ) : trend.points.every((point) => point.amountPaise === 0) ? (
           <EmptyState
-            text={`No ${trend.typeName} recorded ${trendMode === "month" ? "this year" : "yet"}.`}
+            text={
+              trendMode === "week"
+                ? `No ${trend.typeName} recorded in ${formatMonth(trendMonth)}.`
+                : `No ${trend.typeName} recorded ${trendMode === "month" ? "this year" : "yet"}.`
+            }
           />
         ) : (
           <>
             <p className="helper-text trend-caption">
-              {trend.typeName} · {trendMode === "month" ? `${new Date().getFullYear()}, January to date` : "by year"}
+              {trend.typeName} ·{" "}
+              {trendMode === "week"
+                ? `${formatMonth(trendMonth)}, by week`
+                : trendMode === "month"
+                  ? `${new Date().getFullYear()}, January to date`
+                  : "by year"}
             </p>
             <TrendChart points={trend.points} variant={trendStyle} color={trend.color} />
           </>
@@ -2240,6 +2435,94 @@ function TrendChart({
         </g>
       ))}
     </svg>
+  );
+}
+
+const PAYMENT_HISTORY_MONTHS = [
+  "JAN",
+  "FEB",
+  "MAR",
+  "APR",
+  "MAY",
+  "JUN",
+  "JUL",
+  "AUG",
+  "SEP",
+  "OCT",
+  "NOV",
+  "DEC"
+];
+
+function PaymentHistoryGrid({
+  source,
+  id
+}: {
+  source: "loan" | "autopay" | "mutual_fund";
+  id: string;
+}) {
+  const [year, setYear] = useState(() => new Date().getFullYear());
+  const [months, setMonths] = useState<boolean[]>(() => Array.from({ length: 12 }, () => false));
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    Api.paymentHistory(source, id, year)
+      .then((history: PaymentHistory) => {
+        if (!active) return;
+        const next = Array.from({ length: 12 }, (_, index) => Boolean(history.months?.[index]));
+        setMonths(next);
+      })
+      .catch(() => {
+        if (active) setMonths(Array.from({ length: 12 }, () => false));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [source, id, year]);
+
+  return (
+    <div className="payment-history">
+      <div className="payment-history-header">
+        <span className="payment-history-title">Payment history</span>
+        <div className="payment-history-stepper">
+          <button
+            type="button"
+            aria-label="Previous year"
+            onClick={() => setYear((value) => value - 1)}
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <span className="payment-history-year">{year}</span>
+          <button
+            type="button"
+            aria-label="Next year"
+            onClick={() => setYear((value) => value + 1)}
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      </div>
+      <div className="payment-history-grid" aria-busy={loading}>
+        {PAYMENT_HISTORY_MONTHS.map((label, index) => {
+          const paid = months[index];
+          return (
+            <div className="payment-history-cell" key={label}>
+              <span
+                className={`payment-history-circle${paid ? " is-paid" : ""}`}
+                aria-label={`${label} ${paid ? "paid" : "not paid"}`}
+              >
+                {paid ? <Check size={18} strokeWidth={3} /> : null}
+              </span>
+              <span className="payment-history-month">{label}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -3035,8 +3318,351 @@ function LoanCard({
           </button>
         )}
       </div>
+
+      <PaymentHistoryGrid source="loan" id={loan.id} />
       </>}
     </article>
+  );
+}
+
+function InvestmentsPage({
+  investments,
+  refresh,
+  showNotice,
+  requestConfirm
+}: {
+  investments: Investment[];
+  refresh: () => Promise<void>;
+  showNotice: (message: string) => void;
+  requestConfirm: (request: ConfirmRequest) => void;
+}) {
+  const [editing, setEditing] = useState<Investment | null>(null);
+  const totalInvested = investments.reduce((sum, item) => sum + item.investedPaise, 0);
+  const totalCurrent = investments.reduce((sum, item) => sum + item.currentValuePaise, 0);
+  const totalGain = totalCurrent - totalInvested;
+  const returnPercent = totalInvested > 0 ? Math.round((totalGain / totalInvested) * 100) : 0;
+  const groups = INVESTMENT_TYPES.map((type) => ({
+    type,
+    items: investments.filter((item) => item.type === type.id)
+  })).filter((group) => group.items.length > 0);
+  const lastUpdated = investments.reduce(
+    (latest, item) => (item.updatedAt > latest ? item.updatedAt : latest),
+    ""
+  );
+
+  function remove(investment: Investment) {
+    requestConfirm({
+      message: "Remove this investment?",
+      detail: `${investment.name} will be removed from your portfolio.`,
+      confirmLabel: "Remove",
+      tone: "danger",
+      onConfirm: async () => {
+        try {
+          await Api.deleteInvestment(investment.id);
+          if (editing?.id === investment.id) setEditing(null);
+          await refresh();
+          showNotice("Investment removed.");
+        } catch (err) {
+          showNotice(err instanceof Error ? err.message : "Could not remove investment.");
+        }
+      }
+    });
+  }
+
+  return (
+    <div className="page-grid loans-page">
+      <section className="summary-grid report-summary">
+        <SummaryCard label="Invested" value={formatINR(totalInvested)} icon={<WalletCards />} />
+        <SummaryCard label="Current value" value={formatINR(totalCurrent)} icon={<BarChart3 />} />
+        <SummaryCard
+          label="Total gain"
+          value={signedImpact(totalGain)}
+          icon={<TrendingUp />}
+          tone={totalGain >= 0 ? "good" : "warning"}
+        />
+        <SummaryCard
+          label="Return"
+          value={`${returnPercent >= 0 ? "+" : ""}${returnPercent}%`}
+          icon={<ArrowDownUp />}
+          tone={totalGain >= 0 ? "good" : "warning"}
+        />
+      </section>
+
+      {lastUpdated && (
+        <p className="helper-text investments-asof">
+          <Info size={14} />
+          Values are entered manually — figures reflect what you last saved on{" "}
+          {formatDateWithYear(lastUpdated.slice(0, 10))}.
+        </p>
+      )}
+
+      <div className="two-column loans-layout">
+        <Panel title="Portfolio">
+          {groups.length === 0 ? (
+            <EmptyState text="No investments yet. Add your first holding on the right." />
+          ) : (
+            <div className="investment-groups">
+              {groups.map((group) => {
+                const invested = group.items.reduce((sum, item) => sum + item.investedPaise, 0);
+                const current = group.items.reduce((sum, item) => sum + item.currentValuePaise, 0);
+                return (
+                  <div className="investment-group" key={group.type.id}>
+                    <div className="investment-group-head">
+                      <span className="investment-group-name" style={{ color: group.type.color }}>
+                        <IconGlyph name={group.type.icon} size={15} />
+                        {group.type.label}
+                      </span>
+                      <strong>{formatINR(current)}</strong>
+                      <small className={current - invested >= 0 ? "amount-in" : "amount-out"}>
+                        {signedImpact(current - invested)}
+                      </small>
+                    </div>
+                    <div className="loan-card-grid">
+                      {group.items.map((investment) => (
+                        <InvestmentCard
+                          key={investment.id}
+                          investment={investment}
+                          onEdit={setEditing}
+                          onDelete={remove}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Panel>
+
+        <Panel title={editing ? "Edit investment" : "Add investment"}>
+          <InvestmentForm
+            key={editing?.id ?? "new-investment"}
+            investment={editing}
+            onCancel={editing ? () => setEditing(null) : undefined}
+            onSaved={async (message) => {
+              setEditing(null);
+              await refresh();
+              showNotice(message);
+            }}
+          />
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function InvestmentCard({
+  investment,
+  onEdit,
+  onDelete
+}: {
+  investment: Investment;
+  onEdit: (investment: Investment) => void;
+  onDelete: (investment: Investment) => void;
+}) {
+  const positive = investment.gainPaise >= 0;
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <article className="loan-card investment-card">
+      <div className="loan-card-header">
+        <div className="loan-title">
+          <span className="loan-icon" style={{ color: investment.color, background: `${investment.color}18` }}>
+            <IconGlyph name={investment.icon} size={18} />
+          </span>
+          <div>
+            <strong>{investment.name}</strong>
+            <span>
+              {investment.typeLabel}
+              {investment.type === "stocks" && investment.shares != null
+                ? ` · ${investment.shares} shares`
+                : ""}
+            </span>
+          </div>
+        </div>
+        <div className="loan-header-actions">
+          <span className={`investment-gain-badge ${positive ? "up" : "down"}`}>
+            {positive ? "+" : ""}
+            {investment.gainPercent}%
+          </span>
+          <button
+            type="button"
+            className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
+            aria-label={expanded ? `Collapse ${investment.name}` : `Expand ${investment.name}`}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            <ChevronDown size={18} />
+          </button>
+        </div>
+      </div>
+
+      <div className="loan-card-quick">
+        <span>Current value</span>
+        <strong>{formatINR(investment.currentValuePaise)}</strong>
+        <small className={positive ? "amount-in" : "amount-out"}>{signedImpact(investment.gainPaise)}</small>
+      </div>
+
+      {expanded && <>
+      <div className="investment-values">
+        <div>
+          <span>Invested</span>
+          <strong>{formatINR(investment.investedPaise)}</strong>
+        </div>
+        <div>
+          <span>Current</span>
+          <strong>{formatINR(investment.currentValuePaise)}</strong>
+        </div>
+        <div>
+          <span>Gain / loss</span>
+          <strong className={positive ? "amount-in" : "amount-out"}>{signedImpact(investment.gainPaise)}</strong>
+        </div>
+      </div>
+
+      {investment.purchaseDate && (
+        <p className="investment-note">Invested on {formatDateWithYear(investment.purchaseDate)}</p>
+      )}
+
+      {investment.note && <p className="investment-note">{investment.note}</p>}
+
+      <div className="loan-actions">
+        <button type="button" className="secondary-action" onClick={() => onEdit(investment)}>
+          <Pencil size={16} />
+          Edit
+        </button>
+        <button type="button" className="secondary-action danger-action" onClick={() => onDelete(investment)}>
+          <Trash2 size={16} />
+          Remove
+        </button>
+      </div>
+
+      {investment.type === "mutual_funds" && <PaymentHistoryGrid source="mutual_fund" id={investment.id} />}
+      </>}
+    </article>
+  );
+}
+
+function InvestmentForm({
+  investment,
+  onSaved,
+  onCancel
+}: {
+  investment: Investment | null;
+  onSaved: (message: string) => Promise<void>;
+  onCancel?: () => void;
+}) {
+  const [type, setType] = useState<InvestmentType>(investment?.type ?? "stocks");
+  const [name, setName] = useState(investment?.name ?? "");
+  const [invested, setInvested] = useState(investment ? amountInputFromPaise(investment.investedPaise) : "");
+  const [currentValue, setCurrentValue] = useState(
+    investment ? amountInputFromPaise(investment.currentValuePaise) : ""
+  );
+  const [sharesInput, setSharesInput] = useState(
+    investment?.shares != null ? String(investment.shares) : ""
+  );
+  const [purchaseDate, setPurchaseDate] = useState(investment?.purchaseDate ?? todayISO());
+  const [note, setNote] = useState(investment?.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!name.trim()) {
+      setError("Enter a name for this investment.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const shares =
+        type === "stocks" && sharesInput.trim() !== "" ? Number(sharesInput) : undefined;
+      const payload = {
+        type,
+        name: name.trim(),
+        investedPaise: parseAmountToPaise(invested),
+        currentValuePaise: parseAmountToPaise(currentValue),
+        shares,
+        purchaseDate: purchaseDate || undefined,
+        note: note.trim() || undefined
+      };
+      if (investment) {
+        await Api.updateInvestment(investment.id, { ...payload, note: note.trim() });
+        await onSaved("Investment updated.");
+      } else {
+        await Api.createInvestment(payload);
+        setName("");
+        setInvested("");
+        setCurrentValue("");
+        setSharesInput("");
+        setPurchaseDate(todayISO());
+        setNote("");
+        await onSaved("Investment added.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save investment.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="stack-form loan-form" onSubmit={submit}>
+      <label>
+        Type
+        <select value={type} onChange={(event) => setType(event.target.value as InvestmentType)}>
+          {INVESTMENT_TYPES.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Name
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Reliance, HDFC Flexicap, Plot in Mysore..." required />
+      </label>
+      <label>
+        Amount invested
+        <input value={invested} onChange={(event) => setInvested(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+      </label>
+      <label>
+        Current value
+        <input value={currentValue} onChange={(event) => setCurrentValue(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+      </label>
+      {type === "stocks" && (
+        <label>
+          Number of shares (optional)
+          <input
+            value={sharesInput}
+            onChange={(event) => setSharesInput(event.target.value)}
+            placeholder="e.g. 10.5"
+            type="number"
+            min="0"
+            step="any"
+            inputMode="decimal"
+          />
+        </label>
+      )}
+      <label>
+        Date invested
+        <input type="date" value={purchaseDate} onChange={(event) => setPurchaseDate(event.target.value)} />
+      </label>
+      <label>
+        Note (optional)
+        <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="e.g. broker, folio, plot size" />
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <div className="loan-form-actions">
+        {onCancel && (
+          <button type="button" className="secondary-action" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+        )}
+        <button className="primary-action" disabled={saving}>
+          <Plus size={18} />
+          {saving ? "Saving..." : investment ? "Save investment" : "Add investment"}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -3238,6 +3864,8 @@ function SubscriptionCard({
           </button>
         )}
       </div>
+
+      <PaymentHistoryGrid source="autopay" id={subscription.id} />
       </>}
     </article>
   );
@@ -3691,6 +4319,127 @@ function CategoryBars({ categories }: { categories: Array<{ name: string; icon: 
   );
 }
 
+function CashflowSummary({ types }: { types: MonthlyReport["types"] }) {
+  const inflowParts = cashflowPartsFromTypes(types, "in");
+  const outflowParts = cashflowPartsFromTypes(types, "out");
+  const inflowPaise = inflowParts.reduce((sum, part) => sum + part.amountPaise, 0);
+  const outflowPaise = outflowParts.reduce((sum, part) => sum + part.amountPaise, 0);
+  const savingsPaise = inflowPaise - outflowPaise;
+
+  return (
+    <div className="cashflow-summary" aria-label="Inflow, outflow and savings breakdown">
+      <div className="cashflow-summary-row cashflow-section">
+        <div className="cashflow-formula-left" aria-label="Inflow minus outflow">
+          <div className="cashflow-summary-line inflow">
+            <div className="cashflow-summary-head">
+              <span>Inflow</span>
+              <strong className="amount-in">{formatINR(inflowPaise)}</strong>
+            </div>
+          </div>
+          <span className="cashflow-summary-operator">−</span>
+          <div className="cashflow-summary-line outflow">
+            <div className="cashflow-summary-head">
+              <span>Outflow</span>
+              <strong className="amount-out">{formatINR(outflowPaise)}</strong>
+            </div>
+          </div>
+        </div>
+        <span className="cashflow-summary-operator">=</span>
+        <div className="cashflow-summary-line savings">
+          <div className="cashflow-summary-head">
+            <span>Savings</span>
+            <strong className={savingsPaise >= 0 ? "amount-in" : "amount-out"}>
+              {signedImpact(savingsPaise)}
+            </strong>
+          </div>
+        </div>
+      </div>
+
+      <CashflowEquation label="Inflow" total={inflowPaise} parts={inflowParts} tone="in" />
+      <CashflowEquation label="Outflow" total={outflowPaise} parts={outflowParts} tone="out" />
+    </div>
+  );
+}
+
+function CashflowEquation({
+  label,
+  total,
+  parts,
+  tone
+}: {
+  label: string;
+  total: number;
+  parts: CashflowPart[];
+  tone: "in" | "out";
+}) {
+  return (
+    <div className={`cashflow-equation-row cashflow-section ${tone}`}>
+      <div className="cashflow-equation-parts" aria-label={`${label} components`}>
+        {parts.length === 0 ? (
+          <span className="cashflow-equation-empty">Nothing yet</span>
+        ) : (
+          parts.map((part, index) => (
+            <span className="cashflow-equation-piece" key={part.id}>
+              {index > 0 && <span className="cashflow-equation-plus">+</span>}
+              <span className="cashflow-equation-part" style={{ "--cat-color": part.color } as React.CSSProperties}>
+                <span className="cashflow-equation-name">{part.name}</span>
+                <span className="cashflow-equation-amount">{formatINR(part.amountPaise)}</span>
+              </span>
+            </span>
+          ))
+        )}
+      </div>
+      <span className="cashflow-equation-eq">=</span>
+      <div className="cashflow-equation-total-card">
+        <span>{label}</span>
+        <strong className={tone === "in" ? "amount-in" : "amount-out"}>{formatINR(total)}</strong>
+      </div>
+    </div>
+  );
+}
+
+function OutflowMixChart({ types }: { types: MonthlyReport["types"] }) {
+  const outflowTypes = [...types.filter((type) => !INFLOW_BEHAVIORS.has(type.behavior))].sort(
+    (a, b) => b.amountPaise - a.amountPaise
+  );
+  const outflowPaise = outflowTypes.reduce((sum, type) => sum + type.amountPaise, 0);
+  const outflowSegments = consolidateDonutSegments(
+    outflowTypes.map((type) => ({
+      id: type.typeId,
+      name: type.name,
+      color: type.color,
+      amountPaise: type.amountPaise
+    }))
+  );
+
+  return (
+    <div className="report-analytics outflow-mix-analytics">
+      <div className="report-chart-header">
+        <div>
+          <span>Outflow mix</span>
+          <strong>{formatINR(outflowPaise)}</strong>
+        </div>
+      </div>
+      <div className="pie-panel">
+        <div className="pie-chart">
+          {outflowSegments.length === 0 || outflowPaise <= 0 ? (
+            <EmptyState text="No outflow yet for this period." />
+          ) : (
+            <DonutChart
+              segments={outflowSegments}
+              totalPaise={outflowPaise}
+              ariaLabel="Outflow mix by Type"
+              centerLabel="Outflow"
+              centerValue={formatINR(outflowPaise)}
+              className="report-donut-chart"
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ReportTypeAnalytics({
   types,
   selectedTypeId,
@@ -3717,6 +4466,12 @@ function ReportTypeAnalytics({
 
   return (
     <div className="report-analytics">
+      <div className="report-chart-header">
+        <div>
+          <span>SubType mix</span>
+          <strong>{selected.name}</strong>
+        </div>
+      </div>
       <div className="type-filter-chips">
         {types.map((type) => (
           <button
@@ -3737,6 +4492,7 @@ function ReportTypeAnalytics({
             ariaLabel={`${selected.name} SubType percentage chart`}
             centerLabel="Total"
             centerValue={formatINR(selected.amountPaise)}
+            className="report-donut-chart"
           />
         </div>
       </div>
@@ -4057,6 +4813,21 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
     question: "How does AutoPay 'Payments made' count work?",
     answer:
       "Each time you add a transaction, choose SubType = AutoPay, and link it to a subscription, that subscription's counter goes up by one. Deleting or unlinking the transaction lowers the count again."
+  },
+  {
+    question: "How does a mutual fund's monthly payment history (the ticks) work?",
+    answer:
+      "It works just like AutoPay. When you add an investment transaction, choose SubType = Mutual Funds and pick which fund it belongs to from the 'Mutual fund' dropdown. A month is ticked only for the specific fund that has a linked transaction that month — funds without a tracked payment stay unticked. Older transactions that were never linked to a fund won't tick until you edit them and choose the fund."
+  },
+  {
+    question: "Are my investment values updated automatically?",
+    answer:
+      "No. Stocks, mutual funds, gold, land, property and PF values are entered by you and stay fixed until you edit them. The Investments page shows the date you last saved a change so you know how current the figures are. Open a holding with the chevron (▾) to see its full details and payment history."
+  },
+  {
+    question: "How are Inflow, Outflow and Savings in Reports calculated?",
+    answer:
+      "Inflow adds up everything that brought money in for the period (income and refunds across all their categories). Outflow adds up everything that took money out (expense, loan, investment, transfer and any other outflow categories). Savings is simply Inflow minus Outflow — positive means you kept money, negative means you spent more than came in."
   },
   {
     question: "How is the 'Spending mix' chart calculated?",
@@ -4538,6 +5309,17 @@ function monthEndForInput(month: string) {
   ].join("-");
 }
 
+function recentMonthOptions(fromMonth: string, count: number) {
+  const [year, monthNumber] = fromMonth.split("-").map(Number);
+  const options: Array<{ value: string; label: string }> = [];
+  for (let back = 0; back < count; back += 1) {
+    const date = new Date(year, monthNumber - 1 - back, 1);
+    const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    options.push({ value, label: formatMonth(value) });
+  }
+  return options;
+}
+
 function draftFromTransaction(
   transaction: Transaction,
   categoryTypes: CategoryType[],
@@ -4561,7 +5343,8 @@ function draftFromTransaction(
       "",
     loanId: transaction.loanId ?? "",
     loanPaymentType: transaction.loanPaymentType ?? "emi",
-    subscriptionId: transaction.subscriptionId ?? ""
+    subscriptionId: transaction.subscriptionId ?? "",
+    investmentId: transaction.investmentId ?? ""
   };
 }
 

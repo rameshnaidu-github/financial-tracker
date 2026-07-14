@@ -103,6 +103,8 @@ export type Transaction = {
   loanInterestPaise: number | null;
   subscriptionId: string | null;
   subscriptionName: string | null;
+  investmentId: string | null;
+  investmentName: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -155,6 +157,7 @@ export type Bootstrap = {
   categoryTypes: CategoryType[];
   loans: Loan[];
   subscriptions: AutopaySubscription[];
+  investments: Investment[];
 };
 
 export type UserProfile = {
@@ -235,7 +238,45 @@ export type MonthlyReport = {
   types: ReportType[];
 };
 
-export type TrendMode = "month" | "year";
+export type WealthSummary = {
+  netWorth: {
+    liquidPaise: number;
+    investmentsPaise: number;
+    liabilitiesPaise: number;
+    netWorthPaise: number;
+  };
+  history: Array<{ month: string; netWorthPaise: number }>;
+  allocation: Array<{ key: string; label: string; color: string; valuePaise: number }>;
+  cashflow: {
+    incomePaise: number;
+    expensePaise: number;
+    savedPaise: number;
+    savingsRatePercent: number;
+  };
+  runwayMonths: number | null;
+};
+
+export type InvestmentType = "stocks" | "mutual_funds" | "gold" | "land" | "property" | "pf" | "other";
+
+export type Investment = {
+  id: string;
+  type: InvestmentType;
+  typeLabel: string;
+  icon: string;
+  color: string;
+  name: string;
+  investedPaise: number;
+  currentValuePaise: number;
+  gainPaise: number;
+  gainPercent: number;
+  shares: number | null;
+  purchaseDate: string | null;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TrendMode = "month" | "year" | "week";
 
 export type TrendPoint = {
   label: string;
@@ -247,8 +288,11 @@ export type TrendReport = {
   typeId: string;
   typeName: string;
   color: string;
+  month: string | null;
   points: TrendPoint[];
 };
+
+export type PaymentHistory = { source: string; id: string; year: number; months: boolean[] };
 
 export type BudgetStatus = "safe" | "watch" | "critical" | "over";
 
@@ -321,6 +365,7 @@ export type CreateTransactionPayload = {
   loanId?: string;
   loanPaymentType?: LoanPaymentType;
   subscriptionId?: string;
+  investmentId?: string;
   splits?: Array<{
     categoryId: string;
     amountPaise: number;

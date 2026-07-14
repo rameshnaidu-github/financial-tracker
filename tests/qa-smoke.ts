@@ -3,6 +3,8 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
+import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
+import type { ReportType } from "../src/types.ts";
 
 const testDbPath = path.join(tmpdir(), `finance-tracker-qa-${Date.now()}.db`);
 const testBackupDir = path.join(tmpdir(), `finance-tracker-backups-${Date.now()}`);
@@ -215,6 +217,146 @@ test("creates bank and credit-card accounts with limits", () => {
   assert(bank.balancePaise === 10_000_000, "Bank starting balance should be tracked.");
   assert(card.creditLimitPaise === 15_000_000, "Credit limit should be tracked.");
   assert(card.availableLimitPaise === 15_000_000, "Available card limit should equal limit before spends.");
+});
+
+test("keeps monthly inflow source SubTypes separate in reports", () => {
+  assert(state.bankId, "Bank should exist.");
+  const createdIds: string[] = [];
+  const addIncome = (subcategoryName: string, amountPaise: number) => {
+    const created = services.createTransaction({
+      date: "2026-06-08",
+      accountId: state.bankId!,
+      method: "bank_transfer",
+      merchant: `QA ${subcategoryName} income`,
+      typeId: typeId("Income"),
+      subcategoryId: subcategoryId("Income", subcategoryName),
+      amountPaise,
+      direction: "inflow",
+      kind: "income"
+    });
+    const id = created.transaction?.id;
+    assert(id, `${subcategoryName} income transaction should be created.`);
+    createdIds.push(id);
+  };
+
+  try {
+    addIncome("Loan", 300_000);
+    addIncome("Mutual Funds", 450_000);
+    addIncome("Other income", 300_000);
+
+    const report = services.getMonthlyReport(undefined, "2026-06");
+    const incomeType = report.types.find((type) => type.name === "Income");
+    assert(incomeType, "Income Type should be present in report breakdown.");
+    const incomeSources = new Map(
+      incomeType.subcategories.map((subcategory) => [subcategory.name, subcategory.amountPaise])
+    );
+
+    assert(report.incomePaise === 1_050_000, "Report income should include every inflow source.");
+    assert(incomeType.amountPaise === 1_050_000, "Income Type total should equal all income SubTypes.");
+    assert(incomeSources.get("Loan") === 300_000, "Loan income should remain a separate inflow source.");
+    assert(incomeSources.get("Mutual Funds") === 450_000, "Mutual Funds income should remain a separate inflow source.");
+    assert(incomeSources.get("Other income") === 300_000, "Other income should remain a separate inflow source.");
+  } finally {
+    for (const id of createdIds) {
+      services.deleteTransaction(id);
+    }
+  }
+});
+
+test("builds report cashflow from inflow SubTypes and outflow Types", () => {
+  const reportTypes: ReportType[] = [
+    {
+      typeId: "income",
+      name: "Income",
+      behavior: "income",
+      icon: "wallet",
+      color: "#059669",
+      amountPaise: 700_000,
+      share: 70,
+      subcategories: [
+        {
+          subcategoryId: "salary",
+          name: "Salary",
+          icon: "wallet",
+          color: "#059669",
+          amountPaise: 500_000,
+          share: 50
+        },
+        {
+          subcategoryId: "mutual-funds",
+          name: "Mutual Funds",
+          icon: "trending-up",
+          color: "#2563eb",
+          amountPaise: 200_000,
+          share: 20
+        }
+      ]
+    },
+    {
+      typeId: "expense",
+      name: "Expense",
+      behavior: "expense",
+      icon: "receipt",
+      color: "#dc2626",
+      amountPaise: 120_000,
+      share: 12,
+      subcategories: [
+        {
+          subcategoryId: "groceries",
+          name: "Groceries",
+          icon: "shopping-cart",
+          color: "#dc2626",
+          amountPaise: 120_000,
+          share: 12
+        }
+      ]
+    },
+    {
+      typeId: "transfer",
+      name: "Transfer",
+      behavior: "transfer",
+      icon: "arrow-right-left",
+      color: "#0f766e",
+      amountPaise: 80_000,
+      share: 8,
+      subcategories: []
+    },
+    {
+      typeId: "card-payment",
+      name: "Credit Card Payment",
+      behavior: "card_payment",
+      icon: "credit-card",
+      color: "#7c3aed",
+      amountPaise: 100_000,
+      share: 10,
+      subcategories: [
+        {
+          subcategoryId: "axis-card",
+          name: "Axis Card",
+          icon: "credit-card",
+          color: "#7c3aed",
+          amountPaise: 100_000,
+          share: 10
+        }
+      ]
+    }
+  ];
+
+  const inflowParts = cashflowPartsFromTypes(reportTypes, "in");
+  const outflowParts = cashflowPartsFromTypes(reportTypes, "out");
+
+  assert(
+    inflowParts.map((part) => part.name).join(",") === "Salary,Mutual Funds",
+    "Inflow should expand Income into its SubTypes."
+  );
+  assert(
+    outflowParts.map((part) => part.name).join(",") === "Expense,Credit Card Payment,Transfer",
+    "Outflow should remain grouped by Type, including Credit Card Payment and Transfer."
+  );
+  assert(
+    outflowParts.reduce((sum, part) => sum + part.amountPaise, 0) === 300_000,
+    "Outflow total should include every outflow Type."
+  );
 });
 
 test("rejects credit-card account without credit limit", async () => {
@@ -1171,7 +1313,7 @@ test("rolls back Excel-created records when transaction insertion fails", async 
   );
 });
 
-test("builds month-on-month and year-on-year trend reports per Type", async () => {
+test("builds week-, month- and year-on-year trend reports per Type", async () => {
   const suffix = Date.now().toString().slice(-5);
   const bank = services.createAccount({
     name: `QA Trend Bank ${suffix}`,
@@ -1231,6 +1373,21 @@ test("builds month-on-month and year-on-year trend reports per Type", async () =
     "Income trend for this account should be zero when only expenses exist."
   );
 
+  const weekly = services.getTrendReport(bank.id, typeId("Expense"), "week", currentMonth);
+  assert(weekly.month === currentMonth, "Week trend should echo the selected month.");
+  assert(
+    weekly.points.length >= 4 && weekly.points.length <= 5,
+    "A month should split into 4–5 week buckets."
+  );
+  assert(
+    weekly.points[1].amountPaise === 2_000_00,
+    "The 8–14 week bucket should hold the 10th's expense."
+  );
+  assert(
+    weekly.points.reduce((sum, point) => sum + point.amountPaise, 0) === 2_000_00,
+    "Week buckets should only include the selected month's expense."
+  );
+
   await assertRejects("unknown trend type", () => services.getTrendReport(undefined, "type_missing", "month"));
 });
 
@@ -1249,6 +1406,217 @@ test("stores the card utilization alert threshold with validation", async () => 
     services.getSettings().card_utilization_alert_percent === "45",
     "Rejected updates should not change the stored threshold."
   );
+});
+
+test("tracks investment holdings with computed gain and validation", async () => {
+  const stock = services.createInvestment({
+    type: "stocks",
+    name: "QA Reliance",
+    investedPaise: 1_00_000_00,
+    currentValuePaise: 1_35_000_00,
+    shares: 12.5,
+    purchaseDate: "2026-03-15"
+  });
+  assert(stock.gainPaise === 35_000_00, "Gain should be current minus invested.");
+  assert(stock.gainPercent === 35, "Gain percent should be computed.");
+  assert(stock.typeLabel === "Stocks", "Type label should resolve from metadata.");
+  assert(stock.shares === 12.5, "Fractional shares should round-trip through create.");
+  assert(stock.purchaseDate === "2026-03-15", "Purchase date should round-trip through create.");
+
+  const mf = services.createInvestment({
+    type: "mutual_funds",
+    name: "QA Flexicap",
+    investedPaise: 2_00_000_00,
+    currentValuePaise: 1_80_000_00,
+    purchaseDate: "2026-01-05"
+  });
+  assert(mf.gainPaise === -20_000_00 && mf.gainPercent === -10, "Losses should be negative.");
+  assert(mf.shares === null, "Shares should be optional for non-stock holdings.");
+  assert(mf.purchaseDate === "2026-01-05", "Purchase date should round-trip for non-stocks.");
+
+  const updated = services.updateInvestment(stock.id, { currentValuePaise: 90_000_00 });
+  assert(updated.gainPaise === -10_000_00, "Updating current value should recompute the gain.");
+  assert(updated.shares === 12.5, "Untouched shares should persist across an update.");
+  assert(updated.purchaseDate === "2026-03-15", "Untouched purchase date should persist across an update.");
+
+  const reshared = services.updateInvestment(stock.id, { shares: 20, purchaseDate: "2026-04-01" });
+  assert(reshared.shares === 20 && reshared.purchaseDate === "2026-04-01", "Shares and date should be updatable.");
+
+  const list = services.listInvestments();
+  assert(list.length >= 2, "Investments should be listed.");
+  assert(
+    list.find((item) => item.id === stock.id)?.shares === 20,
+    "Updated shares should be reflected in the list."
+  );
+
+  await assertRejects("unknown investment type", () =>
+    services.createInvestment({ type: "crypto" as never, name: "X", investedPaise: 100, currentValuePaise: 200 })
+  );
+
+  services.deleteInvestment(mf.id);
+  assert(!services.listInvestments().some((item) => item.id === mf.id), "Deleted investment should be gone.");
+  await assertRejects("delete missing investment", () => services.deleteInvestment(mf.id));
+});
+
+test("builds a monthly payment-history grid and rejects unknown sources", async () => {
+  assert(state.bankId, "Bank should exist.");
+  const loan = services.createLoan({
+    name: "QA Payment History Loan",
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    principalAmountPaise: 12_000_000,
+    startingOutstandingPaise: 12_000_000,
+    startMonth: "2029-01",
+    annualInterestRateBps: 1000,
+    tenureMonths: 24,
+    monthlyEmiPaise: 500_000
+  });
+
+  services.createTransaction({
+    date: "2029-03-10",
+    accountId: state.bankId,
+    method: "bank_transfer",
+    merchant: "QA history EMI",
+    typeId: typeId("Loan"),
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    amountPaise: 500_000,
+    direction: "outflow",
+    kind: "emi",
+    loanId: loan.id,
+    loanPaymentType: "emi"
+  });
+
+  const history = services.getPaymentHistory("loan", loan.id, 2029);
+  assert(history.months.length === 12, "Payment history should always have 12 months.");
+  assert(history.months[2] === true, "March (index 2) should be marked paid.");
+  assert(
+    history.months.filter((paid) => paid).length === 1,
+    "Only the paid month should be true."
+  );
+  assert(history.year === 2029 && history.source === "loan", "History should echo its scope.");
+
+  const otherYear = services.getPaymentHistory("loan", loan.id, 2030);
+  assert(
+    otherYear.months.every((paid) => paid === false),
+    "A year with no payments should be all false."
+  );
+
+  await assertRejects("invalid payment history source", () =>
+    services.getPaymentHistory("stocks" as never, loan.id, 2029)
+  );
+});
+
+test("scopes mutual-fund payment history to the linked holding only", async () => {
+  assert(state.bankId, "Bank should exist.");
+  const fundA = services.createInvestment({
+    type: "mutual_funds",
+    name: "QA Fund Alpha",
+    investedPaise: 5_000_00,
+    currentValuePaise: 5_500_00
+  });
+  const fundB = services.createInvestment({
+    type: "mutual_funds",
+    name: "QA Fund Beta",
+    investedPaise: 3_000_00,
+    currentValuePaise: 2_900_00
+  });
+
+  // A SIP into fund A during April 2031, explicitly linked to that holding.
+  services.createTransaction({
+    date: "2031-04-12",
+    accountId: state.bankId,
+    method: "upi",
+    merchant: "QA SIP Alpha",
+    typeId: typeId("Investment"),
+    subcategoryId: subcategoryId("Investment", "Mutual Funds"),
+    amountPaise: 250_000,
+    direction: "outflow",
+    kind: "investment",
+    investmentId: fundA.id
+  });
+
+  // A mutual-fund investment that is NOT linked to any holding must not tick anyone.
+  services.createTransaction({
+    date: "2031-06-01",
+    accountId: state.bankId,
+    method: "upi",
+    merchant: "QA unlinked MF",
+    typeId: typeId("Investment"),
+    subcategoryId: subcategoryId("Investment", "Mutual Funds"),
+    amountPaise: 100_000,
+    direction: "outflow",
+    kind: "investment"
+  });
+
+  const alpha = services.getPaymentHistory("mutual_fund", fundA.id, 2031);
+  assert(alpha.months[3] === true, "April (index 3) should tick for the linked fund.");
+  assert(
+    alpha.months.filter((paid) => paid).length === 1,
+    "Only the linked month should tick for fund A."
+  );
+
+  const beta = services.getPaymentHistory("mutual_fund", fundB.id, 2031);
+  assert(
+    beta.months.every((paid) => paid === false),
+    "A fund with no linked payments must show no ticks (not all funds)."
+  );
+
+  await assertRejects("mutual-fund link requires the Mutual Funds subtype", () =>
+    services.createTransaction({
+      date: "2031-04-15",
+      accountId: state.bankId!,
+      method: "upi",
+      merchant: "QA wrong subtype",
+      typeId: typeId("Expense"),
+      subcategoryId: subcategoryId("Expense", "Groceries"),
+      amountPaise: 50_000,
+      direction: "outflow",
+      kind: "expense",
+      investmentId: fundA.id
+    })
+  );
+});
+
+test("computes net worth, asset allocation, cashflow and runway", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Wealth Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 3_00_000_00
+  });
+  services.createInvestment({
+    type: "stocks",
+    name: `QA Wealth Stock ${suffix}`,
+    investedPaise: 1_00_000_00,
+    currentValuePaise: 1_50_000_00
+  });
+  services.createInvestment({
+    type: "gold",
+    name: `QA Wealth Gold ${suffix}`,
+    investedPaise: 50_000_00,
+    currentValuePaise: 60_000_00
+  });
+
+  const before = services.getWealthSummary();
+  // Net worth = liquid + investments − liabilities (no loans/cards here).
+  assert(
+    before.netWorth.netWorthPaise === before.netWorth.liquidPaise + before.netWorth.investmentsPaise - before.netWorth.liabilitiesPaise,
+    "Net worth must equal liquid + investments − liabilities."
+  );
+  assert(before.netWorth.investmentsPaise >= 2_10_000_00, "Investments should include both holdings' current value.");
+  const equity = before.allocation.find((segment) => segment.key === "equity");
+  const gold = before.allocation.find((segment) => segment.key === "gold");
+  assert(equity && equity.valuePaise >= 1_50_000_00, "Equity allocation should include the stock's current value.");
+  assert(gold && gold.valuePaise === 60_000_00, "Gold allocation should equal the gold holding value.");
+
+  // Snapshot persisted and reflected in history for the current month.
+  assert(before.history.length >= 1, "A net-worth snapshot should be recorded for the current month.");
+  assert(
+    before.history[before.history.length - 1].netWorthPaise === before.netWorth.netWorthPaise,
+    "The latest history point should equal the live net worth."
+  );
+
+  assert(typeof before.cashflow.savingsRatePercent === "number", "Savings rate should be a number.");
+  assert(before.runwayMonths === null || before.runwayMonths >= 0, "Runway should be null or non-negative.");
 });
 
 let failed = 0;
