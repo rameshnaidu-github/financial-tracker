@@ -1093,6 +1093,64 @@ a {
   color: var(--muted);
 }
 
+.cashflow-equations {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.cashflow-equation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.cashflow-equation-total {
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.cashflow-equation-eq {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.cashflow-equation-parts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.cashflow-equation-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cashflow-equation-plus {
+  color: var(--muted);
+  font-weight: 800;
+  margin-right: 2px;
+}
+
+.cashflow-equation-name {
+  color: var(--muted);
+}
+
+.cashflow-equation-amount {
+  font-weight: 800;
+}
+
+.cashflow-equation-empty {
+  color: var(--muted);
+}
+
 @media (max-width: 640px) {
   .cashflow-summary-row {
     flex-direction: column;

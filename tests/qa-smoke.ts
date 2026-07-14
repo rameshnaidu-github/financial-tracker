@@ -1171,7 +1171,7 @@ test("rolls back Excel-created records when transaction insertion fails", async 
   );
 });
 
-test("builds month-on-month and year-on-year trend reports per Type", async () => {
+test("builds week-, month- and year-on-year trend reports per Type", async () => {
   const suffix = Date.now().toString().slice(-5);
   const bank = services.createAccount({
     name: `QA Trend Bank ${suffix}`,
@@ -1229,6 +1229,21 @@ test("builds month-on-month and year-on-year trend reports per Type", async () =
   assert(
     income.points.every((point) => point.amountPaise === 0),
     "Income trend for this account should be zero when only expenses exist."
+  );
+
+  const weekly = services.getTrendReport(bank.id, typeId("Expense"), "week", currentMonth);
+  assert(weekly.month === currentMonth, "Week trend should echo the selected month.");
+  assert(
+    weekly.points.length >= 4 && weekly.points.length <= 5,
+    "A month should split into 4–5 week buckets."
+  );
+  assert(
+    weekly.points[1].amountPaise === 2_000_00,
+    "The 8–14 week bucket should hold the 10th's expense."
+  );
+  assert(
+    weekly.points.reduce((sum, point) => sum + point.amountPaise, 0) === 2_000_00,
+    "Week buckets should only include the selected month's expense."
   );
 
   await assertRejects("unknown trend type", () => services.getTrendReport(undefined, "type_missing", "month"));

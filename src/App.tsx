@@ -2129,7 +2129,9 @@ function ReportsPage({
   const rangeIsValid = from <= to;
   const trendTypes = categoryTypes.filter((type) => type.behavior !== "card_payment");
   const [trendMode, setTrendMode] = useState<TrendMode>("month");
+  const [trendMonth, setTrendMonth] = useState(initialMonth);
   const [trendStyle, setTrendStyle] = useState<"bar" | "line">("bar");
+  const trendMonthOptions = useMemo(() => recentMonthOptions(initialMonth, 12), [initialMonth]);
   const [trendTypeId, setTrendTypeId] = useState(
     () => trendTypes.find((type) => type.behavior === "expense")?.id ?? trendTypes[0]?.id ?? ""
   );
@@ -2149,7 +2151,7 @@ function ReportsPage({
     let active = true;
     setTrend(null);
     setTrendError("");
-    Api.trendReport(trendTypeId, trendMode, selectedAccountId || undefined)
+    Api.trendReport(trendTypeId, trendMode, selectedAccountId || undefined, trendMonth)
       .then((next) => {
         if (active) setTrend(next);
       })
@@ -2159,7 +2161,7 @@ function ReportsPage({
     return () => {
       active = false;
     };
-  }, [trendTypeId, trendMode, selectedAccountId, refreshKey]);
+  }, [trendTypeId, trendMode, trendMonth, selectedAccountId, refreshKey]);
 
   useEffect(() => {
     if (!rangeIsValid) {
@@ -2232,12 +2234,6 @@ function ReportsPage({
             <p className="helper-text report-range">
               {formatShortDate(report.start)} to {formatShortDate(report.end)}
             </p>
-            <div className="summary-grid report-summary">
-              <SummaryCard label="Tracked outflow" value={formatINR(report.totalSpendingPaise)} icon={<BarChart3 />} />
-              <SummaryCard label="Loan" value={formatINR(report.loanPaise ?? report.emiPaise)} icon={<CreditCard />} tone="warning" />
-              <SummaryCard label="Investment" value={formatINR(report.investmentPaise)} icon={<ArrowDownUp />} />
-              <SummaryCard label="Income" value={formatINR(report.incomePaise)} icon={<WalletCards />} />
-            </div>
             <CashflowSummary types={report.types} />
             <ReportTypeAnalytics
               types={report.types}
@@ -2256,6 +2252,9 @@ function ReportsPage({
       <Panel title="Trends">
         <div className="trend-controls">
           <div className="segmented-control">
+            <button type="button" className={trendMode === "week" ? "active" : ""} onClick={() => setTrendMode("week")}>
+              Week on week
+            </button>
             <button type="button" className={trendMode === "month" ? "active" : ""} onClick={() => setTrendMode("month")}>
               Month on month
             </button>
@@ -2263,6 +2262,18 @@ function ReportsPage({
               Year on year
             </button>
           </div>
+          {trendMode === "week" && (
+            <label className="control-field toolbar-control trend-month-control">
+              <span className="control-label">Month</span>
+              <select value={trendMonth} onChange={(event) => setTrendMonth(event.target.value)}>
+                {trendMonthOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <div className="segmented-control">
             <button type="button" className={trendStyle === "bar" ? "active" : ""} onClick={() => setTrendStyle("bar")}>
               Bar
@@ -2291,12 +2302,21 @@ function ReportsPage({
           <PanelLoader label="Loading trend" />
         ) : trend.points.every((point) => point.amountPaise === 0) ? (
           <EmptyState
-            text={`No ${trend.typeName} recorded ${trendMode === "month" ? "this year" : "yet"}.`}
+            text={
+              trendMode === "week"
+                ? `No ${trend.typeName} recorded in ${formatMonth(trendMonth)}.`
+                : `No ${trend.typeName} recorded ${trendMode === "month" ? "this year" : "yet"}.`
+            }
           />
         ) : (
           <>
             <p className="helper-text trend-caption">
-              {trend.typeName} · {trendMode === "month" ? `${new Date().getFullYear()}, January to date` : "by year"}
+              {trend.typeName} ·{" "}
+              {trendMode === "week"
+                ? `${formatMonth(trendMonth)}, by week`
+                : trendMode === "month"
+                  ? `${new Date().getFullYear()}, January to date`
+                  : "by year"}
             </p>
             <TrendChart points={trend.points} variant={trendStyle} color={trend.color} />
           </>
@@ -4291,14 +4311,15 @@ function CategoryBars({ categories }: { categories: Array<{ name: string; icon: 
 const INFLOW_BEHAVIORS = new Set(["income", "refund"]);
 
 function CashflowSummary({ types }: { types: MonthlyReport["types"] }) {
-  const inflowTypes = types.filter((type) => INFLOW_BEHAVIORS.has(type.behavior));
-  const outflowTypes = types.filter((type) => !INFLOW_BEHAVIORS.has(type.behavior));
+  const inflowTypes = [...types.filter((type) => INFLOW_BEHAVIORS.has(type.behavior))].sort(
+    (a, b) => b.amountPaise - a.amountPaise
+  );
+  const outflowTypes = [...types.filter((type) => !INFLOW_BEHAVIORS.has(type.behavior))].sort(
+    (a, b) => b.amountPaise - a.amountPaise
+  );
   const inflowPaise = inflowTypes.reduce((sum, type) => sum + type.amountPaise, 0);
   const outflowPaise = outflowTypes.reduce((sum, type) => sum + type.amountPaise, 0);
   const savingsPaise = inflowPaise - outflowPaise;
-
-  const nameList = (list: MonthlyReport["types"]) =>
-    list.length ? list.map((type) => type.name).join(" + ") : "Nothing yet";
 
   return (
     <div className="cashflow-summary">
@@ -4308,7 +4329,7 @@ function CashflowSummary({ types }: { types: MonthlyReport["types"] }) {
             <span>Inflow</span>
             <strong className="amount-in">{formatINR(inflowPaise)}</strong>
           </div>
-          <small>{nameList(inflowTypes)}</small>
+          <small>Money in</small>
         </div>
         <span className="cashflow-summary-operator">−</span>
         <div className="cashflow-summary-line outflow">
@@ -4316,7 +4337,7 @@ function CashflowSummary({ types }: { types: MonthlyReport["types"] }) {
             <span>Outflow</span>
             <strong className="amount-out">{formatINR(outflowPaise)}</strong>
           </div>
-          <small>{nameList(outflowTypes)}</small>
+          <small>Money out</small>
         </div>
         <span className="cashflow-summary-operator">=</span>
         <div className="cashflow-summary-line savings">
@@ -4329,7 +4350,46 @@ function CashflowSummary({ types }: { types: MonthlyReport["types"] }) {
           <small>Inflow − Outflow</small>
         </div>
       </div>
+
+      <div className="cashflow-equations">
+        <CashflowEquation label="Inflow" total={inflowPaise} parts={inflowTypes} tone="in" />
+        <CashflowEquation label="Outflow" total={outflowPaise} parts={outflowTypes} tone="out" />
+      </div>
     </div>
+  );
+}
+
+function CashflowEquation({
+  label,
+  total,
+  parts,
+  tone
+}: {
+  label: string;
+  total: number;
+  parts: MonthlyReport["types"];
+  tone: "in" | "out";
+}) {
+  return (
+    <p className="cashflow-equation">
+      <span className="cashflow-equation-total">
+        {label} <strong className={tone === "in" ? "amount-in" : "amount-out"}>{formatINR(total)}</strong>
+      </span>
+      <span className="cashflow-equation-eq">=</span>
+      {parts.length === 0 ? (
+        <span className="cashflow-equation-empty">Nothing yet</span>
+      ) : (
+        <span className="cashflow-equation-parts">
+          {parts.map((part, index) => (
+            <span className="cashflow-equation-part" key={part.typeId}>
+              {index > 0 && <span className="cashflow-equation-plus">+</span>}
+              <span className="cashflow-equation-name">{part.name}</span>
+              <span className="cashflow-equation-amount">{formatINR(part.amountPaise)}</span>
+            </span>
+          ))}
+        </span>
+      )}
+    </p>
   );
 }
 
@@ -5193,6 +5253,17 @@ function monthEndForInput(month: string) {
     String(date.getMonth() + 1).padStart(2, "0"),
     String(date.getDate()).padStart(2, "0")
   ].join("-");
+}
+
+function recentMonthOptions(fromMonth: string, count: number) {
+  const [year, monthNumber] = fromMonth.split("-").map(Number);
+  const options: Array<{ value: string; label: string }> = [];
+  for (let back = 0; back < count; back += 1) {
+    const date = new Date(year, monthNumber - 1 - back, 1);
+    const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    options.push({ value, label: formatMonth(value) });
+  }
+  return options;
 }
 
 function draftFromTransaction(

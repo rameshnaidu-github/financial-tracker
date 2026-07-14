@@ -186,9 +186,10 @@ export const Api = {
     if (to) params.set("to", to);
     return api<MonthlyReport>(`/api/reports/monthly?${params}`);
   },
-  trendReport: (typeId: string, mode: "month" | "year", accountId?: string) => {
+  trendReport: (typeId: string, mode: "month" | "year" | "week", accountId?: string, month?: string) => {
     const params = new URLSearchParams({ typeId, mode });
     if (accountId) params.set("accountId", accountId);
+    if (mode === "week" && month) params.set("month", month);
     return api<TrendReport>(`/api/reports/trends?${params}`);
   },
   paymentHistory: (source: "loan" | "autopay" | "mutual_fund", id: string, year: number) => {

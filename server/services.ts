@@ -1624,7 +1624,7 @@ export function deleteBudgetLine(id: string) {
   return { ok: true };
 }
 
-export type TrendMode = "month" | "year";
+export type TrendMode = "month" | "year" | "week";
 
 export type TrendPoint = {
   label: string;
@@ -1636,18 +1636,21 @@ export type TrendReport = {
   typeId: string;
   typeName: string;
   color: string;
+  month: string | null;
   points: TrendPoint[];
 };
 
 export function getTrendReport(
   accountId: string | undefined,
   typeId: string,
-  mode: TrendMode
+  mode: TrendMode,
+  month?: string
 ): TrendReport {
   const type = requireCategoryType(typeId);
   const now = new Date();
   const currentYear = now.getFullYear();
   const points: TrendPoint[] = [];
+  let selectedMonth: string | null = null;
 
   const amountForType = (report: ReturnType<typeof getMonthlyReport>) =>
     report.types.find((item) => item.typeId === typeId)?.amountPaise ?? 0;
@@ -1658,6 +1661,20 @@ export function getTrendReport(
       points.push({
         label: new Date(currentYear, index, 1).toLocaleDateString("en-IN", { month: "short" }),
         amountPaise: amountForType(getMonthlyReport(accountId, month))
+      });
+    }
+  } else if (mode === "week") {
+    // Week-on-week within a single month: split the month into 7-day windows
+    // so the chart stays readable instead of plotting every week of the year.
+    selectedMonth = /^\d{4}-\d{2}$/.test(month ?? "") ? (month as string) : currentMonth();
+    const daysInMonth = Number(monthEndDate(selectedMonth).slice(8, 10));
+    for (let startDay = 1; startDay <= daysInMonth; startDay += 7) {
+      const endDay = Math.min(startDay + 6, daysInMonth);
+      const from = `${selectedMonth}-${String(startDay).padStart(2, "0")}`;
+      const to = `${selectedMonth}-${String(endDay).padStart(2, "0")}`;
+      points.push({
+        label: `${startDay}–${endDay}`,
+        amountPaise: amountForType(getMonthlyReport(accountId, selectedMonth, from, to))
       });
     }
   } else {
@@ -1676,7 +1693,7 @@ export function getTrendReport(
     }
   }
 
-  return { mode, typeId, typeName: type.name, color: type.color, points };
+  return { mode, typeId, typeName: type.name, color: type.color, month: selectedMonth, points };
 }
 
 export type PaymentHistorySource = "loan" | "autopay" | "mutual_fund";

@@ -270,11 +270,13 @@ app.get("/api/reports/monthly", async (request) => {
 app.get("/api/wealth", async () => getWealthSummary());
 
 app.get("/api/reports/trends", async (request) => {
-  const query = request.query as { accountId?: string; typeId?: string; mode?: string };
+  const query = request.query as { accountId?: string; typeId?: string; mode?: string; month?: string };
+  const mode = query.mode === "year" ? "year" : query.mode === "week" ? "week" : "month";
   return getTrendReport(
     blankToUndefined(query.accountId),
     query.typeId ?? "",
-    query.mode === "year" ? "year" : "month"
+    mode,
+    blankToUndefined(query.month)
   );
 });
 

@@ -276,7 +276,7 @@ export type Investment = {
   updatedAt: string;
 };
 
-export type TrendMode = "month" | "year";
+export type TrendMode = "month" | "year" | "week";
 
 export type TrendPoint = {
   label: string;
@@ -288,6 +288,7 @@ export type TrendReport = {
   typeId: string;
   typeName: string;
   color: string;
+  month: string | null;
   points: TrendPoint[];
 };
 
