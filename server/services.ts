@@ -4,7 +4,9 @@ import { randomUUID } from "node:crypto";
 import ExcelJS from "exceljs";
 import {
   AUTOPAY_SUBCATEGORY_ID,
+  INFLOW_BEHAVIORS,
   MUTUAL_FUNDS_SUBCATEGORY_ID,
+  SELF_TRANSFER_SUBCATEGORY_ID,
   createAccountSchema,
   createAutopaySubscriptionSchema,
   createBudgetLineSchema,
@@ -1417,10 +1419,11 @@ export function getOverview(accountId?: string, month = currentMonth()) {
         .filter((account) => account.type === "credit_card")
         .reduce((sum, account) => sum + account.outstandingPaise, 0),
       totalSpendingPaise: monthly.totalSpendingPaise,
+      totalOutflowPaise: monthly.totalOutflowPaise,
       incomePaise: monthly.incomePaise,
       uncategorizedCount: uncategorized.count
     },
-    recentTransactions: listTransactions({ accountId, limit: 8 }),
+    recentTransactions: listTransactions({ accountId, limit: 5 }),
     categoryReport: monthly.categories.slice(0, 6)
   };
 }
@@ -1507,13 +1510,13 @@ export function getWealthSummary(): WealthSummary {
   // Cashflow this month.
   const monthReport = getMonthlyReport(undefined, month);
   const incomePaise = monthReport.incomePaise;
-  const expensePaise = monthReport.totalSpendingPaise;
+  const expensePaise = monthReport.totalOutflowPaise;
   const savedPaise = incomePaise - expensePaise;
   const savingsRatePercent = incomePaise > 0 ? Math.round((savedPaise / incomePaise) * 100) : 0;
 
-  // Emergency-fund runway = liquid cash ÷ average monthly expense over the trailing 3 months.
+  // Emergency-fund runway = liquid cash ÷ average monthly outflow over the trailing 3 months.
   const trailingExpenses = [0, 1, 2].map(
-    (back) => getMonthlyReport(undefined, addMonths(month, -back)).totalSpendingPaise
+    (back) => getMonthlyReport(undefined, addMonths(month, -back)).totalOutflowPaise
   );
   const avgExpense = trailingExpenses.reduce((sum, value) => sum + value, 0) / trailingExpenses.length;
   const runwayMonths = avgExpense > 0 ? Math.round((netWorth.liquidPaise / avgExpense) * 10) / 10 : null;
@@ -1566,7 +1569,7 @@ export function getBudgetPlan(month = currentMonth(), asOfDate = localIsoDate(ne
     totals: {
       amountPaise: lines.reduce((sum, line) => sum + line.amountPaise, 0),
       actualPaise: lines.reduce((sum, line) => sum + line.actualPaise, 0),
-      remainingPaise: lines.reduce((sum, line) => sum + Math.max(0, line.remainingPaise), 0),
+      remainingPaise: lines.reduce((sum, line) => sum + line.remainingPaise, 0),
       projectedPaise: lines.reduce((sum, line) => sum + line.projectedPaise, 0),
       safeCount: lines.filter((line) => line.status === "safe").length,
       watchCount: lines.filter((line) => line.status === "watch").length,
@@ -1832,6 +1835,12 @@ export function getMonthlyReport(
       continue;
     }
 
+    // Self transfers only move money between the user's own accounts, so they are
+    // neither inflow nor outflow and stay out of every report figure.
+    if (bucket.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID) {
+      continue;
+    }
+
     const typeCurrent =
       typeTotals.get(bucket.typeId) ??
       {
@@ -1942,12 +1951,17 @@ export function getMonthlyReport(
     )
     .sort((a, b) => b.amountPaise - a.amountPaise);
   const categoryTotalPaise = categoryRows.reduce((sum, row) => sum + row.amountPaise, 0);
+  const totalOutflowPaise = reportTypes.reduce(
+    (sum, type) => (INFLOW_BEHAVIORS.has(type.behavior) ? sum : sum + type.amountPaise),
+    0
+  );
 
   return {
     month: range.month,
     start,
     end,
     totalSpendingPaise: Math.max(0, totalSpending),
+    totalOutflowPaise: Math.max(0, totalOutflowPaise),
     incomePaise: totals.income ?? 0,
     emiPaise: totals.loan ?? 0,
     loanPaise: totals.loan ?? 0,
@@ -2294,7 +2308,7 @@ function listBudgetScopes(month: string): BudgetScopeSummary[] {
     }
     if (!typeBudgetIds.has(type.id)) {
       for (const subcategory of type.subcategories) {
-        if (blockedSubcategoryIds.has(subcategory.id)) {
+        if (blockedSubcategoryIds.has(subcategory.id) || subcategory.id === SELF_TRANSFER_SUBCATEGORY_ID) {
           continue;
         }
         scopes.push({
@@ -3380,6 +3394,22 @@ function validateTransactionAgainstAccounts(input: CreateTransactionInput, accou
       throw badRequest("Card payments must target a credit-card account.");
     }
   }
+
+  if (input.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID) {
+    if (account.type !== "bank") {
+      throw badRequest("Self transfers must move money out of a bank account.");
+    }
+    if (input.direction !== "outflow") {
+      throw badRequest("Self transfers must be recorded as an outflow from the source account.");
+    }
+    const target = requireAccount(input.transferAccountId ?? "");
+    if (target.type !== "bank") {
+      throw badRequest("Self transfers must move money into a bank account.");
+    }
+    if (target.is_archived) {
+      throw badRequest("Self transfers cannot move money into an archived account.");
+    }
+  }
 }
 
 function insertSplits(
@@ -4052,11 +4082,18 @@ function mapAccountWithBalance(account: AccountRow): AccountSummary {
   const bankActivity = asRecord<{ total: number | null }>(
     db
       .prepare(
-        `SELECT SUM(CASE WHEN direction = 'inflow' THEN amount_paise ELSE -amount_paise END) AS total
+        `SELECT SUM(
+           CASE
+             WHEN account_id = ? AND direction = 'inflow' THEN amount_paise
+             WHEN account_id = ? THEN -amount_paise
+             ELSE amount_paise
+           END
+         ) AS total
          FROM transactions
-         WHERE account_id = ?`
+         WHERE account_id = ?
+            OR (subcategory_id = ? AND transfer_account_id = ?)`
       )
-      .get(account.id)
+      .get(account.id, account.id, account.id, SELF_TRANSFER_SUBCATEGORY_ID, account.id)
   );
   const balance = account.starting_balance_paise + (bankActivity.total ?? 0);
 

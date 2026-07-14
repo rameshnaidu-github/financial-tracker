@@ -5,6 +5,7 @@ export const CURRENCY_SYMBOL = "₹";
 export const WEEK_START = "monday";
 export const AUTOPAY_SUBCATEGORY_ID = "sub_autopay";
 export const MUTUAL_FUNDS_SUBCATEGORY_ID = "sub_invest_mutual_funds";
+export const SELF_TRANSFER_SUBCATEGORY_ID = "sub_transfer_self";
 export const AUTOPAY_DURATION_MONTH_OPTIONS = [1, 3, 6, 12, 24, 36] as const;
 
 export const INVESTMENT_TYPES = [
@@ -63,6 +64,10 @@ export const COLOR_OPTIONS = [
   "#0284c7",
   "#be123c"
 ] as const;
+
+// Behaviors that bring money in. Everything else is outflow — this single rule backs
+// the Reports inflow/outflow split and the Overview outflow figure so they always agree.
+export const INFLOW_BEHAVIORS = new Set<string>(["income", "refund"]);
 
 export const TAXONOMY_BEHAVIORS = [
   "expense",
@@ -142,7 +147,8 @@ export const DEFAULT_CATEGORY_TYPES = [
     color: "#4f46e5",
     subcategories: [
       { id: "sub_transfer_parents", name: "Parents", icon: "home", color: "#4f46e5" },
-      { id: "sub_transfer_friend", name: "Friend", icon: "gift", color: "#7c3aed" }
+      { id: "sub_transfer_friend", name: "Friend", icon: "gift", color: "#7c3aed" },
+      { id: "sub_transfer_self", name: "Self transfer", icon: "arrow-left-right", color: "#0891b2" }
     ]
   },
   {
@@ -434,6 +440,22 @@ export const createTransactionSchema = transactionObjectSchema.superRefine((valu
         path: ["subscriptionId"],
         message: "Linked subscriptions require SubType = AutoPay."
       });
+    }
+
+    if (value.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID) {
+      if (!value.transferAccountId) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["transferAccountId"],
+          message: "Self transfers must choose the account the money moves to."
+        });
+      } else if (value.transferAccountId === value.accountId) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["transferAccountId"],
+          message: "Self transfers must move money between two different accounts."
+        });
+      }
     }
 
     if (value.investmentId && value.subcategoryId !== MUTUAL_FUNDS_SUBCATEGORY_ID) {

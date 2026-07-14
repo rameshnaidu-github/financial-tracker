@@ -9,14 +9,17 @@ database both live on your computer, with no external hosting and no cloud accou
 
 ## Features
 
-- Overview dashboard with financial highlights, recent activity, budget watch alerts, spending mix,
-  income-vs-spending, and budget guardrails
+- Overview dashboard with financial highlights, recent activity, spending mix, net worth, asset allocation,
+  this month's cashflow, emergency-fund runway, and budget guardrails
 - Weekly transaction entry across bank accounts, credit cards, and food cards
 - Full transaction ledger with search and type/subtype filters
-- Reports with category breakdowns and month-on-month/year-on-year Type trends
+- Self transfers between your own bank accounts, which move both balances without counting as spending
+- Reports with inflow/outflow/savings, category breakdowns, and week-, month- and year-on-year Type trends
 - Budget Planner for monthly Type/SubType budgets, usage percentage, projected spend, and early warning states
+- Investment holdings with per-holding payment history
 - Loan, AutoPay subscription, account, credit-card, and food-card tracking
 - Custom Types and SubTypes
+- Built-in FAQ explaining how each figure is calculated
 - Import transactions from a spreadsheet; new users can type new accounts, Types, and SubTypes directly in the
   template
 - Local profile and display settings
@@ -38,6 +41,22 @@ Account deletion is history-safe:
   reports can still be calculated correctly.
 
 The profile section only allows saving once name, email, and age are filled with valid values.
+
+## How money is counted
+
+One rule decides what counts as money coming in versus going out, and both the Overview and Reports pages use it, so
+their figures always agree:
+
+- **Inflow** — Income and Refund categories.
+- **Outflow** — everything else: Expense, Loan, Investment, Transfer, Credit Card Payment, and anything uncategorized.
+- **Savings** — Inflow minus Outflow.
+
+**Self transfers are excluded from both sides.** Moving money from one of your own bank accounts to another is neither
+income nor spending, so it never appears in the outflow figures. It still shows in your transaction list and adjusts
+both account balances. To record one, add a transaction on the account the money leaves, choose Type = Transfer and
+SubType = Self transfer, then pick the receiving account.
+
+The **emergency-fund runway** divides your liquid cash by your average monthly outflow over the last three months.
 
 ## Requirements
 

@@ -1,6 +1,7 @@
+import { INFLOW_BEHAVIORS } from "../shared/finance.ts";
 import type { ReportType } from "./types";
 
-export const INFLOW_BEHAVIORS = new Set(["income", "refund"]);
+export { INFLOW_BEHAVIORS };
 
 export type CashflowPart = {
   id: string;
