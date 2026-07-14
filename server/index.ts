@@ -1,4 +1,5 @@
 import multipart from "@fastify/multipart";
+import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
 import { existsSync } from "node:fs";
@@ -75,6 +76,31 @@ app.addHook("onSend", async (_request, reply) => {
     reply.header(name, value);
   }
 });
+
+// A single user drives this app, so a generous ceiling is invisible in normal use
+// while still capping how fast any one client can hammer the server.
+await app.register(rateLimit, {
+  global: true,
+  max: 600,
+  timeWindow: "1 minute",
+  // The plugin throws whatever this returns, so it must carry the status code the
+  // shared error handler reads — otherwise a throttled request reports as a 500.
+  errorResponseBuilder: (_request, context) =>
+    Object.assign(new Error(`Too many requests. Try again in ${context.after}.`), {
+      statusCode: context.statusCode
+    })
+});
+
+// Backups, spreadsheet building/parsing and CSV export all touch the file system or
+// walk the whole ledger, so they get a far tighter budget than ordinary API reads.
+const expensiveRouteLimit = {
+  config: {
+    rateLimit: {
+      max: 10,
+      timeWindow: "1 minute"
+    }
+  }
+};
 
 await app.register(multipart, {
   limits: {
@@ -328,9 +354,9 @@ app.delete("/api/investments/:id", async (request) => {
 
 app.get("/api/backup/status", async () => getBackupStatus());
 
-app.post("/api/backup", async () => createBackup("manual"));
+app.post("/api/backup", expensiveRouteLimit, async () => createBackup("manual"));
 
-app.get("/api/import/template.xlsx", async (_request, reply) => {
+app.get("/api/import/template.xlsx", expensiveRouteLimit, async (_request, reply) => {
   const buffer = await buildImportTemplate();
   return reply
     .header("content-type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -338,7 +364,7 @@ app.get("/api/import/template.xlsx", async (_request, reply) => {
     .send(buffer);
 });
 
-app.post("/api/import/transactions", async (request, reply) => {
+app.post("/api/import/transactions", expensiveRouteLimit, async (request, reply) => {
   const query = request.query as { batchId?: string };
   const file = await request.file();
   if (!file) {
@@ -348,7 +374,7 @@ app.post("/api/import/transactions", async (request, reply) => {
   return importTransactionsWorkbook(buffer, blankToUndefined(query.batchId));
 });
 
-app.get("/api/export/transactions.csv", async (_request, reply) => {
+app.get("/api/export/transactions.csv", expensiveRouteLimit, async (_request, reply) => {
   return reply
     .header("content-type", "text/csv; charset=utf-8")
     .header("content-disposition", "attachment; filename=\"transactions.csv\"")
