@@ -1503,9 +1503,11 @@ a {
 }
 
 .budget-threshold-line {
+  fill: none;
   stroke: #f59e0b;
   stroke-width: 2.4;
   stroke-dasharray: 7 5;
+  stroke-linejoin: round;
   stroke-linecap: round;
 }
 

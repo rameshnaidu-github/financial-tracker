@@ -2539,18 +2539,30 @@ function BudgetTrendChart({
     };
   });
 
-  // Budget markers as a dashed threshold line: one short segment per period, joined
-  // across adjacent periods that both have a budget so the limit reads as a line.
-  const budgetSegments: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+  // Budget threshold as a continuous stepped line spanning the whole timeline: a flat
+  // dashed line while the budget is stable, stepping up/down at the boundary wherever
+  // the monthly budget changes. Runs break around periods with no budget set.
+  const budgetPaths: string[] = [];
+  let run: Array<[number, number]> = [];
+  const flushRun = () => {
+    if (run.length) budgetPaths.push(run.map(([x, y]) => `${x},${y}`).join(" "));
+    run = [];
+  };
   centers.forEach((point, index) => {
-    if (point.budgetY === null) return;
-    const half = Math.min(step * 0.4, 40);
-    budgetSegments.push({ x1: point.x - half, y1: point.budgetY, x2: point.x + half, y2: point.budgetY });
-    const next = centers[index + 1];
-    if (next && next.budgetY !== null) {
-      budgetSegments.push({ x1: point.x + half, y1: point.budgetY, x2: next.x - half, y2: next.budgetY });
+    if (point.budgetY === null) {
+      flushRun();
+      return;
     }
+    const left = pad.left + step * index;
+    const right = pad.left + step * (index + 1);
+    if (run.length === 0) {
+      run.push([left, point.budgetY]);
+    } else if (run[run.length - 1][1] !== point.budgetY) {
+      run.push([left, point.budgetY]); // vertical step at the period boundary
+    }
+    run.push([right, point.budgetY]);
   });
+  flushRun();
 
   return (
     <svg className="trend-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Budget versus actual chart">
@@ -2604,15 +2616,8 @@ function BudgetTrendChart({
         </>
       )}
 
-      {budgetSegments.map((segment, index) => (
-        <line
-          key={`budget-${index}`}
-          className="budget-threshold-line"
-          x1={segment.x1}
-          y1={segment.y1}
-          x2={segment.x2}
-          y2={segment.y2}
-        />
+      {budgetPaths.map((pointList, index) => (
+        <polyline key={`budget-${index}`} className="budget-threshold-line" points={pointList} />
       ))}
 
       {centers.map((point) => (
