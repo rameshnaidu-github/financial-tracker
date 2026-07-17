@@ -2143,8 +2143,6 @@ function ImportTransactionsModal({
   );
 }
 
-const BUDGETABLE_TREND_BEHAVIORS = new Set<TaxonomyBehavior>(["expense", "loan", "investment", "transfer"]);
-
 function ReportsPage({
   selectedAccountId,
   categoryTypes,
@@ -2176,11 +2174,11 @@ function ReportsPage({
   const budgetSubcategories = useMemo(
     () =>
       categoryTypes
-        .filter((type) => BUDGETABLE_TREND_BEHAVIORS.has(type.behavior))
+        .filter((type) => type.behavior === "expense")
         .flatMap((type) =>
           type.subcategories.map((subcategory) => ({
             id: subcategory.id,
-            label: `${type.name} / ${subcategory.name}`
+            label: subcategory.name
           }))
         ),
     [categoryTypes]
@@ -2516,7 +2514,7 @@ function BudgetTrendChart({
 }) {
   const width = 760;
   const height = 300;
-  const pad = { top: 30, right: 14, bottom: 32, left: 14 };
+  const pad = { top: 30, right: 14, bottom: 32, left: 52 };
   const innerWidth = width - pad.left - pad.right;
   const innerHeight = height - pad.top - pad.bottom;
   const max = Math.max(
@@ -2527,6 +2525,8 @@ function BudgetTrendChart({
   const step = innerWidth / points.length;
   const baseline = pad.top + innerHeight;
   const yFor = (value: number) => baseline - (value / max) * innerHeight;
+  // Distinct budget levels, shown as amber value ticks on the Y axis.
+  const budgetLevels = [...new Set(points.map((point) => point.budgetPaise).filter((value): value is number => value !== null && value > 0))];
 
   const centers = points.map((point, index) => {
     const over = point.budgetPaise !== null && point.actualPaise > point.budgetPaise;
@@ -2577,6 +2577,18 @@ function BudgetTrendChart({
         />
       ))}
       <line className="trend-axis" x1={pad.left} x2={width - pad.right} y1={baseline} y2={baseline} />
+
+      <text className="trend-axis-zero" x={pad.left - 7} y={baseline + 4} textAnchor="end">
+        ₹0
+      </text>
+      {budgetLevels.map((value) => (
+        <g key={`y-budget-${value}`}>
+          <line className="budget-axis-tick" x1={pad.left - 4} x2={pad.left} y1={yFor(value)} y2={yFor(value)} />
+          <text className="budget-axis-label" x={pad.left - 7} y={yFor(value) + 4} textAnchor="end">
+            {compactINR(value)}
+          </text>
+        </g>
+      ))}
 
       {variant === "bar" ? (
         centers.map((point) => {
@@ -2843,17 +2855,19 @@ function BudgetPlannerPage({
   const [plan, setPlan] = useState<BudgetPlan | null>(null);
   const [error, setError] = useState("");
   const [retryKey, setRetryKey] = useState(0);
-  const [typeId, setTypeId] = useState("");
   const [subKey, setSubKey] = useState("");
   const [amount, setAmount] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState("");
   const [editAmount, setEditAmount] = useState("");
 
-  const budgetTypes = useMemo(() => budgetTypeOptions(plan?.availableScopes ?? []), [plan]);
+  // Budgets are planned per Expense SubType only (no whole-Type budgets).
   const subScopes = useMemo(
-    () => (plan?.availableScopes ?? []).filter((scope) => scope.typeId === typeId),
-    [plan, typeId]
+    () =>
+      (plan?.availableScopes ?? []).filter(
+        (scope) => scope.scopeType === "subcategory" && scope.behavior === "expense"
+      ),
+    [plan]
   );
 
   const loadPlan = useCallback(async () => {
@@ -2869,16 +2883,6 @@ function BudgetPlannerPage({
   useEffect(() => {
     void loadPlan();
   }, [loadPlan, retryKey, refreshKey]);
-
-  useEffect(() => {
-    if (!budgetTypes.length) {
-      setTypeId("");
-      return;
-    }
-    if (!budgetTypes.some((type) => type.typeId === typeId)) {
-      setTypeId(budgetTypes[0].typeId);
-    }
-  }, [budgetTypes, typeId]);
 
   useEffect(() => {
     if (!subScopes.length) {
@@ -2987,17 +2991,6 @@ function BudgetPlannerPage({
             </div>
 
             <form className="budget-add-form" onSubmit={addBudget}>
-              <label>
-                Type
-                <select value={typeId} onChange={(event) => setTypeId(event.target.value)} disabled={!budgetTypes.length}>
-                  {budgetTypes.length === 0 && <option value="">No Types available</option>}
-                  {budgetTypes.map((type) => (
-                    <option key={type.typeId} value={type.typeId}>
-                      {type.typeName}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <label>
                 SubType
                 <select value={subKey} onChange={(event) => setSubKey(event.target.value)} disabled={!subScopes.length}>
@@ -3161,17 +3154,6 @@ function budgetScopeKey(scope: BudgetScope) {
   return `${scope.scopeType}:${scope.scopeId}`;
 }
 
-function budgetTypeOptions(scopes: BudgetScope[]): Array<{ typeId: string; typeName: string }> {
-  const seen = new Set<string>();
-  const types: Array<{ typeId: string; typeName: string }> = [];
-  for (const scope of scopes) {
-    if (!seen.has(scope.typeId)) {
-      seen.add(scope.typeId);
-      types.push({ typeId: scope.typeId, typeName: scope.typeName });
-    }
-  }
-  return types;
-}
 
 function budgetSubLabel(scope: BudgetScope) {
   if (scope.scopeType === "type") {
