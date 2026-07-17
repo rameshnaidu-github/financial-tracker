@@ -294,6 +294,22 @@ export type TrendReport = {
   points: TrendPoint[];
 };
 
+export type BudgetTrendPoint = {
+  label: string;
+  actualPaise: number;
+  budgetPaise: number | null;
+};
+
+export type BudgetTrendReport = {
+  mode: TrendMode;
+  subcategoryId: string;
+  name: string;
+  typeName: string;
+  color: string;
+  month: string | null;
+  points: BudgetTrendPoint[];
+};
+
 export type PaymentHistory = { source: string; id: string; year: number; months: boolean[] };
 
 export type BudgetStatus = "safe" | "watch" | "critical" | "over";

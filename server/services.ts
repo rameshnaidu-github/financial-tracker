@@ -1699,6 +1699,109 @@ export function getTrendReport(
   return { mode, typeId, typeName: type.name, color: type.color, month: selectedMonth, points };
 }
 
+export type BudgetTrendPoint = {
+  label: string;
+  actualPaise: number;
+  budgetPaise: number | null;
+};
+
+export type BudgetTrendReport = {
+  mode: TrendMode;
+  subcategoryId: string;
+  name: string;
+  typeName: string;
+  color: string;
+  month: string | null;
+  points: BudgetTrendPoint[];
+};
+
+function subcategoryBudgetForMonth(subcategoryId: string, month: string): number | null {
+  const row = asRecord<{ amount_paise: number } | undefined>(
+    db
+      .prepare(
+        "SELECT amount_paise FROM budget_lines WHERE scope_type = 'subcategory' AND scope_id = ? AND month = ? LIMIT 1"
+      )
+      .get(subcategoryId, month)
+  );
+  return row ? row.amount_paise : null;
+}
+
+export function getBudgetTrendReport(
+  accountId: string | undefined,
+  subcategoryId: string,
+  mode: TrendMode,
+  month?: string
+): BudgetTrendReport {
+  // Validates the SubType is real and budgetable, and resolves its display name/colour.
+  const scope = resolveBudgetScope("subcategory", subcategoryId);
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const points: BudgetTrendPoint[] = [];
+  let selectedMonth: string | null = null;
+
+  const actualForSub = (report: ReturnType<typeof getMonthlyReport>) =>
+    budgetActualMaps(report).subcategoryActuals.get(subcategoryId) ?? 0;
+
+  if (mode === "month") {
+    for (let index = 0; index <= now.getMonth(); index += 1) {
+      const periodMonth = `${currentYear}-${String(index + 1).padStart(2, "0")}`;
+      points.push({
+        label: new Date(currentYear, index, 1).toLocaleDateString("en-IN", { month: "short" }),
+        actualPaise: actualForSub(getMonthlyReport(accountId, periodMonth)),
+        budgetPaise: subcategoryBudgetForMonth(subcategoryId, periodMonth)
+      });
+    }
+  } else if (mode === "week") {
+    // Budgets are monthly, so the monthly budget is pro-rated evenly across the month's weeks.
+    selectedMonth = /^\d{4}-\d{2}$/.test(month ?? "") ? (month as string) : currentMonth();
+    const daysInMonth = Number(monthEndDate(selectedMonth).slice(8, 10));
+    const monthBudget = subcategoryBudgetForMonth(subcategoryId, selectedMonth);
+    const weekCount = Math.ceil(daysInMonth / 7);
+    const weeklyBudget = monthBudget === null ? null : Math.round(monthBudget / weekCount);
+    for (let startDay = 1; startDay <= daysInMonth; startDay += 7) {
+      const endDay = Math.min(startDay + 6, daysInMonth);
+      const from = `${selectedMonth}-${String(startDay).padStart(2, "0")}`;
+      const to = `${selectedMonth}-${String(endDay).padStart(2, "0")}`;
+      points.push({
+        label: `${startDay}–${endDay}`,
+        actualPaise: actualForSub(getMonthlyReport(accountId, selectedMonth, from, to)),
+        budgetPaise: weeklyBudget
+      });
+    }
+  } else {
+    const firstRow = asRecord<{ first: string | null }>(
+      db.prepare("SELECT MIN(date) AS first FROM transactions").get()
+    );
+    const firstYear = firstRow?.first ? Number(firstRow.first.slice(0, 4)) : currentYear;
+    const startYear = Math.max(Math.min(firstYear, currentYear), currentYear - 9);
+    for (let year = startYear; year <= currentYear; year += 1) {
+      // A year's budget is the sum of whatever monthly budgets were set that year.
+      let budgetSum: number | null = null;
+      for (let monthIndex = 1; monthIndex <= 12; monthIndex += 1) {
+        const monthly = subcategoryBudgetForMonth(subcategoryId, `${year}-${String(monthIndex).padStart(2, "0")}`);
+        if (monthly !== null) {
+          budgetSum = (budgetSum ?? 0) + monthly;
+        }
+      }
+      points.push({
+        label: String(year),
+        actualPaise: actualForSub(getMonthlyReport(accountId, `${year}-01`, `${year}-01-01`, `${year}-12-31`)),
+        budgetPaise: budgetSum
+      });
+    }
+  }
+
+  return {
+    mode,
+    subcategoryId,
+    name: scope.name,
+    typeName: scope.typeName,
+    color: scope.color,
+    month: selectedMonth,
+    points
+  };
+}
+
 export type PaymentHistorySource = "loan" | "autopay" | "mutual_fund";
 
 export type PaymentHistory = {

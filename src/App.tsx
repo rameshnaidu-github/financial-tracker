@@ -73,6 +73,8 @@ import type {
   TrendMode,
   TrendPoint,
   TrendReport,
+  BudgetTrendReport,
+  BudgetTrendPoint,
   UserProfile,
   WealthSummary
 } from "./types";
@@ -2141,6 +2143,8 @@ function ImportTransactionsModal({
   );
 }
 
+const BUDGETABLE_TREND_BEHAVIORS = new Set<TaxonomyBehavior>(["expense", "loan", "investment", "transfer"]);
+
 function ReportsPage({
   selectedAccountId,
   categoryTypes,
@@ -2169,10 +2173,59 @@ function ReportsPage({
   const [trend, setTrend] = useState<TrendReport | null>(null);
   const [trendError, setTrendError] = useState("");
 
+  const budgetSubcategories = useMemo(
+    () =>
+      categoryTypes
+        .filter((type) => BUDGETABLE_TREND_BEHAVIORS.has(type.behavior))
+        .flatMap((type) =>
+          type.subcategories.map((subcategory) => ({
+            id: subcategory.id,
+            label: `${type.name} / ${subcategory.name}`
+          }))
+        ),
+    [categoryTypes]
+  );
+  const [budgetMode, setBudgetMode] = useState<TrendMode>("month");
+  const [budgetMonth, setBudgetMonth] = useState(initialMonth);
+  const [budgetStyle, setBudgetStyle] = useState<"bar" | "line">("bar");
+  const [budgetSubId, setBudgetSubId] = useState(
+    () =>
+      budgetSubcategories.find((item) => /grocer/i.test(item.label))?.id ??
+      budgetSubcategories[0]?.id ??
+      ""
+  );
+  const [budgetTrend, setBudgetTrend] = useState<BudgetTrendReport | null>(null);
+  const [budgetTrendError, setBudgetTrendError] = useState("");
+
   useEffect(() => {
     if (trendTypeId && trendTypes.some((type) => type.id === trendTypeId)) return;
     setTrendTypeId(trendTypes[0]?.id ?? "");
   }, [trendTypes, trendTypeId]);
+
+  useEffect(() => {
+    if (budgetSubId && budgetSubcategories.some((item) => item.id === budgetSubId)) return;
+    setBudgetSubId(budgetSubcategories[0]?.id ?? "");
+  }, [budgetSubcategories, budgetSubId]);
+
+  useEffect(() => {
+    if (!budgetSubId) {
+      setBudgetTrend(null);
+      return;
+    }
+    let active = true;
+    setBudgetTrend(null);
+    setBudgetTrendError("");
+    Api.budgetTrend(budgetSubId, budgetMode, selectedAccountId || undefined, budgetMonth)
+      .then((next) => {
+        if (active) setBudgetTrend(next);
+      })
+      .catch((error: unknown) => {
+        if (active) setBudgetTrendError(error instanceof Error ? error.message : "Could not load the budget trend.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [budgetSubId, budgetMode, budgetMonth, selectedAccountId, refreshKey]);
 
   useEffect(() => {
     if (!trendTypeId) {
@@ -2279,11 +2332,6 @@ function ReportsPage({
                 onSelect={setSelectedTypeId}
               />
             </div>
-            <CategoryBars categories={report.categories} />
-            <a className="secondary-action export-link" href="/api/export/transactions.csv">
-              <Download size={18} />
-              Export CSV
-            </a>
           </>
         )}
       </Panel>
@@ -2359,7 +2407,232 @@ function ReportsPage({
           </>
         )}
       </Panel>
+
+      <Panel title="Budget vs actual">
+        <div className="trend-controls">
+          <label className="control-field toolbar-control trend-mode-control">
+            <span className="control-label">Period</span>
+            <select value={budgetMode} onChange={(event) => setBudgetMode(event.target.value as TrendMode)}>
+              {(["week", "month", "year"] as TrendMode[]).map((mode) => (
+                <option key={mode} value={mode}>
+                  {trendModeLabels[mode]}
+                </option>
+              ))}
+            </select>
+          </label>
+          {budgetMode === "week" && (
+            <label className="control-field toolbar-control trend-month-control">
+              <span className="control-label">Month</span>
+              <select value={budgetMonth} onChange={(event) => setBudgetMonth(event.target.value)}>
+                {trendMonthOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="control-field toolbar-control trend-style-control">
+            <span className="control-label">Chart</span>
+            <select value={budgetStyle} onChange={(event) => setBudgetStyle(event.target.value as "bar" | "line")}>
+              <option value="bar">Bar</option>
+              <option value="line">Line</option>
+            </select>
+          </label>
+          <label className="control-field toolbar-control trend-type-control">
+            <span className="control-label">SubType</span>
+            <select value={budgetSubId} onChange={(event) => setBudgetSubId(event.target.value)}>
+              {budgetSubcategories.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {budgetTrendError ? (
+          <EmptyState text={budgetTrendError} />
+        ) : budgetSubcategories.length === 0 ? (
+          <EmptyState text="Add a budgetable SubType in Categories to compare against budgets." />
+        ) : !budgetSubId ? (
+          <EmptyState text="Choose a SubType to compare against its budget." />
+        ) : !budgetTrend ? (
+          <PanelLoader label="Loading budget trend" />
+        ) : budgetTrend.points.every((point) => point.actualPaise === 0 && (point.budgetPaise ?? 0) === 0) ? (
+          <EmptyState
+            text={
+              budgetMode === "week"
+                ? `No ${budgetTrend.name} activity or budget in ${formatMonth(budgetMonth)}.`
+                : `No ${budgetTrend.name} activity or budget recorded yet.`
+            }
+          />
+        ) : (
+          <>
+            <p className="helper-text trend-caption">
+              {budgetTrend.name} ·{" "}
+              {budgetMode === "week"
+                ? `${formatMonth(budgetMonth)}, by week`
+                : budgetMode === "month"
+                  ? `${new Date().getFullYear()}, January to date`
+                  : "by year"}
+            </p>
+            <BudgetTrendLegend color={budgetTrend.color} />
+            <BudgetTrendChart points={budgetTrend.points} variant={budgetStyle} color={budgetTrend.color} />
+          </>
+        )}
+      </Panel>
     </div>
+  );
+}
+
+function BudgetTrendLegend({ color }: { color: string }) {
+  return (
+    <div className="budget-trend-legend">
+      <span className="budget-trend-legend-item">
+        <span className="budget-trend-swatch" style={{ background: color }} />
+        Actual
+      </span>
+      <span className="budget-trend-legend-item">
+        <span className="budget-trend-swatch over" />
+        Over budget
+      </span>
+      <span className="budget-trend-legend-item">
+        <span className="budget-trend-swatch budget-line" />
+        Budget
+      </span>
+    </div>
+  );
+}
+
+function BudgetTrendChart({
+  points,
+  variant,
+  color
+}: {
+  points: BudgetTrendPoint[];
+  variant: "bar" | "line";
+  color: string;
+}) {
+  const width = 760;
+  const height = 300;
+  const pad = { top: 30, right: 14, bottom: 32, left: 14 };
+  const innerWidth = width - pad.left - pad.right;
+  const innerHeight = height - pad.top - pad.bottom;
+  const max = Math.max(
+    ...points.map((point) => point.actualPaise),
+    ...points.map((point) => point.budgetPaise ?? 0),
+    1
+  );
+  const step = innerWidth / points.length;
+  const baseline = pad.top + innerHeight;
+  const yFor = (value: number) => baseline - (value / max) * innerHeight;
+
+  const centers = points.map((point, index) => {
+    const over = point.budgetPaise !== null && point.actualPaise > point.budgetPaise;
+    return {
+      ...point,
+      over,
+      x: pad.left + step * index + step / 2,
+      y: yFor(point.actualPaise),
+      budgetY: point.budgetPaise === null ? null : yFor(point.budgetPaise)
+    };
+  });
+
+  // Budget markers as a dashed threshold line: one short segment per period, joined
+  // across adjacent periods that both have a budget so the limit reads as a line.
+  const budgetSegments: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+  centers.forEach((point, index) => {
+    if (point.budgetY === null) return;
+    const half = Math.min(step * 0.4, 40);
+    budgetSegments.push({ x1: point.x - half, y1: point.budgetY, x2: point.x + half, y2: point.budgetY });
+    const next = centers[index + 1];
+    if (next && next.budgetY !== null) {
+      budgetSegments.push({ x1: point.x + half, y1: point.budgetY, x2: next.x - half, y2: next.budgetY });
+    }
+  });
+
+  return (
+    <svg className="trend-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Budget versus actual chart">
+      {[0.25, 0.5, 0.75].map((fraction) => (
+        <line
+          key={fraction}
+          className="trend-gridline"
+          x1={pad.left}
+          x2={width - pad.right}
+          y1={baseline - innerHeight * fraction}
+          y2={baseline - innerHeight * fraction}
+        />
+      ))}
+      <line className="trend-axis" x1={pad.left} x2={width - pad.right} y1={baseline} y2={baseline} />
+
+      {variant === "bar" ? (
+        centers.map((point) => {
+          const barWidth = Math.min(step * 0.55, 52);
+          const barHeight = Math.max(baseline - point.y, point.actualPaise > 0 ? 2 : 0);
+          return (
+            <g key={point.label}>
+              <title>{`${point.label}: ${formatINR(point.actualPaise)}${
+                point.budgetPaise !== null ? ` of ${formatINR(point.budgetPaise)} budget` : ""
+              }`}</title>
+              <rect
+                x={point.x - barWidth / 2}
+                y={baseline - barHeight}
+                width={barWidth}
+                height={barHeight}
+                rx={5}
+                fill={point.over ? "#dc2626" : color}
+              />
+            </g>
+          );
+        })
+      ) : (
+        <>
+          <polyline
+            className="trend-line"
+            stroke={color}
+            points={centers.map((point) => `${point.x},${point.y}`).join(" ")}
+          />
+          {centers.map((point) => (
+            <g key={point.label}>
+              <title>{`${point.label}: ${formatINR(point.actualPaise)}${
+                point.budgetPaise !== null ? ` of ${formatINR(point.budgetPaise)} budget` : ""
+              }`}</title>
+              <circle cx={point.x} cy={point.y} r={4.5} fill={point.over ? "#dc2626" : color} />
+            </g>
+          ))}
+        </>
+      )}
+
+      {budgetSegments.map((segment, index) => (
+        <line
+          key={`budget-${index}`}
+          className="budget-threshold-line"
+          x1={segment.x1}
+          y1={segment.y1}
+          x2={segment.x2}
+          y2={segment.y2}
+        />
+      ))}
+
+      {centers.map((point) => (
+        <g key={`labels-${point.label}`}>
+          {point.actualPaise > 0 && (
+            <text
+              className={`trend-value ${point.over ? "over" : ""}`}
+              x={point.x}
+              y={point.y - 9}
+              textAnchor="middle"
+            >
+              {compactINR(point.actualPaise)}
+            </text>
+          )}
+          <text className="trend-label" x={point.x} y={height - 10} textAnchor="middle">
+            {point.label}
+          </text>
+        </g>
+      ))}
+    </svg>
   );
 }
 

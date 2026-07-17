@@ -17,6 +17,7 @@ import type {
   Overview,
   Transaction,
   TrendReport,
+  BudgetTrendReport,
   UserProfile,
   WealthSummary
 } from "./types";
@@ -191,6 +192,12 @@ export const Api = {
     if (accountId) params.set("accountId", accountId);
     if (mode === "week" && month) params.set("month", month);
     return api<TrendReport>(`/api/reports/trends?${params}`);
+  },
+  budgetTrend: (subcategoryId: string, mode: "month" | "year" | "week", accountId?: string, month?: string) => {
+    const params = new URLSearchParams({ subcategoryId, mode });
+    if (accountId) params.set("accountId", accountId);
+    if (mode === "week" && month) params.set("month", month);
+    return api<BudgetTrendReport>(`/api/reports/budget-trend?${params}`);
   },
   paymentHistory: (source: "loan" | "autopay" | "mutual_fund", id: string, year: number) => {
     const params = new URLSearchParams({ source, id, year: String(year) });

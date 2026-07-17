@@ -1392,6 +1392,56 @@ test("builds week-, month- and year-on-year trend reports per Type", async () =>
   await assertRejects("unknown trend type", () => services.getTrendReport(undefined, "type_missing", "month"));
 });
 
+test("builds a budget-vs-actual trend for a SubType", async () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const cur = `${year}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const bank = services.createAccount({
+    name: `QA Budget Trend Bank ${Date.now().toString().slice(-5)}`,
+    type: "bank",
+    startingBalancePaise: 5_00_000_00
+  });
+  const grocSub = subcategoryId("Expense", "Groceries");
+
+  services.createBudgetLine({ month: cur, scopeType: "subcategory", scopeId: grocSub, amountPaise: 5_000_00 });
+  services.createTransaction({
+    date: `${cur}-10`,
+    accountId: bank.id,
+    method: "upi",
+    merchant: "Groceries over budget",
+    typeId: typeId("Expense"),
+    subcategoryId: grocSub,
+    amountPaise: 7_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  const monthTrend = services.getBudgetTrendReport(bank.id, grocSub, "month");
+  const curPoint = monthTrend.points[monthTrend.points.length - 1];
+  assert(curPoint.actualPaise === 7_000_00, "Current month actual should reflect the grocery spend.");
+  assert(curPoint.budgetPaise === 5_000_00, "Current month budget should reflect the set budget.");
+  assert(curPoint.actualPaise > (curPoint.budgetPaise ?? 0), "Over-budget months should be detectable.");
+
+  const weekTrend = services.getBudgetTrendReport(bank.id, grocSub, "week", cur);
+  assert(weekTrend.month === cur, "Week budget trend should echo the selected month.");
+  const overWeek = weekTrend.points.find((point) => point.actualPaise === 7_000_00);
+  assert(overWeek, "The week holding the spend should appear.");
+  assert(
+    overWeek!.budgetPaise !== null && overWeek!.budgetPaise > 0,
+    "Weekly budget should be pro-rated from the monthly budget."
+  );
+
+  const noBudget = services.getBudgetTrendReport(bank.id, subcategoryId("Expense", "Dining/Food"), "month");
+  assert(
+    noBudget.points.every((point) => point.budgetPaise === null),
+    "A SubType with no budget set should have null budget points."
+  );
+
+  await assertRejects("non-budgetable SubType", () =>
+    services.getBudgetTrendReport(bank.id, subcategoryId("Income", "Salary"), "month")
+  );
+});
+
 test("stores the card utilization alert threshold with validation", async () => {
   assert(
     services.getSettings().card_utilization_alert_percent === "30",

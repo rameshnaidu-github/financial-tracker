@@ -35,6 +35,7 @@ import {
   getOverview,
   getPaymentHistory,
   getTrendReport,
+  getBudgetTrendReport,
   getWealthSummary,
   getProfile,
   getSettings,
@@ -301,6 +302,17 @@ app.get("/api/reports/trends", async (request) => {
   return getTrendReport(
     blankToUndefined(query.accountId),
     query.typeId ?? "",
+    mode,
+    blankToUndefined(query.month)
+  );
+});
+
+app.get("/api/reports/budget-trend", async (request) => {
+  const query = request.query as { accountId?: string; subcategoryId?: string; mode?: string; month?: string };
+  const mode = query.mode === "year" ? "year" : query.mode === "week" ? "week" : "month";
+  return getBudgetTrendReport(
+    blankToUndefined(query.accountId),
+    query.subcategoryId ?? "",
     mode,
     blankToUndefined(query.month)
   );

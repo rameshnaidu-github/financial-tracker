@@ -1285,9 +1285,10 @@ a {
 }
 
 .investment-group-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(84px, 1fr) 104px 104px 156px 20px;
   align-items: center;
-  gap: 14px;
+  gap: 0 14px;
   width: 100%;
   padding: 14px 16px;
   background: none;
@@ -1308,8 +1309,7 @@ a {
   gap: 7px;
   font-size: 0.95rem;
   font-weight: 900;
-  flex: 0 0 auto;
-  min-width: 128px;
+  min-width: 0;
 }
 
 .investment-group-count {
@@ -1326,17 +1326,17 @@ a {
   font-weight: 900;
 }
 
+/* The wrapper dissolves so its three cells become columns of the header grid,
+   keeping every row's Invested / Current / Net columns vertically aligned. */
 .investment-group-metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 22px;
-  margin-left: auto;
-  align-items: baseline;
+  display: contents;
 }
 
 .investment-group-metrics > div {
   display: grid;
   gap: 1px;
+  justify-items: end;
+  text-align: right;
 }
 
 .investment-group-metrics span {
@@ -1352,8 +1352,36 @@ a {
   white-space: nowrap;
 }
 
+@media (max-width: 640px) {
+  .investment-group-head {
+    display: flex;
+    flex-wrap: wrap;
+    position: relative;
+  }
+
+  .investment-group-name {
+    flex: 1 1 auto;
+  }
+
+  .investment-group-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0 10px;
+    width: 100%;
+    order: 3;
+    margin-top: 8px;
+  }
+
+  .investment-group-chevron {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+  }
+}
+
 .investment-group-chevron {
   flex: 0 0 auto;
+  justify-self: end;
   color: var(--muted);
   transition: transform 160ms ease;
 }
@@ -1468,6 +1496,51 @@ a {
   fill: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.trend-value.over {
+  fill: #dc2626;
+}
+
+.budget-threshold-line {
+  stroke: #f59e0b;
+  stroke-width: 2.4;
+  stroke-dasharray: 7 5;
+  stroke-linecap: round;
+}
+
+.budget-trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 2px 0 10px;
+}
+
+.budget-trend-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.budget-trend-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.budget-trend-swatch.over {
+  background: #dc2626;
+}
+
+.budget-trend-swatch.budget-line {
+  width: 20px;
+  height: 0;
+  border-radius: 0;
+  border-top: 2.6px dashed #f59e0b;
 }
 
 .faq-intro {
