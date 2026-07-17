@@ -1435,6 +1435,16 @@ test("tracks investment holdings with computed gain and validation", async () =>
   assert(mf.shares === null, "Shares should be optional for non-stock holdings.");
   assert(mf.purchaseDate === "2026-01-05", "Purchase date should round-trip for non-stocks.");
 
+  const fd = services.createInvestment({
+    type: "fd",
+    name: "QA HDFC Fixed Deposit",
+    investedPaise: 5_00_000_00,
+    currentValuePaise: 5_35_000_00,
+    purchaseDate: "2026-02-01"
+  });
+  assert(fd.type === "fd" && fd.typeLabel === "Fixed Deposit", "FD should be a valid investment type.");
+  assert(fd.gainPaise === 35_000_00 && fd.gainPercent === 7, "FD gain should compute like any holding.");
+
   const updated = services.updateInvestment(stock.id, { currentValuePaise: 90_000_00 });
   assert(updated.gainPaise === -10_000_00, "Updating current value should recompute the gain.");
   assert(updated.shares === 12.5, "Untouched shares should persist across an update.");

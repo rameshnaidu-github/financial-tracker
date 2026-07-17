@@ -143,7 +143,7 @@ export function initDatabase() {
 
     CREATE TABLE IF NOT EXISTS investments (
       id TEXT PRIMARY KEY,
-      type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'other')),
+      type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'other')),
       name TEXT NOT NULL,
       invested_paise INTEGER NOT NULL CHECK (invested_paise >= 0),
       current_value_paise INTEGER NOT NULL CHECK (current_value_paise >= 0),
@@ -195,8 +195,9 @@ export function initDatabase() {
   ensureLoanIndexes();
   ensureAutopayIndexes();
   ensureBudgetIndexes();
-  ensureInvestmentIndexes();
   ensureInvestmentColumns();
+  migrateInvestmentTypes();
+  ensureInvestmentIndexes();
   ensureTaxonomyIndexes();
   seedSettings();
   pruneBackupFiles();
@@ -237,6 +238,50 @@ function ensureInvestmentIndexes() {
 function ensureInvestmentColumns() {
   addColumnIfMissing("investments", "shares", "REAL");
   addColumnIfMissing("investments", "purchase_date", "TEXT");
+}
+
+function migrateInvestmentTypes() {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'investments'")
+    .get() as { sql?: string } | undefined;
+
+  // Only rebuild older tables whose CHECK constraint predates the 'fd' type.
+  if (!row?.sql || row.sql.includes("'fd'")) {
+    return;
+  }
+
+  db.exec("PRAGMA foreign_keys = OFF;");
+  db.exec("BEGIN;");
+  try {
+    db.exec(`
+      CREATE TABLE investments_new (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'other')),
+        name TEXT NOT NULL,
+        invested_paise INTEGER NOT NULL CHECK (invested_paise >= 0),
+        current_value_paise INTEGER NOT NULL CHECK (current_value_paise >= 0),
+        shares REAL,
+        purchase_date TEXT,
+        note TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      INSERT INTO investments_new
+        (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at)
+      SELECT id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at
+      FROM investments;
+
+      DROP TABLE investments;
+      ALTER TABLE investments_new RENAME TO investments;
+    `);
+    db.exec("COMMIT;");
+  } catch (error) {
+    db.exec("ROLLBACK;");
+    throw error;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
 }
 
 function migrateAccountNameConstraint() {

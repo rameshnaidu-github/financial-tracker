@@ -15,6 +15,7 @@ export const INVESTMENT_TYPES = [
   { id: "land", label: "Land", icon: "home", color: "#0f766e" },
   { id: "property", label: "Property", icon: "home", color: "#7c3aed" },
   { id: "pf", label: "PF", icon: "landmark", color: "#059669" },
+  { id: "fd", label: "Fixed Deposit", icon: "banknote", color: "#0891b2" },
   { id: "other", label: "Other", icon: "wallet", color: "#64748b" }
 ] as const;
 

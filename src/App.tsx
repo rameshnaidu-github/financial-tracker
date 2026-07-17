@@ -3428,34 +3428,15 @@ function InvestmentsPage({
             <EmptyState text="No investments yet. Add your first holding on the right." />
           ) : (
             <div className="investment-groups">
-              {groups.map((group) => {
-                const invested = group.items.reduce((sum, item) => sum + item.investedPaise, 0);
-                const current = group.items.reduce((sum, item) => sum + item.currentValuePaise, 0);
-                return (
-                  <div className="investment-group" key={group.type.id}>
-                    <div className="investment-group-head">
-                      <span className="investment-group-name" style={{ color: group.type.color }}>
-                        <IconGlyph name={group.type.icon} size={15} />
-                        {group.type.label}
-                      </span>
-                      <strong>{formatINR(current)}</strong>
-                      <small className={current - invested >= 0 ? "amount-in" : "amount-out"}>
-                        {signedImpact(current - invested)}
-                      </small>
-                    </div>
-                    <div className="loan-card-grid">
-                      {group.items.map((investment) => (
-                        <InvestmentCard
-                          key={investment.id}
-                          investment={investment}
-                          onEdit={setEditing}
-                          onDelete={remove}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
+              {groups.map((group) => (
+                <InvestmentGroup
+                  key={group.type.id}
+                  type={group.type}
+                  items={group.items}
+                  onEdit={setEditing}
+                  onDelete={remove}
+                />
+              ))}
             </div>
           )}
         </Panel>
@@ -3487,7 +3468,6 @@ function InvestmentCard({
   onDelete: (investment: Investment) => void;
 }) {
   const positive = investment.gainPaise >= 0;
-  const [expanded, setExpanded] = useState(false);
   return (
     <article className="loan-card investment-card">
       <div className="loan-card-header">
@@ -3505,30 +3485,12 @@ function InvestmentCard({
             </span>
           </div>
         </div>
-        <div className="loan-header-actions">
-          <span className={`investment-gain-badge ${positive ? "up" : "down"}`}>
-            {positive ? "+" : ""}
-            {investment.gainPercent}%
-          </span>
-          <button
-            type="button"
-            className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
-            aria-label={expanded ? `Collapse ${investment.name}` : `Expand ${investment.name}`}
-            aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            <ChevronDown size={18} />
-          </button>
-        </div>
+        <span className={`investment-gain-badge ${positive ? "up" : "down"}`}>
+          {positive ? "+" : ""}
+          {investment.gainPercent}%
+        </span>
       </div>
 
-      <div className="loan-card-quick">
-        <span>Current value</span>
-        <strong>{formatINR(investment.currentValuePaise)}</strong>
-        <small className={positive ? "amount-in" : "amount-out"}>{signedImpact(investment.gainPaise)}</small>
-      </div>
-
-      {expanded && <>
       <div className="investment-values">
         <div>
           <span>Invested</span>
@@ -3562,8 +3524,69 @@ function InvestmentCard({
       </div>
 
       {investment.type === "mutual_funds" && <PaymentHistoryGrid source="mutual_fund" id={investment.id} />}
-      </>}
     </article>
+  );
+}
+
+function InvestmentGroup({
+  type,
+  items,
+  onEdit,
+  onDelete
+}: {
+  type: { id: string; label: string; icon: string; color: string };
+  items: Investment[];
+  onEdit: (investment: Investment) => void;
+  onDelete: (investment: Investment) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const invested = items.reduce((sum, item) => sum + item.investedPaise, 0);
+  const current = items.reduce((sum, item) => sum + item.currentValuePaise, 0);
+  const gain = current - invested;
+  const gainPercent = invested > 0 ? Math.round((gain / invested) * 100) : 0;
+  const positive = gain >= 0;
+
+  return (
+    <div className={`investment-group ${expanded ? "expanded" : ""}`}>
+      <button
+        type="button"
+        className="investment-group-head"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="investment-group-name" style={{ color: type.color }}>
+          <IconGlyph name={type.icon} size={16} />
+          {type.label}
+          <span className="investment-group-count">{items.length}</span>
+        </span>
+        <div className="investment-group-metrics">
+          <div>
+            <span>Invested</span>
+            <strong>{formatINR(invested)}</strong>
+          </div>
+          <div>
+            <span>Current</span>
+            <strong>{formatINR(current)}</strong>
+          </div>
+          <div>
+            <span>Net {positive ? "gain" : "loss"}</span>
+            <strong className={positive ? "amount-in" : "amount-out"}>
+              {signedImpact(gain)} ({gainPercent >= 0 ? "+" : ""}
+              {gainPercent}%)
+            </strong>
+          </div>
+        </div>
+        <ChevronDown className={`investment-group-chevron ${expanded ? "expanded" : ""}`} size={20} />
+      </button>
+
+      {expanded && (
+        <div className="loan-card-grid">
+          {items.map((investment) => (
+            <InvestmentCard key={investment.id} investment={investment} onEdit={onEdit} onDelete={onDelete} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -4846,7 +4869,7 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "Are my investment values updated automatically?",
     answer:
-      "No. Stocks, mutual funds, gold, land, property and PF values are entered by you and stay fixed until you edit them. The Investments page shows the date you last saved a change so you know how current the figures are. Open a holding with the chevron (▾) to see its full details and payment history."
+      "No. Stocks, mutual funds, gold, land, property, PF and fixed-deposit (FD) values are entered by you and stay fixed until you edit them. The Investments page shows the date you last saved a change so you know how current the figures are. Each investment type is a dropdown showing its total invested, current value and net gain — click it to reveal every holding of that type."
   },
   {
     question: "How are Inflow, Outflow and Savings in Reports calculated?",
