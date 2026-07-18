@@ -1,2 +1,7 @@
 allowBuilds:
   esbuild: true
+
+# exceljs 4.4.0 pins uuid ^8.3.0, which is affected by CVE-2026-41907
+# (missing buffer bounds check in v3/v5/v6). Force the patched line.
+overrides:
+  uuid: ^11.1.1

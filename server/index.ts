@@ -1,4 +1,5 @@
 import multipart from "@fastify/multipart";
+import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
 import { existsSync } from "node:fs";
@@ -17,6 +18,7 @@ import {
   createLoan,
   createSubcategory,
   createTransaction,
+  createVacation,
   archiveAutopaySubscription,
   archiveLoan,
   deleteAccount,
@@ -25,6 +27,7 @@ import {
   deleteInvestment,
   deleteSubcategory,
   deleteTransaction,
+  deleteVacation,
   buildImportTemplate,
   exportTransactionsCsv,
   getBackupStatus,
@@ -34,6 +37,7 @@ import {
   getOverview,
   getPaymentHistory,
   getTrendReport,
+  getBudgetTrendReport,
   getWealthSummary,
   getProfile,
   getSettings,
@@ -44,6 +48,7 @@ import {
   listInvestments,
   listLoans,
   listTransactions,
+  listVacations,
   saveBatch,
   startAutoBackup,
   stopAutoBackup,
@@ -54,7 +59,8 @@ import {
   updateInvestment,
   updateLoan,
   updateProfile,
-  updateTransaction
+  updateTransaction,
+  updateVacation
 } from "./services.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -75,6 +81,31 @@ app.addHook("onSend", async (_request, reply) => {
     reply.header(name, value);
   }
 });
+
+// A single user drives this app, so a generous ceiling is invisible in normal use
+// while still capping how fast any one client can hammer the server.
+await app.register(rateLimit, {
+  global: true,
+  max: 600,
+  timeWindow: "1 minute",
+  // The plugin throws whatever this returns, so it must carry the status code the
+  // shared error handler reads — otherwise a throttled request reports as a 500.
+  errorResponseBuilder: (_request, context) =>
+    Object.assign(new Error(`Too many requests. Try again in ${context.after}.`), {
+      statusCode: context.statusCode
+    })
+});
+
+// Backups, spreadsheet building/parsing and CSV export all touch the file system or
+// walk the whole ledger, so they get a far tighter budget than ordinary API reads.
+const expensiveRouteLimit = {
+  config: {
+    rateLimit: {
+      max: 10,
+      timeWindow: "1 minute"
+    }
+  }
+};
 
 await app.register(multipart, {
   limits: {
@@ -112,7 +143,8 @@ app.get("/api/bootstrap", async () => ({
   categoryTypes: listCategoryTypes(),
   loans: listLoans(true),
   subscriptions: listAutopaySubscriptions(true),
-  investments: listInvestments()
+  investments: listInvestments(),
+  vacations: listVacations(true)
 }));
 
 app.get("/api/profile", async () => getProfile());
@@ -280,6 +312,17 @@ app.get("/api/reports/trends", async (request) => {
   );
 });
 
+app.get("/api/reports/budget-trend", async (request) => {
+  const query = request.query as { accountId?: string; subcategoryId?: string; mode?: string; month?: string };
+  const mode = query.mode === "year" ? "year" : query.mode === "week" ? "week" : "month";
+  return getBudgetTrendReport(
+    blankToUndefined(query.accountId),
+    query.subcategoryId ?? "",
+    mode,
+    blankToUndefined(query.month)
+  );
+});
+
 app.get("/api/payment-history", async (request) => {
   const query = request.query as { source?: string; id?: string; year?: string };
   return getPaymentHistory(
@@ -326,11 +369,28 @@ app.delete("/api/investments/:id", async (request) => {
   return deleteInvestment(params.id);
 });
 
+app.get("/api/vacations", async () => listVacations(true));
+
+app.post("/api/vacations", async (request, reply) => {
+  const vacation = createVacation(request.body as never);
+  return reply.status(201).send(vacation);
+});
+
+app.patch("/api/vacations/:id", async (request) => {
+  const params = request.params as { id: string };
+  return updateVacation(params.id, request.body as never);
+});
+
+app.delete("/api/vacations/:id", async (request) => {
+  const params = request.params as { id: string };
+  return deleteVacation(params.id);
+});
+
 app.get("/api/backup/status", async () => getBackupStatus());
 
-app.post("/api/backup", async () => createBackup("manual"));
+app.post("/api/backup", expensiveRouteLimit, async () => createBackup("manual"));
 
-app.get("/api/import/template.xlsx", async (_request, reply) => {
+app.get("/api/import/template.xlsx", expensiveRouteLimit, async (_request, reply) => {
   const buffer = await buildImportTemplate();
   return reply
     .header("content-type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -338,7 +398,7 @@ app.get("/api/import/template.xlsx", async (_request, reply) => {
     .send(buffer);
 });
 
-app.post("/api/import/transactions", async (request, reply) => {
+app.post("/api/import/transactions", expensiveRouteLimit, async (request, reply) => {
   const query = request.query as { batchId?: string };
   const file = await request.file();
   if (!file) {
@@ -348,7 +408,7 @@ app.post("/api/import/transactions", async (request, reply) => {
   return importTransactionsWorkbook(buffer, blankToUndefined(query.batchId));
 });
 
-app.get("/api/export/transactions.csv", async (_request, reply) => {
+app.get("/api/export/transactions.csv", expensiveRouteLimit, async (_request, reply) => {
   return reply
     .header("content-type", "text/csv; charset=utf-8")
     .header("content-disposition", "attachment; filename=\"transactions.csv\"")

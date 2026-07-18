@@ -10,6 +10,7 @@ import type {
   CreateTransactionPayload,
   Investment,
   InvestmentType,
+  Vacation,
   Loan,
   MonthlyReport,
   PaymentHistory,
@@ -17,6 +18,7 @@ import type {
   Overview,
   Transaction,
   TrendReport,
+  BudgetTrendReport,
   UserProfile,
   WealthSummary
 } from "./types";
@@ -154,6 +156,26 @@ export const Api = {
     }>
   ) => api<Investment>(`/api/investments/${id}`, { method: "PATCH", body }),
   deleteInvestment: (id: string) => api<{ ok: true }>(`/api/investments/${id}`, { method: "DELETE" }),
+  vacations: () => api<Vacation[]>("/api/vacations"),
+  createVacation: (body: {
+    name: string;
+    startDate?: string;
+    endDate?: string;
+    budgetPaise?: number;
+    note?: string;
+  }) => api<Vacation>("/api/vacations", { method: "POST", body }),
+  updateVacation: (
+    id: string,
+    body: Partial<{
+      name: string;
+      startDate: string;
+      endDate: string;
+      budgetPaise: number;
+      note: string;
+      isArchived: boolean;
+    }>
+  ) => api<Vacation>(`/api/vacations/${id}`, { method: "PATCH", body }),
+  deleteVacation: (id: string) => api<{ ok: true }>(`/api/vacations/${id}`, { method: "DELETE" }),
   currentBatch: (weekStart: string, weekEnd: string) => {
     const params = new URLSearchParams({ weekStart, weekEnd });
     return api<Batch>(`/api/batches/current?${params}`);
@@ -191,6 +213,12 @@ export const Api = {
     if (accountId) params.set("accountId", accountId);
     if (mode === "week" && month) params.set("month", month);
     return api<TrendReport>(`/api/reports/trends?${params}`);
+  },
+  budgetTrend: (subcategoryId: string, mode: "month" | "year" | "week", accountId?: string, month?: string) => {
+    const params = new URLSearchParams({ subcategoryId, mode });
+    if (accountId) params.set("accountId", accountId);
+    if (mode === "week" && month) params.set("month", month);
+    return api<BudgetTrendReport>(`/api/reports/budget-trend?${params}`);
   },
   paymentHistory: (source: "loan" | "autopay" | "mutual_fund", id: string, year: number) => {
     const params = new URLSearchParams({ source, id, year: String(year) });

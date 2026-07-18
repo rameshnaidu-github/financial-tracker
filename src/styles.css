@@ -1269,35 +1269,228 @@ a {
   margin: -4px 0 0;
 }
 
+.vacation-list {
+  display: grid;
+  gap: 14px;
+}
+
+.vacation-total {
+  font-size: 1.1rem;
+  white-space: nowrap;
+}
+
+.vacation-budget {
+  display: grid;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.vacation-budget-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.vacation-budget-head span {
+  color: var(--muted);
+  font-weight: 800;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.vacation-budget-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.22);
+  overflow: hidden;
+}
+
+.vacation-budget-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.vacation-budget small {
+  color: var(--muted);
+}
+
+.vacation-breakdown {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.vacation-breakdown-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.9fr) minmax(0, 1.4fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.vacation-breakdown-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 800;
+  font-size: 0.85rem;
+}
+
+.vacation-breakdown-bar {
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+  overflow: hidden;
+}
+
+.vacation-breakdown-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.vacation-breakdown-row strong {
+  white-space: nowrap;
+  font-size: 0.88rem;
+}
+
+@media (max-width: 560px) {
+  .vacation-breakdown-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .vacation-breakdown-bar {
+    display: none;
+  }
+}
+
 .investment-groups {
   display: grid;
-  gap: 20px;
+  gap: 14px;
+}
+
+.investment-group {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.investment-group.expanded {
+  background: var(--surface-2, rgba(148, 163, 184, 0.06));
 }
 
 .investment-group-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-bottom: 10px;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 8px;
+  display: grid;
+  grid-template-columns: minmax(84px, 1fr) 104px 104px 156px 20px;
+  align-items: center;
+  gap: 0 14px;
+  width: 100%;
+  padding: 14px 16px;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.investment-group-head:hover {
+  background: rgba(148, 163, 184, 0.08);
 }
 
 .investment-group-name {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 0.9rem;
+  gap: 7px;
+  font-size: 0.95rem;
+  font-weight: 900;
+  min-width: 0;
+}
+
+.investment-group-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: currentColor;
+  color: var(--surface, #fff);
+  font-size: 0.72rem;
   font-weight: 900;
 }
 
-.investment-group-head strong {
-  margin-left: auto;
-  font-size: 0.95rem;
+/* The wrapper dissolves so its three cells become columns of the header grid,
+   keeping every row's Invested / Current / Net columns vertically aligned. */
+.investment-group-metrics {
+  display: contents;
 }
 
-.investment-group-head small {
-  font-weight: 850;
+.investment-group-metrics > div {
+  display: grid;
+  gap: 1px;
+  justify-items: end;
+  text-align: right;
+}
+
+.investment-group-metrics span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.investment-group-metrics strong {
+  font-size: 0.95rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .investment-group-head {
+    display: flex;
+    flex-wrap: wrap;
+    position: relative;
+  }
+
+  .investment-group-name {
+    flex: 1 1 auto;
+  }
+
+  .investment-group-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0 10px;
+    width: 100%;
+    order: 3;
+    margin-top: 8px;
+  }
+
+  .investment-group-chevron {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+  }
+}
+
+.investment-group-chevron {
+  flex: 0 0 auto;
+  justify-self: end;
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+
+.investment-group-chevron.expanded {
+  transform: rotate(180deg);
+}
+
+.investment-group .loan-card-grid {
+  padding: 0 16px 16px;
 }
 
 .investment-values {
@@ -1402,6 +1595,74 @@ a {
   fill: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.trend-value.over {
+  fill: #dc2626;
+}
+
+.budget-threshold-line {
+  fill: none;
+  stroke: #f59e0b;
+  stroke-width: 2.4;
+  stroke-dasharray: 7 5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.budget-axis-tick {
+  stroke: #f59e0b;
+  stroke-width: 1.5;
+}
+
+.budget-axis-label {
+  fill: #d97706;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.trend-axis-zero {
+  fill: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.budget-trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 2px 0 10px;
+}
+
+.budget-trend-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.budget-trend-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.budget-trend-swatch.within {
+  background: #16a34a;
+}
+
+.budget-trend-swatch.over {
+  background: #dc2626;
+}
+
+.budget-trend-swatch.budget-line {
+  width: 20px;
+  height: 0;
+  border-radius: 0;
+  border-top: 2.6px dashed #f59e0b;
 }
 
 .faq-intro {

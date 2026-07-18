@@ -105,6 +105,32 @@ export type Transaction = {
   subscriptionName: string | null;
   investmentId: string | null;
   investmentName: string | null;
+  vacationId: string | null;
+  vacationName: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type VacationSubtypeBreakdown = {
+  subcategoryId: string;
+  name: string;
+  icon: string;
+  color: string;
+  amountPaise: number;
+};
+
+export type Vacation = {
+  id: string;
+  name: string;
+  startDate: string | null;
+  endDate: string | null;
+  budgetPaise: number | null;
+  note: string | null;
+  isArchived: boolean;
+  totalSpentPaise: number;
+  transactionCount: number;
+  remainingPaise: number | null;
+  breakdown: VacationSubtypeBreakdown[];
   createdAt: string;
   updatedAt: string;
 };
@@ -158,6 +184,7 @@ export type Bootstrap = {
   loans: Loan[];
   subscriptions: AutopaySubscription[];
   investments: Investment[];
+  vacations: Vacation[];
 };
 
 export type UserProfile = {
@@ -294,6 +321,20 @@ export type TrendReport = {
   points: TrendPoint[];
 };
 
+export type BudgetTrendPoint = {
+  label: string;
+  actualPaise: number;
+  budgetPaise: number | null;
+};
+
+export type BudgetTrendReport = {
+  mode: TrendMode;
+  subcategoryId: string;
+  name: string;
+  month: string | null;
+  points: BudgetTrendPoint[];
+};
+
 export type PaymentHistory = { source: string; id: string; year: number; months: boolean[] };
 
 export type BudgetStatus = "safe" | "watch" | "critical" | "over";
@@ -368,6 +409,7 @@ export type CreateTransactionPayload = {
   loanPaymentType?: LoanPaymentType;
   subscriptionId?: string;
   investmentId?: string;
+  vacationId?: string;
   splits?: Array<{
     categoryId: string;
     amountPaise: number;

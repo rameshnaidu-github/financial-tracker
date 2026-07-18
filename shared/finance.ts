@@ -15,6 +15,7 @@ export const INVESTMENT_TYPES = [
   { id: "land", label: "Land", icon: "home", color: "#0f766e" },
   { id: "property", label: "Property", icon: "home", color: "#7c3aed" },
   { id: "pf", label: "PF", icon: "landmark", color: "#059669" },
+  { id: "fd", label: "Fixed Deposit", icon: "banknote", color: "#0891b2" },
   { id: "other", label: "Other", icon: "wallet", color: "#64748b" }
 ] as const;
 
@@ -343,6 +344,25 @@ export const updateInvestmentSchema = z
   })
   .refine((value) => Object.keys(value).length > 0, "No investment changes provided.");
 
+export const createVacationSchema = z.object({
+  name: z.string().trim().min(1).max(90),
+  startDate: dateSchema.optional(),
+  endDate: dateSchema.optional(),
+  budgetPaise: positivePaiseSchema.optional(),
+  note: optionalTextSchema
+});
+
+export const updateVacationSchema = z
+  .object({
+    name: z.string().trim().min(1).max(90).optional(),
+    startDate: z.union([dateSchema, z.literal("")]).optional(),
+    endDate: z.union([dateSchema, z.literal("")]).optional(),
+    budgetPaise: z.union([positivePaiseSchema, z.literal(0)]).optional(),
+    note: optionalTextSchema,
+    isArchived: z.boolean().optional()
+  })
+  .refine((value) => Object.keys(value).length > 0, "No vacation changes provided.");
+
 export const updateSettingsSchema = z.object({
   cardUtilizationAlertPercent: z.number().int().min(1).max(100)
 });
@@ -395,6 +415,7 @@ const transactionObjectSchema = z.object({
     loanPaymentType: loanPaymentTypeSchema.optional(),
     subscriptionId: optionalIdSchema.optional(),
     investmentId: optionalIdSchema.optional(),
+    vacationId: optionalIdSchema.optional(),
     splits: z.array(transactionSplitSchema).optional()
   });
 
@@ -466,6 +487,14 @@ export const createTransactionSchema = transactionObjectSchema.superRefine((valu
       });
     }
 
+    if (value.vacationId && value.kind !== "expense") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["vacationId"],
+        message: "Only expenses can be tagged to a vacation."
+      });
+    }
+
     if (
       (value.kind === "expense" || value.kind === "investment" || value.kind === "emi") &&
       value.direction !== "outflow"
@@ -496,7 +525,8 @@ export const updateTransactionSchema = transactionObjectSchema.partial().extend(
   linkedTransactionId: clearableIdSchema,
   loanId: clearableIdSchema,
   subscriptionId: clearableIdSchema,
-  investmentId: clearableIdSchema
+  investmentId: clearableIdSchema,
+  vacationId: clearableIdSchema
 }).refine(
   (value) => Object.keys(value).length > 0,
   "No transaction changes provided."
@@ -530,6 +560,8 @@ export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
 export type InvestmentType = z.infer<typeof investmentTypeSchema>;
 export type CreateInvestmentInput = z.infer<typeof createInvestmentSchema>;
 export type UpdateInvestmentInput = z.infer<typeof updateInvestmentSchema>;
+export type CreateVacationInput = z.infer<typeof createVacationSchema>;
+export type UpdateVacationInput = z.infer<typeof updateVacationSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
 export type CreateBatchInput = z.infer<typeof createBatchSchema>;

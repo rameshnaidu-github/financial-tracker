@@ -1392,6 +1392,56 @@ test("builds week-, month- and year-on-year trend reports per Type", async () =>
   await assertRejects("unknown trend type", () => services.getTrendReport(undefined, "type_missing", "month"));
 });
 
+test("builds a budget-vs-actual trend for a SubType", async () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const cur = `${year}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const bank = services.createAccount({
+    name: `QA Budget Trend Bank ${Date.now().toString().slice(-5)}`,
+    type: "bank",
+    startingBalancePaise: 5_00_000_00
+  });
+  const grocSub = subcategoryId("Expense", "Groceries");
+
+  services.createBudgetLine({ month: cur, scopeType: "subcategory", scopeId: grocSub, amountPaise: 5_000_00 });
+  services.createTransaction({
+    date: `${cur}-10`,
+    accountId: bank.id,
+    method: "upi",
+    merchant: "Groceries over budget",
+    typeId: typeId("Expense"),
+    subcategoryId: grocSub,
+    amountPaise: 7_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  const monthTrend = services.getBudgetTrendReport(bank.id, grocSub, "month");
+  const curPoint = monthTrend.points[monthTrend.points.length - 1];
+  assert(curPoint.actualPaise === 7_000_00, "Current month actual should reflect the grocery spend.");
+  assert(curPoint.budgetPaise === 5_000_00, "Current month budget should reflect the set budget.");
+  assert(curPoint.actualPaise > (curPoint.budgetPaise ?? 0), "Over-budget months should be detectable.");
+
+  const weekTrend = services.getBudgetTrendReport(bank.id, grocSub, "week", cur);
+  assert(weekTrend.month === cur, "Week budget trend should echo the selected month.");
+  const overWeek = weekTrend.points.find((point) => point.actualPaise === 7_000_00);
+  assert(overWeek, "The week holding the spend should appear.");
+  assert(
+    overWeek!.budgetPaise !== null && overWeek!.budgetPaise > 0,
+    "Weekly budget should be pro-rated from the monthly budget."
+  );
+
+  const noBudget = services.getBudgetTrendReport(bank.id, subcategoryId("Expense", "Dining/Food"), "month");
+  assert(
+    noBudget.points.every((point) => point.budgetPaise === null),
+    "A SubType with no budget set should have null budget points."
+  );
+
+  await assertRejects("non-budgetable SubType", () =>
+    services.getBudgetTrendReport(bank.id, subcategoryId("Income", "Salary"), "month")
+  );
+});
+
 test("stores the card utilization alert threshold with validation", async () => {
   assert(
     services.getSettings().card_utilization_alert_percent === "30",
@@ -1434,6 +1484,16 @@ test("tracks investment holdings with computed gain and validation", async () =>
   assert(mf.gainPaise === -20_000_00 && mf.gainPercent === -10, "Losses should be negative.");
   assert(mf.shares === null, "Shares should be optional for non-stock holdings.");
   assert(mf.purchaseDate === "2026-01-05", "Purchase date should round-trip for non-stocks.");
+
+  const fd = services.createInvestment({
+    type: "fd",
+    name: "QA HDFC Fixed Deposit",
+    investedPaise: 5_00_000_00,
+    currentValuePaise: 5_35_000_00,
+    purchaseDate: "2026-02-01"
+  });
+  assert(fd.type === "fd" && fd.typeLabel === "Fixed Deposit", "FD should be a valid investment type.");
+  assert(fd.gainPaise === 35_000_00 && fd.gainPercent === 7, "FD gain should compute like any holding.");
 
   const updated = services.updateInvestment(stock.id, { currentValuePaise: 90_000_00 });
   assert(updated.gainPaise === -10_000_00, "Updating current value should recompute the gain.");
@@ -1575,6 +1635,164 @@ test("scopes mutual-fund payment history to the linked holding only", async () =
       investmentId: fundA.id
     })
   );
+});
+
+test("tags expenses to a vacation, rolls them up by subtype, and double-counts", async () => {
+  assert(state.bankId, "Bank should exist.");
+  const trip = services.createVacation({
+    name: "QA Goa Trip",
+    startDate: "2026-05-01",
+    endDate: "2026-05-06",
+    budgetPaise: 50_000_00
+  });
+  assert(trip.totalSpentPaise === 0 && trip.transactionCount === 0, "A new trip starts empty.");
+  assert(trip.remainingPaise === 50_000_00, "Remaining should equal the budget when nothing is spent.");
+
+  const grocSub = subcategoryId("Expense", "Groceries");
+  const travelSub = subcategoryId("Expense", "Travel");
+  const foodTxn = services.createTransaction({
+    date: "2026-05-02",
+    accountId: state.bankId,
+    method: "upi",
+    merchant: "Goa food",
+    typeId: typeId("Expense"),
+    subcategoryId: grocSub,
+    amountPaise: 20_000_00,
+    direction: "outflow",
+    kind: "expense",
+    vacationId: trip.id
+  });
+  services.createTransaction({
+    date: "2026-05-03",
+    accountId: state.bankId,
+    method: "upi",
+    merchant: "Goa cab",
+    typeId: typeId("Expense"),
+    subcategoryId: travelSub,
+    amountPaise: 8_000_00,
+    direction: "outflow",
+    kind: "expense",
+    vacationId: trip.id
+  });
+
+  const withSpend = services.listVacations(true).find((item) => item.id === trip.id);
+  assert(withSpend, "Trip should be listed.");
+  assert(withSpend!.totalSpentPaise === 28_000_00, "Total should sum the tagged expenses.");
+  assert(withSpend!.transactionCount === 2, "Both tagged expenses should be counted.");
+  assert(withSpend!.remainingPaise === 22_000_00, "Remaining = budget minus spend.");
+  const groc = withSpend!.breakdown.find((row) => row.subcategoryId === grocSub);
+  const travel = withSpend!.breakdown.find((row) => row.subcategoryId === travelSub);
+  assert(groc?.amountPaise === 20_000_00 && travel?.amountPaise === 8_000_00, "Breakdown groups by SubType.");
+
+  // Double-counting: the tagged expense still shows in the normal monthly expense report.
+  const report = services.getMonthlyReport(undefined, "2026-05");
+  const grocReport = report.categories.find((row) => row.subcategoryId === grocSub);
+  assert(
+    (grocReport?.amountPaise ?? 0) >= 20_000_00,
+    "A vacation-tagged expense must also appear in normal expenses."
+  );
+
+  // Editing a transaction to drop the tag removes it from the trip only.
+  services.updateTransaction(foodTxn.transaction.id, { vacationId: "" });
+  const afterUntag = services.listVacations(true).find((item) => item.id === trip.id);
+  assert(afterUntag!.totalSpentPaise === 8_000_00, "Untagging removes the expense from the trip total.");
+
+  await assertRejects("non-expense tagged to a vacation", () =>
+    services.createTransaction({
+      date: "2026-05-04",
+      accountId: state.bankId!,
+      method: "bank_transfer",
+      merchant: "Salary",
+      typeId: typeId("Income"),
+      subcategoryId: subcategoryId("Income", "Salary"),
+      amountPaise: 1_00_000_00,
+      direction: "inflow",
+      kind: "income",
+      vacationId: trip.id
+    })
+  );
+
+  // Deleting the trip keeps the transactions as normal expenses.
+  services.deleteVacation(trip.id);
+  assert(!services.listVacations(true).some((item) => item.id === trip.id), "Deleted trip should be gone.");
+  const afterDelete = services.getMonthlyReport(undefined, "2026-05");
+  assert(
+    (afterDelete.categories.find((row) => row.subcategoryId === travelSub)?.amountPaise ?? 0) >= 8_000_00,
+    "Deleting a trip must not delete its expenses."
+  );
+});
+
+test("attributes a split vacation expense across its subtypes", async () => {
+  assert(state.bankId, "Bank should exist.");
+  const trip = services.createVacation({ name: "QA Split Trip" });
+  const grocSub = subcategoryId("Expense", "Groceries");
+  const diningSub = subcategoryId("Expense", "Dining/Food");
+  services.createTransaction({
+    date: "2026-06-02",
+    accountId: state.bankId,
+    method: "upi",
+    merchant: "Goa combined bill",
+    typeId: typeId("Expense"),
+    amountPaise: 10_000_00,
+    direction: "outflow",
+    kind: "expense",
+    vacationId: trip.id,
+    splits: [
+      { subcategoryId: grocSub, amountPaise: 6_000_00 },
+      { subcategoryId: diningSub, amountPaise: 4_000_00 }
+    ]
+  });
+
+  const summary = services.listVacations(true).find((item) => item.id === trip.id);
+  assert(summary, "Split trip should be listed.");
+  assert(summary!.totalSpentPaise === 10_000_00, "Trip total should be the full split amount.");
+  assert(summary!.transactionCount === 1, "A split is a single tagged transaction.");
+  const groc = summary!.breakdown.find((row) => row.subcategoryId === grocSub);
+  const dining = summary!.breakdown.find((row) => row.subcategoryId === diningSub);
+  assert(
+    groc?.amountPaise === 6_000_00 && dining?.amountPaise === 4_000_00,
+    "Each split amount should land on its own SubType, not 'Uncategorized'."
+  );
+  assert(
+    summary!.breakdown.reduce((sum, row) => sum + row.amountPaise, 0) === summary!.totalSpentPaise,
+    "The breakdown must sum to the trip total."
+  );
+  services.deleteVacation(trip.id);
+});
+
+test("re-typing a vacation-tagged expense to a non-expense drops the tag without error", async () => {
+  assert(state.bankId, "Bank should exist.");
+  const trip = services.createVacation({ name: "QA Retag Trip" });
+  const txn = services.createTransaction({
+    date: "2026-07-02",
+    accountId: state.bankId,
+    method: "upi",
+    merchant: "trip food",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 5_000_00,
+    direction: "outflow",
+    kind: "expense",
+    vacationId: trip.id
+  });
+  assert(
+    services.listVacations(true).find((item) => item.id === trip.id)!.totalSpentPaise === 5_000_00,
+    "Tagged expense should count on the trip."
+  );
+
+  // Change the Type to Income WITHOUT clearing vacationId in the patch — the server must
+  // drop the tag rather than reject the update with a validation error.
+  services.updateTransaction(txn.transaction.id, {
+    typeId: typeId("Income"),
+    subcategoryId: subcategoryId("Income", "Salary"),
+    direction: "inflow",
+    kind: "income"
+  });
+  assert(
+    services.listVacations(true).find((item) => item.id === trip.id)!.totalSpentPaise === 0,
+    "The re-typed transaction should no longer be tagged to the trip."
+  );
+  services.deleteVacation(trip.id);
 });
 
 test("computes net worth, asset allocation, cashflow and runway", async () => {

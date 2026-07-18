@@ -20,6 +20,7 @@ import {
   Moon,
   Pencil,
   PiggyBank,
+  Plane,
   Plus,
   RotateCcw,
   Search,
@@ -60,6 +61,7 @@ import type {
   CreateTransactionPayload,
   Investment,
   InvestmentType,
+  Vacation,
   Loan,
   LoanPaymentType,
   MonthlyReport,
@@ -73,6 +75,8 @@ import type {
   TrendMode,
   TrendPoint,
   TrendReport,
+  BudgetTrendReport,
+  BudgetTrendPoint,
   UserProfile,
   WealthSummary
 } from "./types";
@@ -84,7 +88,7 @@ import {
   INVESTMENT_TYPES
 } from "../shared/finance";
 
-type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "subscriptions" | "categories" | "faq" | "profile";
+type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "vacations" | "subscriptions" | "categories" | "faq" | "profile";
 type Theme = "light" | "dark";
 type DonutSegment = {
   id: string;
@@ -116,6 +120,7 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home }> = [
   { page: "accounts", label: "Accounts", icon: WalletCards },
   { page: "loans", label: "Loans", icon: Landmark },
   { page: "investments", label: "Investments", icon: TrendingUp },
+  { page: "vacations", label: "Vacations", icon: Plane },
   { page: "subscriptions", label: "AutoPay", icon: CalendarClock },
   { page: "categories", label: "Categories", icon: Tags },
   { page: "faq", label: "FAQ", icon: CircleHelp },
@@ -131,6 +136,7 @@ const mobileLabels: Record<Page, string> = {
   accounts: "Accts",
   loans: "Loan",
   investments: "Invest",
+  vacations: "Trips",
   subscriptions: "Auto",
   categories: "Cats",
   faq: "FAQ",
@@ -146,6 +152,7 @@ const pagePaths: Record<Page, string> = {
   accounts: "/accounts",
   loans: "/loans",
   investments: "/investments",
+  vacations: "/vacations",
   subscriptions: "/subscriptions",
   categories: "/categories",
   faq: "/faq",
@@ -331,6 +338,7 @@ export default function App() {
   const loans = bootstrap?.loans ?? [];
   const subscriptions = bootstrap?.subscriptions ?? [];
   const investments = bootstrap?.investments ?? [];
+  const vacations = bootstrap?.vacations ?? [];
   const categoryTypes = bootstrap?.categoryTypes ?? [];
   const categories = flattenSubcategories(categoryTypes);
   const profile = bootstrap?.profile ?? emptyProfile;
@@ -345,6 +353,7 @@ export default function App() {
     activePage !== "budgets" &&
     activePage !== "loans" &&
     activePage !== "investments" &&
+    activePage !== "vacations" &&
     activePage !== "subscriptions" &&
     activePage !== "categories" &&
     activePage !== "faq" &&
@@ -449,6 +458,7 @@ export default function App() {
               loans={loans.filter((loan) => !loan.isArchived)}
               subscriptions={subscriptions.filter((subscription) => !subscription.isArchived)}
               mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
+              vacations={vacations.filter((vacation) => !vacation.isArchived)}
               categoryTypes={categoryTypes}
               refresh={refresh}
               refreshKey={refreshKey}
@@ -464,6 +474,7 @@ export default function App() {
               loans={loans.filter((loan) => !loan.isArchived)}
               subscriptions={subscriptions}
               mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
+              vacations={vacations.filter((vacation) => !vacation.isArchived)}
               categoryTypes={categoryTypes}
               refresh={refresh}
               refreshKey={refreshKey}
@@ -502,6 +513,14 @@ export default function App() {
           {activePage === "investments" && (
             <InvestmentsPage
               investments={investments}
+              refresh={refresh}
+              showNotice={showNotice}
+              requestConfirm={requestConfirm}
+            />
+          )}
+          {activePage === "vacations" && (
+            <VacationsPage
+              vacations={vacations}
               refresh={refresh}
               showNotice={showNotice}
               requestConfirm={requestConfirm}
@@ -936,6 +955,7 @@ function WeeklyEntryPage({
   loans,
   subscriptions,
   mutualFunds,
+  vacations,
   categoryTypes,
   refresh,
   refreshKey,
@@ -948,6 +968,7 @@ function WeeklyEntryPage({
   loans: Loan[];
   subscriptions: AutopaySubscription[];
   mutualFunds: Investment[];
+  vacations: Vacation[];
   categoryTypes: CategoryType[];
   refresh: () => Promise<void>;
   refreshKey: number;
@@ -981,7 +1002,8 @@ function WeeklyEntryPage({
     loanId: "",
     loanPaymentType: "emi" as LoanPaymentType,
     subscriptionId: "",
-    investmentId: ""
+    investmentId: "",
+    vacationId: ""
   });
 
   const reloadWeek = useCallback(async () => {
@@ -1028,6 +1050,7 @@ function WeeklyEntryPage({
   const isAutopaySelected = form.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
   const isMutualFundsSelected = form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
   const isSelfTransferSelected = form.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID;
+  const isExpenseSelected = selectedBehavior === "expense";
   const selfTransferTargets = selfTransferTargetAccounts(accounts, form.accountId);
   const expenseTotal = transactions
     .filter((transaction) => transaction.kind === "expense")
@@ -1072,7 +1095,8 @@ function WeeklyEntryPage({
         subscriptionId:
           form.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? form.subscriptionId || undefined : undefined,
         investmentId:
-          form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? form.investmentId || undefined : undefined
+          form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? form.investmentId || undefined : undefined,
+        vacationId: behavior === "expense" ? form.vacationId || undefined : undefined
       };
 
       const result = await Api.createTransaction(payload);
@@ -1286,6 +1310,22 @@ function WeeklyEntryPage({
                   </select>
                 </label>
               )}
+              {isExpenseSelected && vacations.length > 0 && (
+                <label>
+                  Vacation
+                  <select
+                    value={form.vacationId}
+                    onChange={(event) => setForm({ ...form, vacationId: event.target.value })}
+                  >
+                    <option value="">Not part of a vacation</option>
+                    {vacations.map((vacation) => (
+                      <option key={vacation.id} value={vacation.id}>
+                        {vacation.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {selectedBehavior === "loan" && (
                 <>
                   <label>
@@ -1440,6 +1480,7 @@ type TransactionEditDraft = {
   loanPaymentType: LoanPaymentType;
   subscriptionId: string;
   investmentId: string;
+  vacationId: string;
 };
 
 function TransactionsPage({
@@ -1448,6 +1489,7 @@ function TransactionsPage({
   loans,
   subscriptions,
   mutualFunds,
+  vacations,
   categoryTypes,
   refresh,
   refreshKey,
@@ -1459,6 +1501,7 @@ function TransactionsPage({
   loans: Loan[];
   subscriptions: AutopaySubscription[];
   mutualFunds: Investment[];
+  vacations: Vacation[];
   categoryTypes: CategoryType[];
   refresh: () => Promise<void>;
   refreshKey: number;
@@ -1576,7 +1619,8 @@ function TransactionsPage({
         subscriptionId:
           editDraft.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? editDraft.subscriptionId : "",
         investmentId:
-          editDraft.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? editDraft.investmentId : ""
+          editDraft.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? editDraft.investmentId : "",
+        vacationId: behavior === "expense" ? editDraft.vacationId : ""
       });
       setEditDraft(null);
       await loadPage();
@@ -1681,6 +1725,7 @@ function TransactionsPage({
                 {editDraft?.id === transaction.id ? (
                   <TransactionEditRow
                     draft={editDraft}
+                    vacations={vacations}
                     accounts={accounts}
                     loans={loans}
                     subscriptions={subscriptions}
@@ -1762,6 +1807,7 @@ function TransactionEditRow({
   loans,
   subscriptions,
   mutualFunds,
+  vacations,
   categoryTypes,
   cardAccounts,
   saving,
@@ -1775,6 +1821,7 @@ function TransactionEditRow({
   loans: Loan[];
   subscriptions: AutopaySubscription[];
   mutualFunds: Investment[];
+  vacations: Vacation[];
   categoryTypes: CategoryType[];
   cardAccounts: Account[];
   saving: boolean;
@@ -1790,6 +1837,7 @@ function TransactionEditRow({
   const availableLoans = loans.filter((loan) => loan.subcategoryId === draft.subcategoryId);
   const isAutopaySelected = draft.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
   const isMutualFundsSelected = draft.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
+  const isExpenseSelected = behavior === "expense";
   const isSelfTransferSelected = draft.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID;
   const selfTransferTargets = selfTransferTargetAccounts(accounts, draft.accountId);
   const availableSubscriptions = subscriptions.filter(
@@ -1844,7 +1892,8 @@ function TransactionEditRow({
                 loanId: "",
                 loanPaymentType: "emi",
                 subscriptionId: "",
-                investmentId: ""
+                investmentId: "",
+                vacationId: ""
               });
             }}
           >
@@ -1967,6 +2016,22 @@ function TransactionEditRow({
               {mutualFunds.map((fund) => (
                 <option key={fund.id} value={fund.id}>
                   {fund.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {isExpenseSelected && vacations.length > 0 && (
+          <label>
+            Vacation
+            <select
+              value={draft.vacationId}
+              onChange={(event) => onChange({ ...draft, vacationId: event.target.value })}
+            >
+              <option value="">Not part of a vacation</option>
+              {vacations.map((vacation) => (
+                <option key={vacation.id} value={vacation.id}>
+                  {vacation.name}
                 </option>
               ))}
             </select>
@@ -2169,10 +2234,59 @@ function ReportsPage({
   const [trend, setTrend] = useState<TrendReport | null>(null);
   const [trendError, setTrendError] = useState("");
 
+  const budgetSubcategories = useMemo(
+    () =>
+      categoryTypes
+        .filter((type) => type.behavior === "expense")
+        .flatMap((type) =>
+          type.subcategories.map((subcategory) => ({
+            id: subcategory.id,
+            label: subcategory.name
+          }))
+        ),
+    [categoryTypes]
+  );
+  const [budgetMode, setBudgetMode] = useState<TrendMode>("month");
+  const [budgetMonth, setBudgetMonth] = useState(initialMonth);
+  const [budgetStyle, setBudgetStyle] = useState<"bar" | "line">("bar");
+  const [budgetSubId, setBudgetSubId] = useState(
+    () =>
+      budgetSubcategories.find((item) => /grocer/i.test(item.label))?.id ??
+      budgetSubcategories[0]?.id ??
+      ""
+  );
+  const [budgetTrend, setBudgetTrend] = useState<BudgetTrendReport | null>(null);
+  const [budgetTrendError, setBudgetTrendError] = useState("");
+
   useEffect(() => {
     if (trendTypeId && trendTypes.some((type) => type.id === trendTypeId)) return;
     setTrendTypeId(trendTypes[0]?.id ?? "");
   }, [trendTypes, trendTypeId]);
+
+  useEffect(() => {
+    if (budgetSubId && budgetSubcategories.some((item) => item.id === budgetSubId)) return;
+    setBudgetSubId(budgetSubcategories[0]?.id ?? "");
+  }, [budgetSubcategories, budgetSubId]);
+
+  useEffect(() => {
+    if (!budgetSubId) {
+      setBudgetTrend(null);
+      return;
+    }
+    let active = true;
+    setBudgetTrend(null);
+    setBudgetTrendError("");
+    Api.budgetTrend(budgetSubId, budgetMode, selectedAccountId || undefined, budgetMonth)
+      .then((next) => {
+        if (active) setBudgetTrend(next);
+      })
+      .catch((error: unknown) => {
+        if (active) setBudgetTrendError(error instanceof Error ? error.message : "Could not load the budget trend.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [budgetSubId, budgetMode, budgetMonth, selectedAccountId, refreshKey]);
 
   useEffect(() => {
     if (!trendTypeId) {
@@ -2279,11 +2393,6 @@ function ReportsPage({
                 onSelect={setSelectedTypeId}
               />
             </div>
-            <CategoryBars categories={report.categories} />
-            <a className="secondary-action export-link" href="/api/export/transactions.csv">
-              <Download size={18} />
-              Export CSV
-            </a>
           </>
         )}
       </Panel>
@@ -2359,7 +2468,252 @@ function ReportsPage({
           </>
         )}
       </Panel>
+
+      <Panel title="Budget vs actual">
+        <div className="trend-controls">
+          <label className="control-field toolbar-control trend-mode-control">
+            <span className="control-label">Period</span>
+            <select value={budgetMode} onChange={(event) => setBudgetMode(event.target.value as TrendMode)}>
+              {(["week", "month", "year"] as TrendMode[]).map((mode) => (
+                <option key={mode} value={mode}>
+                  {trendModeLabels[mode]}
+                </option>
+              ))}
+            </select>
+          </label>
+          {budgetMode === "week" && (
+            <label className="control-field toolbar-control trend-month-control">
+              <span className="control-label">Month</span>
+              <select value={budgetMonth} onChange={(event) => setBudgetMonth(event.target.value)}>
+                {trendMonthOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="control-field toolbar-control trend-style-control">
+            <span className="control-label">Chart</span>
+            <select value={budgetStyle} onChange={(event) => setBudgetStyle(event.target.value as "bar" | "line")}>
+              <option value="bar">Bar</option>
+              <option value="line">Line</option>
+            </select>
+          </label>
+          <label className="control-field toolbar-control trend-type-control">
+            <span className="control-label">SubType</span>
+            <select value={budgetSubId} onChange={(event) => setBudgetSubId(event.target.value)}>
+              {budgetSubcategories.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {budgetTrendError ? (
+          <EmptyState text={budgetTrendError} />
+        ) : budgetSubcategories.length === 0 ? (
+          <EmptyState text="Add a budgetable SubType in Categories to compare against budgets." />
+        ) : !budgetSubId ? (
+          <EmptyState text="Choose a SubType to compare against its budget." />
+        ) : !budgetTrend ? (
+          <PanelLoader label="Loading budget trend" />
+        ) : budgetTrend.points.every((point) => point.actualPaise === 0 && (point.budgetPaise ?? 0) === 0) ? (
+          <EmptyState
+            text={
+              budgetMode === "week"
+                ? `No ${budgetTrend.name} activity or budget in ${formatMonth(budgetMonth)}.`
+                : `No ${budgetTrend.name} activity or budget recorded yet.`
+            }
+          />
+        ) : (
+          <>
+            <p className="helper-text trend-caption">
+              {budgetTrend.name} ·{" "}
+              {budgetMode === "week"
+                ? `${formatMonth(budgetMonth)}, by week`
+                : budgetMode === "month"
+                  ? `${new Date().getFullYear()}, January to date`
+                  : "by year"}
+            </p>
+            <BudgetTrendLegend />
+            <BudgetTrendChart points={budgetTrend.points} variant={budgetStyle} />
+          </>
+        )}
+      </Panel>
     </div>
+  );
+}
+
+function BudgetTrendLegend() {
+  return (
+    <div className="budget-trend-legend">
+      <span className="budget-trend-legend-item">
+        <span className="budget-trend-swatch within" />
+        Within budget
+      </span>
+      <span className="budget-trend-legend-item">
+        <span className="budget-trend-swatch over" />
+        Over budget
+      </span>
+      <span className="budget-trend-legend-item">
+        <span className="budget-trend-swatch budget-line" />
+        Budget
+      </span>
+    </div>
+  );
+}
+
+function BudgetTrendChart({
+  points,
+  variant
+}: {
+  points: BudgetTrendPoint[];
+  variant: "bar" | "line";
+}) {
+  // Uniform: green when within budget, red when over. No per-subtype colours.
+  const withinColor = "#16a34a";
+  const overColor = "#dc2626";
+  const width = 760;
+  const height = 300;
+  const pad = { top: 30, right: 14, bottom: 32, left: 52 };
+  const innerWidth = width - pad.left - pad.right;
+  const innerHeight = height - pad.top - pad.bottom;
+  const max = Math.max(
+    ...points.map((point) => point.actualPaise),
+    ...points.map((point) => point.budgetPaise ?? 0),
+    1
+  );
+  const step = innerWidth / points.length;
+  const baseline = pad.top + innerHeight;
+  const yFor = (value: number) => baseline - (value / max) * innerHeight;
+  // Distinct budget levels, shown as amber value ticks on the Y axis.
+  const budgetLevels = [...new Set(points.map((point) => point.budgetPaise).filter((value): value is number => value !== null && value > 0))];
+
+  const centers = points.map((point, index) => {
+    const over = point.budgetPaise !== null && point.actualPaise > point.budgetPaise;
+    return {
+      ...point,
+      over,
+      x: pad.left + step * index + step / 2,
+      y: yFor(point.actualPaise),
+      budgetY: point.budgetPaise === null ? null : yFor(point.budgetPaise)
+    };
+  });
+
+  // Budget threshold as a continuous stepped line spanning the whole timeline: a flat
+  // dashed line while the budget is stable, stepping up/down at the boundary wherever
+  // the monthly budget changes. Runs break around periods with no budget set.
+  const budgetPaths: string[] = [];
+  let run: Array<[number, number]> = [];
+  const flushRun = () => {
+    if (run.length) budgetPaths.push(run.map(([x, y]) => `${x},${y}`).join(" "));
+    run = [];
+  };
+  centers.forEach((point, index) => {
+    if (point.budgetY === null) {
+      flushRun();
+      return;
+    }
+    const left = pad.left + step * index;
+    const right = pad.left + step * (index + 1);
+    if (run.length === 0) {
+      run.push([left, point.budgetY]);
+    } else if (run[run.length - 1][1] !== point.budgetY) {
+      run.push([left, point.budgetY]); // vertical step at the period boundary
+    }
+    run.push([right, point.budgetY]);
+  });
+  flushRun();
+
+  return (
+    <svg className="trend-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Budget versus actual chart">
+      {[0.25, 0.5, 0.75].map((fraction) => (
+        <line
+          key={fraction}
+          className="trend-gridline"
+          x1={pad.left}
+          x2={width - pad.right}
+          y1={baseline - innerHeight * fraction}
+          y2={baseline - innerHeight * fraction}
+        />
+      ))}
+      <line className="trend-axis" x1={pad.left} x2={width - pad.right} y1={baseline} y2={baseline} />
+
+      <text className="trend-axis-zero" x={pad.left - 7} y={baseline + 4} textAnchor="end">
+        ₹0
+      </text>
+      {budgetLevels.map((value) => (
+        <g key={`y-budget-${value}`}>
+          <line className="budget-axis-tick" x1={pad.left - 4} x2={pad.left} y1={yFor(value)} y2={yFor(value)} />
+          <text className="budget-axis-label" x={pad.left - 7} y={yFor(value) + 4} textAnchor="end">
+            {compactINR(value)}
+          </text>
+        </g>
+      ))}
+
+      {variant === "bar" ? (
+        centers.map((point) => {
+          const barWidth = Math.min(step * 0.55, 52);
+          const barHeight = Math.max(baseline - point.y, point.actualPaise > 0 ? 2 : 0);
+          return (
+            <g key={point.label}>
+              <title>{`${point.label}: ${formatINR(point.actualPaise)}${
+                point.budgetPaise !== null ? ` of ${formatINR(point.budgetPaise)} budget` : ""
+              }`}</title>
+              <rect
+                x={point.x - barWidth / 2}
+                y={baseline - barHeight}
+                width={barWidth}
+                height={barHeight}
+                rx={5}
+                fill={point.over ? overColor : withinColor}
+              />
+            </g>
+          );
+        })
+      ) : (
+        <>
+          <polyline
+            className="trend-line"
+            stroke={withinColor}
+            points={centers.map((point) => `${point.x},${point.y}`).join(" ")}
+          />
+          {centers.map((point) => (
+            <g key={point.label}>
+              <title>{`${point.label}: ${formatINR(point.actualPaise)}${
+                point.budgetPaise !== null ? ` of ${formatINR(point.budgetPaise)} budget` : ""
+              }`}</title>
+              <circle cx={point.x} cy={point.y} r={4.5} fill={point.over ? overColor : withinColor} />
+            </g>
+          ))}
+        </>
+      )}
+
+      {budgetPaths.map((pointList, index) => (
+        <polyline key={`budget-${index}`} className="budget-threshold-line" points={pointList} />
+      ))}
+
+      {centers.map((point) => (
+        <g key={`labels-${point.label}`}>
+          {point.actualPaise > 0 && (
+            <text
+              className={`trend-value ${point.over ? "over" : ""}`}
+              x={point.x}
+              y={point.y - 9}
+              textAnchor="middle"
+            >
+              {compactINR(point.actualPaise)}
+            </text>
+          )}
+          <text className="trend-label" x={point.x} y={height - 10} textAnchor="middle">
+            {point.label}
+          </text>
+        </g>
+      ))}
+    </svg>
   );
 }
 
@@ -2565,17 +2919,19 @@ function BudgetPlannerPage({
   const [plan, setPlan] = useState<BudgetPlan | null>(null);
   const [error, setError] = useState("");
   const [retryKey, setRetryKey] = useState(0);
-  const [typeId, setTypeId] = useState("");
   const [subKey, setSubKey] = useState("");
   const [amount, setAmount] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState("");
   const [editAmount, setEditAmount] = useState("");
 
-  const budgetTypes = useMemo(() => budgetTypeOptions(plan?.availableScopes ?? []), [plan]);
+  // Budgets are planned per Expense SubType only (no whole-Type budgets).
   const subScopes = useMemo(
-    () => (plan?.availableScopes ?? []).filter((scope) => scope.typeId === typeId),
-    [plan, typeId]
+    () =>
+      (plan?.availableScopes ?? []).filter(
+        (scope) => scope.scopeType === "subcategory" && scope.behavior === "expense"
+      ),
+    [plan]
   );
 
   const loadPlan = useCallback(async () => {
@@ -2591,16 +2947,6 @@ function BudgetPlannerPage({
   useEffect(() => {
     void loadPlan();
   }, [loadPlan, retryKey, refreshKey]);
-
-  useEffect(() => {
-    if (!budgetTypes.length) {
-      setTypeId("");
-      return;
-    }
-    if (!budgetTypes.some((type) => type.typeId === typeId)) {
-      setTypeId(budgetTypes[0].typeId);
-    }
-  }, [budgetTypes, typeId]);
 
   useEffect(() => {
     if (!subScopes.length) {
@@ -2709,17 +3055,6 @@ function BudgetPlannerPage({
             </div>
 
             <form className="budget-add-form" onSubmit={addBudget}>
-              <label>
-                Type
-                <select value={typeId} onChange={(event) => setTypeId(event.target.value)} disabled={!budgetTypes.length}>
-                  {budgetTypes.length === 0 && <option value="">No Types available</option>}
-                  {budgetTypes.map((type) => (
-                    <option key={type.typeId} value={type.typeId}>
-                      {type.typeName}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <label>
                 SubType
                 <select value={subKey} onChange={(event) => setSubKey(event.target.value)} disabled={!subScopes.length}>
@@ -2883,22 +3218,10 @@ function budgetScopeKey(scope: BudgetScope) {
   return `${scope.scopeType}:${scope.scopeId}`;
 }
 
-function budgetTypeOptions(scopes: BudgetScope[]): Array<{ typeId: string; typeName: string }> {
-  const seen = new Set<string>();
-  const types: Array<{ typeId: string; typeName: string }> = [];
-  for (const scope of scopes) {
-    if (!seen.has(scope.typeId)) {
-      seen.add(scope.typeId);
-      types.push({ typeId: scope.typeId, typeName: scope.typeName });
-    }
-  }
-  return types;
-}
 
 function budgetSubLabel(scope: BudgetScope) {
-  if (scope.scopeType === "type") {
-    return "All subtypes";
-  }
+  // The Budget Planner only offers Expense SubType scopes, so the label is just the
+  // SubType name (its "Expense / " prefix stripped).
   const prefix = `${scope.typeName} / `;
   return scope.name.startsWith(prefix) ? scope.name.slice(prefix.length) : scope.name;
 }
@@ -3428,34 +3751,15 @@ function InvestmentsPage({
             <EmptyState text="No investments yet. Add your first holding on the right." />
           ) : (
             <div className="investment-groups">
-              {groups.map((group) => {
-                const invested = group.items.reduce((sum, item) => sum + item.investedPaise, 0);
-                const current = group.items.reduce((sum, item) => sum + item.currentValuePaise, 0);
-                return (
-                  <div className="investment-group" key={group.type.id}>
-                    <div className="investment-group-head">
-                      <span className="investment-group-name" style={{ color: group.type.color }}>
-                        <IconGlyph name={group.type.icon} size={15} />
-                        {group.type.label}
-                      </span>
-                      <strong>{formatINR(current)}</strong>
-                      <small className={current - invested >= 0 ? "amount-in" : "amount-out"}>
-                        {signedImpact(current - invested)}
-                      </small>
-                    </div>
-                    <div className="loan-card-grid">
-                      {group.items.map((investment) => (
-                        <InvestmentCard
-                          key={investment.id}
-                          investment={investment}
-                          onEdit={setEditing}
-                          onDelete={remove}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
+              {groups.map((group) => (
+                <InvestmentGroup
+                  key={group.type.id}
+                  type={group.type}
+                  items={group.items}
+                  onEdit={setEditing}
+                  onDelete={remove}
+                />
+              ))}
             </div>
           )}
         </Panel>
@@ -3487,7 +3791,6 @@ function InvestmentCard({
   onDelete: (investment: Investment) => void;
 }) {
   const positive = investment.gainPaise >= 0;
-  const [expanded, setExpanded] = useState(false);
   return (
     <article className="loan-card investment-card">
       <div className="loan-card-header">
@@ -3505,30 +3808,12 @@ function InvestmentCard({
             </span>
           </div>
         </div>
-        <div className="loan-header-actions">
-          <span className={`investment-gain-badge ${positive ? "up" : "down"}`}>
-            {positive ? "+" : ""}
-            {investment.gainPercent}%
-          </span>
-          <button
-            type="button"
-            className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
-            aria-label={expanded ? `Collapse ${investment.name}` : `Expand ${investment.name}`}
-            aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            <ChevronDown size={18} />
-          </button>
-        </div>
+        <span className={`investment-gain-badge ${positive ? "up" : "down"}`}>
+          {positive ? "+" : ""}
+          {investment.gainPercent}%
+        </span>
       </div>
 
-      <div className="loan-card-quick">
-        <span>Current value</span>
-        <strong>{formatINR(investment.currentValuePaise)}</strong>
-        <small className={positive ? "amount-in" : "amount-out"}>{signedImpact(investment.gainPaise)}</small>
-      </div>
-
-      {expanded && <>
       <div className="investment-values">
         <div>
           <span>Invested</span>
@@ -3562,8 +3847,69 @@ function InvestmentCard({
       </div>
 
       {investment.type === "mutual_funds" && <PaymentHistoryGrid source="mutual_fund" id={investment.id} />}
-      </>}
     </article>
+  );
+}
+
+function InvestmentGroup({
+  type,
+  items,
+  onEdit,
+  onDelete
+}: {
+  type: { id: string; label: string; icon: string; color: string };
+  items: Investment[];
+  onEdit: (investment: Investment) => void;
+  onDelete: (investment: Investment) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const invested = items.reduce((sum, item) => sum + item.investedPaise, 0);
+  const current = items.reduce((sum, item) => sum + item.currentValuePaise, 0);
+  const gain = current - invested;
+  const gainPercent = invested > 0 ? Math.round((gain / invested) * 100) : 0;
+  const positive = gain >= 0;
+
+  return (
+    <div className={`investment-group ${expanded ? "expanded" : ""}`}>
+      <button
+        type="button"
+        className="investment-group-head"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="investment-group-name" style={{ color: type.color }}>
+          <IconGlyph name={type.icon} size={16} />
+          {type.label}
+          <span className="investment-group-count">{items.length}</span>
+        </span>
+        <div className="investment-group-metrics">
+          <div>
+            <span>Invested</span>
+            <strong>{formatINR(invested)}</strong>
+          </div>
+          <div>
+            <span>Current</span>
+            <strong>{formatINR(current)}</strong>
+          </div>
+          <div>
+            <span>Net {positive ? "gain" : "loss"}</span>
+            <strong className={positive ? "amount-in" : "amount-out"}>
+              {signedImpact(gain)} ({gainPercent >= 0 ? "+" : ""}
+              {gainPercent}%)
+            </strong>
+          </div>
+        </div>
+        <ChevronDown className={`investment-group-chevron ${expanded ? "expanded" : ""}`} size={20} />
+      </button>
+
+      {expanded && (
+        <div className="loan-card-grid">
+          {items.map((investment) => (
+            <InvestmentCard key={investment.id} investment={investment} onEdit={onEdit} onDelete={onDelete} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -3695,6 +4041,290 @@ function InvestmentForm({
 function formatDateWithYear(dateLike: string) {
   const date = new Date(`${dateLike}T00:00:00`);
   return date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function VacationsPage({
+  vacations,
+  refresh,
+  showNotice,
+  requestConfirm
+}: {
+  vacations: Vacation[];
+  refresh: () => Promise<void>;
+  showNotice: (message: string) => void;
+  requestConfirm: (request: ConfirmRequest) => void;
+}) {
+  const [editing, setEditing] = useState<Vacation | null>(null);
+  const totalSpent = vacations.reduce((sum, item) => sum + item.totalSpentPaise, 0);
+  const totalBudget = vacations.reduce((sum, item) => sum + (item.budgetPaise ?? 0), 0);
+
+  function remove(vacation: Vacation) {
+    requestConfirm({
+      message: "Remove this vacation?",
+      detail: `${vacation.name} will be removed. The tagged expenses stay in your normal expenses — only the trip grouping is deleted.`,
+      confirmLabel: "Remove",
+      tone: "danger",
+      onConfirm: async () => {
+        try {
+          await Api.deleteVacation(vacation.id);
+          if (editing?.id === vacation.id) setEditing(null);
+          await refresh();
+          showNotice("Vacation removed.");
+        } catch (err) {
+          showNotice(err instanceof Error ? err.message : "Could not remove vacation.");
+        }
+      }
+    });
+  }
+
+  return (
+    <div className="page-grid loans-page">
+      <section className="summary-grid report-summary">
+        <SummaryCard label="Trips" value={String(vacations.length)} icon={<Plane />} />
+        <SummaryCard label="Total spent" value={formatINR(totalSpent)} icon={<WalletCards />} />
+        {totalBudget > 0 && <SummaryCard label="Total budget" value={formatINR(totalBudget)} icon={<Target />} />}
+        {totalBudget > 0 && (
+          <SummaryCard
+            label="Left in budget"
+            value={formatINR(totalBudget - totalSpent)}
+            icon={<PiggyBank />}
+            tone={totalBudget - totalSpent >= 0 ? "good" : "warning"}
+          />
+        )}
+      </section>
+
+      <p className="helper-text investments-asof">
+        <Info size={14} />
+        Tag any expense to a trip from the Weekly Entry form — it still counts in your normal expenses, and also rolls up here.
+      </p>
+
+      <div className="two-column loans-layout">
+        <Panel title="Your trips">
+          {vacations.length === 0 ? (
+            <EmptyState text="No vacations yet. Create your first trip on the right, then tag expenses to it." />
+          ) : (
+            <div className="vacation-list">
+              {vacations.map((vacation) => (
+                <VacationCard key={vacation.id} vacation={vacation} onEdit={setEditing} onDelete={remove} />
+              ))}
+            </div>
+          )}
+        </Panel>
+
+        <Panel title={editing ? "Edit vacation" : "Add vacation"}>
+          <VacationForm
+            key={editing?.id ?? "new-vacation"}
+            vacation={editing}
+            onCancel={editing ? () => setEditing(null) : undefined}
+            onSaved={async (message) => {
+              setEditing(null);
+              await refresh();
+              showNotice(message);
+            }}
+          />
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function VacationCard({
+  vacation,
+  onEdit,
+  onDelete
+}: {
+  vacation: Vacation;
+  onEdit: (vacation: Vacation) => void;
+  onDelete: (vacation: Vacation) => void;
+}) {
+  const overBudget = vacation.budgetPaise !== null && vacation.totalSpentPaise > vacation.budgetPaise;
+  const usedPercent =
+    vacation.budgetPaise && vacation.budgetPaise > 0
+      ? Math.min(100, Math.round((vacation.totalSpentPaise / vacation.budgetPaise) * 100))
+      : 0;
+  const dateLabel =
+    vacation.startDate && vacation.endDate
+      ? `${formatDateWithYear(vacation.startDate)} – ${formatDateWithYear(vacation.endDate)}`
+      : vacation.startDate
+        ? `From ${formatDateWithYear(vacation.startDate)}`
+        : "";
+
+  return (
+    <article className="loan-card vacation-card">
+      <div className="loan-card-header">
+        <div className="loan-title">
+          <span className="loan-icon" style={{ color: "#0ea5e9", background: "#0ea5e918" }}>
+            <Plane size={18} />
+          </span>
+          <div>
+            <strong>{vacation.name}</strong>
+            <span>
+              {vacation.transactionCount} expense{vacation.transactionCount === 1 ? "" : "s"}
+              {dateLabel ? ` · ${dateLabel}` : ""}
+            </span>
+          </div>
+        </div>
+        <strong className="vacation-total">{formatINR(vacation.totalSpentPaise)}</strong>
+      </div>
+
+      {vacation.budgetPaise !== null && (
+        <div className="vacation-budget">
+          <div className="vacation-budget-head">
+            <span>Budget</span>
+            <strong className={overBudget ? "amount-out" : "amount-in"}>
+              {formatINR(vacation.totalSpentPaise)} / {formatINR(vacation.budgetPaise)}
+            </strong>
+          </div>
+          <div className="vacation-budget-bar">
+            <span style={{ width: `${usedPercent}%`, background: overBudget ? "#dc2626" : "#0ea5e9" }} />
+          </div>
+          <small>
+            {overBudget
+              ? `Over by ${formatINR(vacation.totalSpentPaise - vacation.budgetPaise)}`
+              : `${formatINR(vacation.budgetPaise - vacation.totalSpentPaise)} left`}
+          </small>
+        </div>
+      )}
+
+      {vacation.breakdown.length > 0 ? (
+        <div className="vacation-breakdown">
+          {vacation.breakdown.map((item) => {
+            const share =
+              vacation.totalSpentPaise > 0 ? Math.round((item.amountPaise / vacation.totalSpentPaise) * 100) : 0;
+            return (
+              <div className="vacation-breakdown-row" key={item.subcategoryId}>
+                <span className="vacation-breakdown-name">
+                  <IconGlyph name={item.icon} size={14} />
+                  {item.name}
+                </span>
+                <div className="vacation-breakdown-bar">
+                  <span style={{ width: `${share}%`, background: item.color }} />
+                </div>
+                <strong>{formatINR(item.amountPaise)}</strong>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="investment-note">No expenses tagged to this trip yet.</p>
+      )}
+
+      {vacation.note && <p className="investment-note">{vacation.note}</p>}
+
+      <div className="loan-actions">
+        <button type="button" className="secondary-action" onClick={() => onEdit(vacation)}>
+          <Pencil size={16} />
+          Edit
+        </button>
+        <button type="button" className="secondary-action danger-action" onClick={() => onDelete(vacation)}>
+          <Trash2 size={16} />
+          Remove
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function VacationForm({
+  vacation,
+  onSaved,
+  onCancel
+}: {
+  vacation: Vacation | null;
+  onSaved: (message: string) => Promise<void>;
+  onCancel?: () => void;
+}) {
+  const [name, setName] = useState(vacation?.name ?? "");
+  const [startDate, setStartDate] = useState(vacation?.startDate ?? "");
+  const [endDate, setEndDate] = useState(vacation?.endDate ?? "");
+  const [budget, setBudget] = useState(vacation?.budgetPaise != null ? amountInputFromPaise(vacation.budgetPaise) : "");
+  const [note, setNote] = useState(vacation?.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!name.trim()) {
+      setError("Enter a trip name.");
+      return;
+    }
+    if (startDate && endDate && startDate > endDate) {
+      setError("Trip start date must be on or before the end date.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const budgetPaise = budget.trim() ? parseAmountToPaise(budget) : 0;
+      if (vacation) {
+        await Api.updateVacation(vacation.id, {
+          name: name.trim(),
+          startDate: startDate || "",
+          endDate: endDate || "",
+          budgetPaise,
+          note: note.trim()
+        });
+        await onSaved("Vacation updated.");
+      } else {
+        await Api.createVacation({
+          name: name.trim(),
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+          budgetPaise: budgetPaise > 0 ? budgetPaise : undefined,
+          note: note.trim() || undefined
+        });
+        setName("");
+        setStartDate("");
+        setEndDate("");
+        setBudget("");
+        setNote("");
+        await onSaved("Vacation created.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save vacation.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="stack-form loan-form" onSubmit={submit}>
+      <label>
+        Trip name
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Goa trip, Europe 2026..." required />
+      </label>
+      <div className="loan-detail-grid">
+        <label>
+          Start date (optional)
+          <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+        </label>
+        <label>
+          End date (optional)
+          <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+        </label>
+      </div>
+      <label>
+        Trip budget (optional)
+        <input value={budget} onChange={(event) => setBudget(event.target.value)} placeholder="₹0" inputMode="decimal" />
+      </label>
+      <label>
+        Note (optional)
+        <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="e.g. family trip, 5 nights" />
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <div className="loan-form-actions">
+        {onCancel && (
+          <button type="button" className="secondary-action" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+        )}
+        <button className="primary-action" disabled={saving}>
+          <Plus size={18} />
+          {saving ? "Saving..." : vacation ? "Save vacation" : "Add vacation"}
+        </button>
+      </div>
+    </form>
+  );
 }
 
 function SubscriptionsPage({
@@ -4814,39 +5444,19 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
       "It adds up every expense dated in the current calendar month. Income, transfers between your own accounts, and credit-card payments are not counted as spending."
   },
   {
-    question: "How does a budget's 'Projection' work?",
-    answer:
-      "It estimates where your spending will land by month-end if you keep the current pace. It takes what you've spent so far and scales it up by how much of the month has passed — for example, ₹9,000 spent one-third of the way through the month projects to about ₹27,000."
-  },
-  {
     question: "What do the budget labels mean — On track, Watch, Likely to exceed, Over budget?",
     answer:
       "On track means spending is comfortably within budget. Watch means you're getting close. Likely to exceed means that, at your current pace, the projection lands over the budget. Over budget means you've already spent more than the budgeted amount."
   },
   {
-    question: "What's the difference between a Type budget and a SubType budget?",
-    answer:
-      "A Type budget (chosen as 'All subtypes') caps a whole category like Expense. A SubType budget caps a single line like Groceries. For a given month you can budget either the whole Type or its individual SubTypes — not both at once."
-  },
-  {
-    question: "Which categories can I set a budget for?",
-    answer:
-      "Budgets track outflow categories: Expense, Loan, Investment and Transfer. Income isn't budgeted, so it won't appear as a budget line."
-  },
-  {
-    question: "How does AutoPay 'Payments made' count work?",
-    answer:
-      "Each time you add a transaction, choose SubType = AutoPay, and link it to a subscription, that subscription's counter goes up by one. Deleting or unlinking the transaction lowers the count again."
-  },
-  {
-    question: "How does a mutual fund's monthly payment history (the ticks) work?",
-    answer:
-      "It works just like AutoPay. When you add an investment transaction, choose SubType = Mutual Funds and pick which fund it belongs to from the 'Mutual fund' dropdown. A month is ticked only for the specific fund that has a linked transaction that month — funds without a tracked payment stay unticked. Older transactions that were never linked to a fund won't tick until you edit them and choose the fund."
-  },
-  {
     question: "Are my investment values updated automatically?",
     answer:
-      "No. Stocks, mutual funds, gold, land, property and PF values are entered by you and stay fixed until you edit them. The Investments page shows the date you last saved a change so you know how current the figures are. Open a holding with the chevron (▾) to see its full details and payment history."
+      "No. Stocks, mutual funds, gold, land, property, PF and fixed-deposit (FD) values are entered by you and stay fixed until you edit them. The Investments page shows the date you last saved a change so you know how current the figures are. Each investment type is a dropdown showing its total invested, current value and net gain — click it to reveal every holding of that type."
+  },
+  {
+    question: "How do vacations work, and do trip expenses still count as normal expenses?",
+    answer:
+      "A vacation is a label you put on expenses, not a new category. First create a trip on the Vacations page (optionally with dates and a budget). Then, when you add an Expense in Weekly Entry, pick the trip from the 'Vacation' dropdown. That expense keeps its normal SubType (Food, Travel, Hotel…) and still counts in all your normal expense totals, reports and budgets — and it also rolls up under the trip. The Vacations page shows each trip's total spend, budget-vs-spent, and a breakdown by SubType. Deleting a trip only removes the grouping; the expenses themselves stay untouched."
   },
   {
     question: "How are Inflow, Outflow and Savings in Reports calculated?",
@@ -4857,16 +5467,6 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
     question: "How do I move money between my own bank accounts?",
     answer:
       "Add a transaction on the account the money leaves, choose Type = Transfer and SubType = Self transfer, then pick the receiving bank account in the 'Account' dropdown that appears. Saving it lowers the source account's balance and raises the receiving account's balance by the same amount. Because the money never left you, a self transfer is not counted as Outflow or spending anywhere in Reports or the Overview."
-  },
-  {
-    question: "How is the Emergency-fund runway calculated?",
-    answer:
-      "It divides your liquid cash (the balance across your non-credit-card accounts) by your average monthly Outflow over the last three months, including the current one. For example, ₹3,00,000 of liquid cash against an average outflow of ₹60,000 a month gives a runway of 5 months. If there was no outflow in those three months there is nothing to divide by, so the runway shows as '—'."
-  },
-  {
-    question: "How is the 'Spending mix' chart calculated?",
-    answer:
-      "It shows how this month's spending splits across your categories, as a share of the total. The largest categories are shown individually and the smallest are grouped together as 'Other'."
   },
   {
     question: "How are backups made?",
@@ -5062,10 +5662,6 @@ function ProfilePage({
           <div className="settings-row">
             <span>Currency</span>
             <strong>{settings.currency ?? "INR"}</strong>
-          </div>
-          <div className="settings-row">
-            <span>Week starts from</span>
-            <strong>{formatWeekStart(settings.week_start)}</strong>
           </div>
           <div className="settings-row card-alert-row">
             <span>Card utilization alert</span>
@@ -5379,7 +5975,8 @@ function draftFromTransaction(
     loanId: transaction.loanId ?? "",
     loanPaymentType: transaction.loanPaymentType ?? "emi",
     subscriptionId: transaction.subscriptionId ?? "",
-    investmentId: transaction.investmentId ?? ""
+    investmentId: transaction.investmentId ?? "",
+    vacationId: transaction.vacationId ?? ""
   };
 }
 
@@ -5569,11 +6166,6 @@ function creditUtilization(account: Account) {
     return 0;
   }
   return Math.min(Math.max(Math.round((account.outstandingPaise / limit) * 100), 0), 100);
-}
-
-function formatWeekStart(value: string | undefined) {
-  if (!value) return "Monday";
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function formatBackupStatus(status: BackupStatus | null) {
