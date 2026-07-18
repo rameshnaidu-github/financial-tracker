@@ -2538,8 +2538,8 @@ function ReportsPage({
                   ? `${new Date().getFullYear()}, January to date`
                   : "by year"}
             </p>
-            <BudgetTrendLegend color={budgetTrend.color} />
-            <BudgetTrendChart points={budgetTrend.points} variant={budgetStyle} color={budgetTrend.color} />
+            <BudgetTrendLegend />
+            <BudgetTrendChart points={budgetTrend.points} variant={budgetStyle} />
           </>
         )}
       </Panel>
@@ -2547,12 +2547,12 @@ function ReportsPage({
   );
 }
 
-function BudgetTrendLegend({ color }: { color: string }) {
+function BudgetTrendLegend() {
   return (
     <div className="budget-trend-legend">
       <span className="budget-trend-legend-item">
-        <span className="budget-trend-swatch" style={{ background: color }} />
-        Actual
+        <span className="budget-trend-swatch within" />
+        Within budget
       </span>
       <span className="budget-trend-legend-item">
         <span className="budget-trend-swatch over" />
@@ -2568,13 +2568,14 @@ function BudgetTrendLegend({ color }: { color: string }) {
 
 function BudgetTrendChart({
   points,
-  variant,
-  color
+  variant
 }: {
   points: BudgetTrendPoint[];
   variant: "bar" | "line";
-  color: string;
 }) {
+  // Uniform: green when within budget, red when over. No per-subtype colours.
+  const withinColor = "#16a34a";
+  const overColor = "#dc2626";
   const width = 760;
   const height = 300;
   const pad = { top: 30, right: 14, bottom: 32, left: 52 };
@@ -2668,7 +2669,7 @@ function BudgetTrendChart({
                 width={barWidth}
                 height={barHeight}
                 rx={5}
-                fill={point.over ? "#dc2626" : color}
+                fill={point.over ? overColor : withinColor}
               />
             </g>
           );
@@ -2677,7 +2678,7 @@ function BudgetTrendChart({
         <>
           <polyline
             className="trend-line"
-            stroke={color}
+            stroke={withinColor}
             points={centers.map((point) => `${point.x},${point.y}`).join(" ")}
           />
           {centers.map((point) => (
@@ -2685,7 +2686,7 @@ function BudgetTrendChart({
               <title>{`${point.label}: ${formatINR(point.actualPaise)}${
                 point.budgetPaise !== null ? ` of ${formatINR(point.budgetPaise)} budget` : ""
               }`}</title>
-              <circle cx={point.x} cy={point.y} r={4.5} fill={point.over ? "#dc2626" : color} />
+              <circle cx={point.x} cy={point.y} r={4.5} fill={point.over ? overColor : withinColor} />
             </g>
           ))}
         </>
@@ -5444,34 +5445,9 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
       "It adds up every expense dated in the current calendar month. Income, transfers between your own accounts, and credit-card payments are not counted as spending."
   },
   {
-    question: "How does a budget's 'Projection' work?",
-    answer:
-      "It estimates where your spending will land by month-end if you keep the current pace. It takes what you've spent so far and scales it up by how much of the month has passed — for example, ₹9,000 spent one-third of the way through the month projects to about ₹27,000."
-  },
-  {
     question: "What do the budget labels mean — On track, Watch, Likely to exceed, Over budget?",
     answer:
       "On track means spending is comfortably within budget. Watch means you're getting close. Likely to exceed means that, at your current pace, the projection lands over the budget. Over budget means you've already spent more than the budgeted amount."
-  },
-  {
-    question: "What's the difference between a Type budget and a SubType budget?",
-    answer:
-      "A Type budget (chosen as 'All subtypes') caps a whole category like Expense. A SubType budget caps a single line like Groceries. For a given month you can budget either the whole Type or its individual SubTypes — not both at once."
-  },
-  {
-    question: "Which categories can I set a budget for?",
-    answer:
-      "Budgets track outflow categories: Expense, Loan, Investment and Transfer. Income isn't budgeted, so it won't appear as a budget line."
-  },
-  {
-    question: "How does AutoPay 'Payments made' count work?",
-    answer:
-      "Each time you add a transaction, choose SubType = AutoPay, and link it to a subscription, that subscription's counter goes up by one. Deleting or unlinking the transaction lowers the count again."
-  },
-  {
-    question: "How does a mutual fund's monthly payment history (the ticks) work?",
-    answer:
-      "It works just like AutoPay. When you add an investment transaction, choose SubType = Mutual Funds and pick which fund it belongs to from the 'Mutual fund' dropdown. A month is ticked only for the specific fund that has a linked transaction that month — funds without a tracked payment stay unticked. Older transactions that were never linked to a fund won't tick until you edit them and choose the fund."
   },
   {
     question: "Are my investment values updated automatically?",
@@ -5492,16 +5468,6 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
     question: "How do I move money between my own bank accounts?",
     answer:
       "Add a transaction on the account the money leaves, choose Type = Transfer and SubType = Self transfer, then pick the receiving bank account in the 'Account' dropdown that appears. Saving it lowers the source account's balance and raises the receiving account's balance by the same amount. Because the money never left you, a self transfer is not counted as Outflow or spending anywhere in Reports or the Overview."
-  },
-  {
-    question: "How is the Emergency-fund runway calculated?",
-    answer:
-      "It divides your liquid cash (the balance across your non-credit-card accounts) by your average monthly Outflow over the last three months, including the current one. For example, ₹3,00,000 of liquid cash against an average outflow of ₹60,000 a month gives a runway of 5 months. If there was no outflow in those three months there is nothing to divide by, so the runway shows as '—'."
-  },
-  {
-    question: "How is the 'Spending mix' chart calculated?",
-    answer:
-      "It shows how this month's spending splits across your categories, as a share of the total. The largest categories are shown individually and the smallest are grouped together as 'Other'."
   },
   {
     question: "How are backups made?",
@@ -5697,10 +5663,6 @@ function ProfilePage({
           <div className="settings-row">
             <span>Currency</span>
             <strong>{settings.currency ?? "INR"}</strong>
-          </div>
-          <div className="settings-row">
-            <span>Week starts from</span>
-            <strong>{formatWeekStart(settings.week_start)}</strong>
           </div>
           <div className="settings-row card-alert-row">
             <span>Card utilization alert</span>
@@ -6205,11 +6167,6 @@ function creditUtilization(account: Account) {
     return 0;
   }
   return Math.min(Math.max(Math.round((account.outstandingPaise / limit) * 100), 0), 100);
-}
-
-function formatWeekStart(value: string | undefined) {
-  if (!value) return "Monday";
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function formatBackupStatus(status: BackupStatus | null) {

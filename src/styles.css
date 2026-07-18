@@ -1650,6 +1650,10 @@ a {
   border-radius: 3px;
 }
 
+.budget-trend-swatch.within {
+  background: #16a34a;
+}
+
 .budget-trend-swatch.over {
   background: #dc2626;
 }
