@@ -1269,6 +1269,105 @@ a {
   margin: -4px 0 0;
 }
 
+.vacation-list {
+  display: grid;
+  gap: 14px;
+}
+
+.vacation-total {
+  font-size: 1.1rem;
+  white-space: nowrap;
+}
+
+.vacation-budget {
+  display: grid;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.vacation-budget-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.vacation-budget-head span {
+  color: var(--muted);
+  font-weight: 800;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.vacation-budget-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.22);
+  overflow: hidden;
+}
+
+.vacation-budget-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.vacation-budget small {
+  color: var(--muted);
+}
+
+.vacation-breakdown {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.vacation-breakdown-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.9fr) minmax(0, 1.4fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.vacation-breakdown-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 800;
+  font-size: 0.85rem;
+}
+
+.vacation-breakdown-bar {
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+  overflow: hidden;
+}
+
+.vacation-breakdown-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.vacation-breakdown-row strong {
+  white-space: nowrap;
+  font-size: 0.88rem;
+}
+
+@media (max-width: 560px) {
+  .vacation-breakdown-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .vacation-breakdown-bar {
+    display: none;
+  }
+}
+
 .investment-groups {
   display: grid;
   gap: 14px;

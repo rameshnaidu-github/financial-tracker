@@ -161,6 +161,25 @@ export function initDatabase() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS vacations (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      start_date TEXT,
+      end_date TEXT,
+      budget_paise INTEGER CHECK (budget_paise IS NULL OR budget_paise > 0),
+      note TEXT,
+      is_archived INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS vacation_expenses (
+      id TEXT PRIMARY KEY,
+      vacation_id TEXT NOT NULL REFERENCES vacations(id) ON DELETE CASCADE,
+      transaction_id TEXT NOT NULL UNIQUE REFERENCES transactions(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS net_worth_snapshots (
       month TEXT PRIMARY KEY CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
       liquid_paise INTEGER NOT NULL,
@@ -198,6 +217,7 @@ export function initDatabase() {
   ensureInvestmentColumns();
   migrateInvestmentTypes();
   ensureInvestmentIndexes();
+  ensureVacationIndexes();
   ensureTaxonomyIndexes();
   seedSettings();
   pruneBackupFiles();
@@ -224,6 +244,14 @@ function ensureBudgetIndexes() {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_budget_lines_month ON budget_lines(month);
     CREATE INDEX IF NOT EXISTS idx_budget_lines_scope ON budget_lines(scope_type, scope_id);
+  `);
+}
+
+function ensureVacationIndexes() {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_vacations_archived ON vacations(is_archived);
+    CREATE INDEX IF NOT EXISTS idx_vacation_expenses_vacation ON vacation_expenses(vacation_id);
+    CREATE INDEX IF NOT EXISTS idx_vacation_expenses_transaction ON vacation_expenses(transaction_id);
   `);
 }
 

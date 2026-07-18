@@ -10,6 +10,7 @@ import type {
   CreateTransactionPayload,
   Investment,
   InvestmentType,
+  Vacation,
   Loan,
   MonthlyReport,
   PaymentHistory,
@@ -155,6 +156,26 @@ export const Api = {
     }>
   ) => api<Investment>(`/api/investments/${id}`, { method: "PATCH", body }),
   deleteInvestment: (id: string) => api<{ ok: true }>(`/api/investments/${id}`, { method: "DELETE" }),
+  vacations: () => api<Vacation[]>("/api/vacations"),
+  createVacation: (body: {
+    name: string;
+    startDate?: string;
+    endDate?: string;
+    budgetPaise?: number;
+    note?: string;
+  }) => api<Vacation>("/api/vacations", { method: "POST", body }),
+  updateVacation: (
+    id: string,
+    body: Partial<{
+      name: string;
+      startDate: string;
+      endDate: string;
+      budgetPaise: number;
+      note: string;
+      isArchived: boolean;
+    }>
+  ) => api<Vacation>(`/api/vacations/${id}`, { method: "PATCH", body }),
+  deleteVacation: (id: string) => api<{ ok: true }>(`/api/vacations/${id}`, { method: "DELETE" }),
   currentBatch: (weekStart: string, weekEnd: string) => {
     const params = new URLSearchParams({ weekStart, weekEnd });
     return api<Batch>(`/api/batches/current?${params}`);

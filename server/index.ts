@@ -18,6 +18,7 @@ import {
   createLoan,
   createSubcategory,
   createTransaction,
+  createVacation,
   archiveAutopaySubscription,
   archiveLoan,
   deleteAccount,
@@ -26,6 +27,7 @@ import {
   deleteInvestment,
   deleteSubcategory,
   deleteTransaction,
+  deleteVacation,
   buildImportTemplate,
   exportTransactionsCsv,
   getBackupStatus,
@@ -46,6 +48,7 @@ import {
   listInvestments,
   listLoans,
   listTransactions,
+  listVacations,
   saveBatch,
   startAutoBackup,
   stopAutoBackup,
@@ -56,7 +59,8 @@ import {
   updateInvestment,
   updateLoan,
   updateProfile,
-  updateTransaction
+  updateTransaction,
+  updateVacation
 } from "./services.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -139,7 +143,8 @@ app.get("/api/bootstrap", async () => ({
   categoryTypes: listCategoryTypes(),
   loans: listLoans(true),
   subscriptions: listAutopaySubscriptions(true),
-  investments: listInvestments()
+  investments: listInvestments(),
+  vacations: listVacations(true)
 }));
 
 app.get("/api/profile", async () => getProfile());
@@ -362,6 +367,23 @@ app.patch("/api/investments/:id", async (request) => {
 app.delete("/api/investments/:id", async (request) => {
   const params = request.params as { id: string };
   return deleteInvestment(params.id);
+});
+
+app.get("/api/vacations", async () => listVacations(true));
+
+app.post("/api/vacations", async (request, reply) => {
+  const vacation = createVacation(request.body as never);
+  return reply.status(201).send(vacation);
+});
+
+app.patch("/api/vacations/:id", async (request) => {
+  const params = request.params as { id: string };
+  return updateVacation(params.id, request.body as never);
+});
+
+app.delete("/api/vacations/:id", async (request) => {
+  const params = request.params as { id: string };
+  return deleteVacation(params.id);
 });
 
 app.get("/api/backup/status", async () => getBackupStatus());

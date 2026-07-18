@@ -16,6 +16,7 @@ import {
   createLoanSchema,
   createSubcategorySchema,
   createTransactionSchema,
+  createVacationSchema,
   updateAccountSchema,
   updateAutopaySubscriptionSchema,
   updateBudgetLineSchema,
@@ -24,6 +25,7 @@ import {
   updateProfileSchema,
   updateSettingsSchema,
   updateTransactionSchema,
+  updateVacationSchema,
   INVESTMENT_TYPES,
   type AccountType,
   type BudgetScopeType,
@@ -35,6 +37,7 @@ import {
   type CreateLoanInput,
   type CreateSubcategoryInput,
   type CreateTransactionInput,
+  type CreateVacationInput,
   type Direction,
   type InvestmentType,
   type LoanPaymentType,
@@ -47,7 +50,8 @@ import {
   type UpdateLoanInput,
   type UpdateProfileInput,
   type UpdateSettingsInput,
-  type UpdateTransactionInput
+  type UpdateTransactionInput,
+  type UpdateVacationInput
 } from "../shared/finance.ts";
 import { asRecord, asRecords, db, transaction } from "./db.ts";
 import { ensureBackupDir, pruneBackupFiles } from "./backup-files.ts";
@@ -193,6 +197,8 @@ export type TransactionSummary = {
   subscriptionName: string | null;
   investmentId: string | null;
   investmentName: string | null;
+  vacationId: string | null;
+  vacationName: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -735,6 +741,216 @@ function mapInvestment(row: InvestmentRow): InvestmentSummary {
   };
 }
 
+type VacationRow = {
+  id: string;
+  name: string;
+  start_date: string | null;
+  end_date: string | null;
+  budget_paise: number | null;
+  note: string | null;
+  is_archived: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VacationSubtypeBreakdown = {
+  subcategoryId: string;
+  name: string;
+  icon: string;
+  color: string;
+  amountPaise: number;
+};
+
+export type VacationSummary = {
+  id: string;
+  name: string;
+  startDate: string | null;
+  endDate: string | null;
+  budgetPaise: number | null;
+  note: string | null;
+  isArchived: boolean;
+  totalSpentPaise: number;
+  transactionCount: number;
+  remainingPaise: number | null;
+  breakdown: VacationSubtypeBreakdown[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type VacationSpend = { total: number; count: number; breakdown: VacationSubtypeBreakdown[] };
+
+function vacationSpendByVacation(): Map<string, VacationSpend> {
+  const rows = asRecords<{
+    vacation_id: string;
+    subcategory_id: string | null;
+    name: string | null;
+    icon: string | null;
+    color: string | null;
+    amount: number;
+    cnt: number;
+  }>(
+    db
+      .prepare(
+        `SELECT ve.vacation_id AS vacation_id,
+                t.subcategory_id AS subcategory_id,
+                sc.name AS name, sc.icon AS icon, sc.color AS color,
+                SUM(t.amount_paise) AS amount, COUNT(*) AS cnt
+         FROM vacation_expenses ve
+         JOIN transactions t ON t.id = ve.transaction_id
+         LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
+         GROUP BY ve.vacation_id, t.subcategory_id`
+      )
+      .all()
+  );
+  const map = new Map<string, VacationSpend>();
+  for (const row of rows) {
+    const entry = map.get(row.vacation_id) ?? { total: 0, count: 0, breakdown: [] };
+    entry.total += row.amount;
+    entry.count += row.cnt;
+    entry.breakdown.push({
+      subcategoryId: row.subcategory_id ?? "uncategorized",
+      name: row.name ?? "Uncategorized",
+      icon: row.icon ?? "circle-question",
+      color: row.color ?? "#64748b",
+      amountPaise: row.amount
+    });
+    map.set(row.vacation_id, entry);
+  }
+  for (const entry of map.values()) {
+    entry.breakdown.sort((a, b) => b.amountPaise - a.amountPaise);
+  }
+  return map;
+}
+
+function mapVacation(row: VacationRow, spend?: VacationSpend): VacationSummary {
+  const total = spend?.total ?? 0;
+  return {
+    id: row.id,
+    name: row.name,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    budgetPaise: row.budget_paise,
+    note: row.note,
+    isArchived: Boolean(row.is_archived),
+    totalSpentPaise: total,
+    transactionCount: spend?.count ?? 0,
+    remainingPaise: row.budget_paise === null ? null : row.budget_paise - total,
+    breakdown: spend?.breakdown ?? [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+export function listVacations(includeArchived = true): VacationSummary[] {
+  const rows = asRecords<VacationRow>(
+    db
+      .prepare(
+        `SELECT id, name, start_date, end_date, budget_paise, note, is_archived, created_at, updated_at
+         FROM vacations
+         ${includeArchived ? "" : "WHERE is_archived = 0"}
+         ORDER BY created_at DESC, id`
+      )
+      .all()
+  );
+  const spend = vacationSpendByVacation();
+  return rows.map((row) => mapVacation(row, spend.get(row.id)));
+}
+
+function requireVacationRow(id: string) {
+  const row = asRecord<VacationRow | undefined>(
+    db
+      .prepare(
+        `SELECT id, name, start_date, end_date, budget_paise, note, is_archived, created_at, updated_at
+         FROM vacations WHERE id = ?`
+      )
+      .get(id)
+  );
+  if (!row) {
+    throw notFound("Vacation not found.");
+  }
+  return row;
+}
+
+function requireVacationSummary(id: string): VacationSummary {
+  return mapVacation(requireVacationRow(id), vacationSpendByVacation().get(id));
+}
+
+export function createVacation(input: CreateVacationInput): VacationSummary {
+  const parsed = createVacationSchema.parse(input);
+  if (parsed.startDate && parsed.endDate && parsed.startDate > parsed.endDate) {
+    throw badRequest("Trip start date must be on or before the end date.");
+  }
+  const id = randomUUID();
+  db.prepare(
+    `INSERT INTO vacations (id, name, start_date, end_date, budget_paise, note)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, parsed.name, parsed.startDate ?? null, parsed.endDate ?? null, parsed.budgetPaise ?? null, parsed.note ?? null);
+  return requireVacationSummary(id);
+}
+
+export function updateVacation(id: string, input: UpdateVacationInput): VacationSummary {
+  const existing = requireVacationRow(id);
+  const patch = updateVacationSchema.parse(input);
+  const merged = {
+    name: patch.name ?? existing.name,
+    startDate: Object.prototype.hasOwnProperty.call(patch, "startDate")
+      ? patch.startDate || null
+      : existing.start_date,
+    endDate: Object.prototype.hasOwnProperty.call(patch, "endDate") ? patch.endDate || null : existing.end_date,
+    budgetPaise: Object.prototype.hasOwnProperty.call(patch, "budgetPaise")
+      ? patch.budgetPaise || null
+      : existing.budget_paise,
+    note: Object.prototype.hasOwnProperty.call(patch, "note") ? patch.note ?? null : existing.note,
+    isArchived: patch.isArchived === undefined ? existing.is_archived : patch.isArchived ? 1 : 0
+  };
+  if (merged.startDate && merged.endDate && merged.startDate > merged.endDate) {
+    throw badRequest("Trip start date must be on or before the end date.");
+  }
+  db.prepare(
+    `UPDATE vacations
+     SET name = ?, start_date = ?, end_date = ?, budget_paise = ?, note = ?, is_archived = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  ).run(merged.name, merged.startDate, merged.endDate, merged.budgetPaise, merged.note, merged.isArchived, id);
+  return requireVacationSummary(id);
+}
+
+export function deleteVacation(id: string) {
+  // Cascades only remove the expense links; the tagged transactions stay as normal expenses.
+  const result = db.prepare("DELETE FROM vacations WHERE id = ?").run(id);
+  if (result.changes === 0) {
+    throw notFound("Vacation not found.");
+  }
+  return { ok: true };
+}
+
+function getVacationExpenseForTransaction(transactionId: string) {
+  return asRecord<{ id: string; vacation_id: string; transaction_id: string } | undefined>(
+    db
+      .prepare(
+        `SELECT id, vacation_id, transaction_id
+         FROM vacation_expenses
+         WHERE transaction_id = ?
+         LIMIT 1`
+      )
+      .get(transactionId)
+  );
+}
+
+function syncVacationExpenseForTransaction(transactionId: string, input: CreateTransactionInput) {
+  if (!input.vacationId) {
+    return;
+  }
+  if (input.kind !== "expense") {
+    throw badRequest("Only expenses can be tagged to a vacation.");
+  }
+  const vacation = requireVacationRow(input.vacationId);
+  db.prepare(
+    `INSERT INTO vacation_expenses (id, vacation_id, transaction_id)
+     VALUES (?, ?, ?)`
+  ).run(randomUUID(), vacation.id, transactionId);
+}
+
 export function getBackupStatus() {
   const settings = getSettings();
   return {
@@ -1148,6 +1364,8 @@ export function listTransactions(query: TransactionQuery = {}): TransactionSumma
          LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
          LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
          LEFT JOIN investments iv ON iv.id = ip.investment_id
+         LEFT JOIN vacation_expenses vx ON vx.transaction_id = t.id
+         LEFT JOIN vacations vc ON vc.id = vx.vacation_id
 ${where}
          ORDER BY t.date DESC, t.created_at DESC
          LIMIT ${limit} OFFSET ${offset}`
@@ -1175,6 +1393,8 @@ export function getTransaction(id: string) {
          LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
          LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
          LEFT JOIN investments iv ON iv.id = ip.investment_id
+         LEFT JOIN vacation_expenses vx ON vx.transaction_id = t.id
+         LEFT JOIN vacations vc ON vc.id = vx.vacation_id
 WHERE t.id = ?`
       )
       .get(id)
@@ -1259,6 +1479,7 @@ function insertValidatedTransaction(parsed: CreateTransactionInput) {
 
   syncAutopayPaymentForTransaction(id, parsed);
   syncInvestmentPaymentForTransaction(id, parsed);
+  syncVacationExpenseForTransaction(id, parsed);
 
   return id;
 }
@@ -1271,6 +1492,7 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
   const existingLoanPayment = getLoanPaymentForTransaction(id);
   const existingAutopayPayment = getAutopayPaymentForTransaction(id);
   const existingInvestmentPayment = getInvestmentPaymentForTransaction(id);
+  const existingVacationExpense = getVacationExpenseForTransaction(id);
   const existingSplits = getTransactionSplits(id);
   const patch = updateTransactionSchema.parse(input);
   if (Object.prototype.hasOwnProperty.call(patch, "loanId") && !patch.loanId) {
@@ -1296,6 +1518,7 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
     loanPaymentType: existingLoanPayment?.payment_type ?? undefined,
     subscriptionId: existingAutopayPayment?.subscription_id ?? undefined,
     investmentId: existingInvestmentPayment?.investment_id ?? undefined,
+    vacationId: existingVacationExpense?.vacation_id ?? undefined,
     splits: existingSplits.length ? existingSplits : undefined
   };
   Object.assign(mergedInput, patch);
@@ -1309,6 +1532,9 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
   if (merged.kind !== "emi") {
     merged.loanId = undefined;
     merged.loanPaymentType = undefined;
+  }
+  if (merged.kind !== "expense") {
+    merged.vacationId = undefined;
   }
 
   const account = requireAccount(merged.accountId);
@@ -1366,6 +1592,9 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
 
     db.prepare("DELETE FROM investment_payments WHERE transaction_id = ?").run(id);
     syncInvestmentPaymentForTransaction(id, merged);
+
+    db.prepare("DELETE FROM vacation_expenses WHERE transaction_id = ?").run(id);
+    syncVacationExpenseForTransaction(id, merged);
   });
 
   return {
@@ -4134,6 +4363,8 @@ function findDuplicateCandidates(input: {
          LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
          LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
          LEFT JOIN investments iv ON iv.id = ip.investment_id
+         LEFT JOIN vacation_expenses vx ON vx.transaction_id = t.id
+         LEFT JOIN vacations vc ON vc.id = vx.vacation_id
 WHERE t.id != ?
            AND t.account_id = ?
            AND t.amount_paise = ?
@@ -4262,6 +4493,8 @@ type JoinedFields = {
   subscription_name: string | null;
   investment_id: string | null;
   investment_name: string | null;
+  vacation_id: string | null;
+  vacation_name: string | null;
 };
 
 const transactionSelectFields = `
@@ -4304,7 +4537,9 @@ const transactionSelectFields = `
   ap.subscription_id AS subscription_id,
   s.name AS subscription_name,
   ip.investment_id AS investment_id,
-  iv.name AS investment_name
+  iv.name AS investment_name,
+  vx.vacation_id AS vacation_id,
+  vc.name AS vacation_name
 `;
 
 function mapTransaction(row: TransactionRow & JoinedFields): TransactionSummary {
@@ -4347,6 +4582,8 @@ function mapTransaction(row: TransactionRow & JoinedFields): TransactionSummary 
     subscriptionName: row.subscription_name,
     investmentId: row.investment_id,
     investmentName: row.investment_name,
+    vacationId: row.vacation_id,
+    vacationName: row.vacation_name,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

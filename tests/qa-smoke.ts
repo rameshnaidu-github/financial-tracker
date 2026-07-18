@@ -1637,6 +1637,91 @@ test("scopes mutual-fund payment history to the linked holding only", async () =
   );
 });
 
+test("tags expenses to a vacation, rolls them up by subtype, and double-counts", async () => {
+  assert(state.bankId, "Bank should exist.");
+  const trip = services.createVacation({
+    name: "QA Goa Trip",
+    startDate: "2026-05-01",
+    endDate: "2026-05-06",
+    budgetPaise: 50_000_00
+  });
+  assert(trip.totalSpentPaise === 0 && trip.transactionCount === 0, "A new trip starts empty.");
+  assert(trip.remainingPaise === 50_000_00, "Remaining should equal the budget when nothing is spent.");
+
+  const grocSub = subcategoryId("Expense", "Groceries");
+  const travelSub = subcategoryId("Expense", "Travel");
+  const foodTxn = services.createTransaction({
+    date: "2026-05-02",
+    accountId: state.bankId,
+    method: "upi",
+    merchant: "Goa food",
+    typeId: typeId("Expense"),
+    subcategoryId: grocSub,
+    amountPaise: 20_000_00,
+    direction: "outflow",
+    kind: "expense",
+    vacationId: trip.id
+  });
+  services.createTransaction({
+    date: "2026-05-03",
+    accountId: state.bankId,
+    method: "upi",
+    merchant: "Goa cab",
+    typeId: typeId("Expense"),
+    subcategoryId: travelSub,
+    amountPaise: 8_000_00,
+    direction: "outflow",
+    kind: "expense",
+    vacationId: trip.id
+  });
+
+  const withSpend = services.listVacations(true).find((item) => item.id === trip.id);
+  assert(withSpend, "Trip should be listed.");
+  assert(withSpend!.totalSpentPaise === 28_000_00, "Total should sum the tagged expenses.");
+  assert(withSpend!.transactionCount === 2, "Both tagged expenses should be counted.");
+  assert(withSpend!.remainingPaise === 22_000_00, "Remaining = budget minus spend.");
+  const groc = withSpend!.breakdown.find((row) => row.subcategoryId === grocSub);
+  const travel = withSpend!.breakdown.find((row) => row.subcategoryId === travelSub);
+  assert(groc?.amountPaise === 20_000_00 && travel?.amountPaise === 8_000_00, "Breakdown groups by SubType.");
+
+  // Double-counting: the tagged expense still shows in the normal monthly expense report.
+  const report = services.getMonthlyReport(undefined, "2026-05");
+  const grocReport = report.categories.find((row) => row.subcategoryId === grocSub);
+  assert(
+    (grocReport?.amountPaise ?? 0) >= 20_000_00,
+    "A vacation-tagged expense must also appear in normal expenses."
+  );
+
+  // Editing a transaction to drop the tag removes it from the trip only.
+  services.updateTransaction(foodTxn.transaction.id, { vacationId: "" });
+  const afterUntag = services.listVacations(true).find((item) => item.id === trip.id);
+  assert(afterUntag!.totalSpentPaise === 8_000_00, "Untagging removes the expense from the trip total.");
+
+  await assertRejects("non-expense tagged to a vacation", () =>
+    services.createTransaction({
+      date: "2026-05-04",
+      accountId: state.bankId!,
+      method: "bank_transfer",
+      merchant: "Salary",
+      typeId: typeId("Income"),
+      subcategoryId: subcategoryId("Income", "Salary"),
+      amountPaise: 1_00_000_00,
+      direction: "inflow",
+      kind: "income",
+      vacationId: trip.id
+    })
+  );
+
+  // Deleting the trip keeps the transactions as normal expenses.
+  services.deleteVacation(trip.id);
+  assert(!services.listVacations(true).some((item) => item.id === trip.id), "Deleted trip should be gone.");
+  const afterDelete = services.getMonthlyReport(undefined, "2026-05");
+  assert(
+    (afterDelete.categories.find((row) => row.subcategoryId === travelSub)?.amountPaise ?? 0) >= 8_000_00,
+    "Deleting a trip must not delete its expenses."
+  );
+});
+
 test("computes net worth, asset allocation, cashflow and runway", async () => {
   const suffix = Date.now().toString().slice(-5);
   const bank = services.createAccount({

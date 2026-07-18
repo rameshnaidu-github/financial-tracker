@@ -20,6 +20,7 @@ import {
   Moon,
   Pencil,
   PiggyBank,
+  Plane,
   Plus,
   RotateCcw,
   Search,
@@ -60,6 +61,7 @@ import type {
   CreateTransactionPayload,
   Investment,
   InvestmentType,
+  Vacation,
   Loan,
   LoanPaymentType,
   MonthlyReport,
@@ -86,7 +88,7 @@ import {
   INVESTMENT_TYPES
 } from "../shared/finance";
 
-type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "subscriptions" | "categories" | "faq" | "profile";
+type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "vacations" | "subscriptions" | "categories" | "faq" | "profile";
 type Theme = "light" | "dark";
 type DonutSegment = {
   id: string;
@@ -118,6 +120,7 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home }> = [
   { page: "accounts", label: "Accounts", icon: WalletCards },
   { page: "loans", label: "Loans", icon: Landmark },
   { page: "investments", label: "Investments", icon: TrendingUp },
+  { page: "vacations", label: "Vacations", icon: Plane },
   { page: "subscriptions", label: "AutoPay", icon: CalendarClock },
   { page: "categories", label: "Categories", icon: Tags },
   { page: "faq", label: "FAQ", icon: CircleHelp },
@@ -133,6 +136,7 @@ const mobileLabels: Record<Page, string> = {
   accounts: "Accts",
   loans: "Loan",
   investments: "Invest",
+  vacations: "Trips",
   subscriptions: "Auto",
   categories: "Cats",
   faq: "FAQ",
@@ -148,6 +152,7 @@ const pagePaths: Record<Page, string> = {
   accounts: "/accounts",
   loans: "/loans",
   investments: "/investments",
+  vacations: "/vacations",
   subscriptions: "/subscriptions",
   categories: "/categories",
   faq: "/faq",
@@ -333,6 +338,7 @@ export default function App() {
   const loans = bootstrap?.loans ?? [];
   const subscriptions = bootstrap?.subscriptions ?? [];
   const investments = bootstrap?.investments ?? [];
+  const vacations = bootstrap?.vacations ?? [];
   const categoryTypes = bootstrap?.categoryTypes ?? [];
   const categories = flattenSubcategories(categoryTypes);
   const profile = bootstrap?.profile ?? emptyProfile;
@@ -347,6 +353,7 @@ export default function App() {
     activePage !== "budgets" &&
     activePage !== "loans" &&
     activePage !== "investments" &&
+    activePage !== "vacations" &&
     activePage !== "subscriptions" &&
     activePage !== "categories" &&
     activePage !== "faq" &&
@@ -451,6 +458,7 @@ export default function App() {
               loans={loans.filter((loan) => !loan.isArchived)}
               subscriptions={subscriptions.filter((subscription) => !subscription.isArchived)}
               mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
+              vacations={vacations.filter((vacation) => !vacation.isArchived)}
               categoryTypes={categoryTypes}
               refresh={refresh}
               refreshKey={refreshKey}
@@ -466,6 +474,7 @@ export default function App() {
               loans={loans.filter((loan) => !loan.isArchived)}
               subscriptions={subscriptions}
               mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
+              vacations={vacations.filter((vacation) => !vacation.isArchived)}
               categoryTypes={categoryTypes}
               refresh={refresh}
               refreshKey={refreshKey}
@@ -504,6 +513,14 @@ export default function App() {
           {activePage === "investments" && (
             <InvestmentsPage
               investments={investments}
+              refresh={refresh}
+              showNotice={showNotice}
+              requestConfirm={requestConfirm}
+            />
+          )}
+          {activePage === "vacations" && (
+            <VacationsPage
+              vacations={vacations}
               refresh={refresh}
               showNotice={showNotice}
               requestConfirm={requestConfirm}
@@ -938,6 +955,7 @@ function WeeklyEntryPage({
   loans,
   subscriptions,
   mutualFunds,
+  vacations,
   categoryTypes,
   refresh,
   refreshKey,
@@ -950,6 +968,7 @@ function WeeklyEntryPage({
   loans: Loan[];
   subscriptions: AutopaySubscription[];
   mutualFunds: Investment[];
+  vacations: Vacation[];
   categoryTypes: CategoryType[];
   refresh: () => Promise<void>;
   refreshKey: number;
@@ -983,7 +1002,8 @@ function WeeklyEntryPage({
     loanId: "",
     loanPaymentType: "emi" as LoanPaymentType,
     subscriptionId: "",
-    investmentId: ""
+    investmentId: "",
+    vacationId: ""
   });
 
   const reloadWeek = useCallback(async () => {
@@ -1030,6 +1050,7 @@ function WeeklyEntryPage({
   const isAutopaySelected = form.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
   const isMutualFundsSelected = form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
   const isSelfTransferSelected = form.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID;
+  const isExpenseSelected = selectedBehavior === "expense";
   const selfTransferTargets = selfTransferTargetAccounts(accounts, form.accountId);
   const expenseTotal = transactions
     .filter((transaction) => transaction.kind === "expense")
@@ -1074,7 +1095,8 @@ function WeeklyEntryPage({
         subscriptionId:
           form.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? form.subscriptionId || undefined : undefined,
         investmentId:
-          form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? form.investmentId || undefined : undefined
+          form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? form.investmentId || undefined : undefined,
+        vacationId: behavior === "expense" ? form.vacationId || undefined : undefined
       };
 
       const result = await Api.createTransaction(payload);
@@ -1288,6 +1310,22 @@ function WeeklyEntryPage({
                   </select>
                 </label>
               )}
+              {isExpenseSelected && vacations.length > 0 && (
+                <label>
+                  Vacation
+                  <select
+                    value={form.vacationId}
+                    onChange={(event) => setForm({ ...form, vacationId: event.target.value })}
+                  >
+                    <option value="">Not part of a vacation</option>
+                    {vacations.map((vacation) => (
+                      <option key={vacation.id} value={vacation.id}>
+                        {vacation.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {selectedBehavior === "loan" && (
                 <>
                   <label>
@@ -1442,6 +1480,7 @@ type TransactionEditDraft = {
   loanPaymentType: LoanPaymentType;
   subscriptionId: string;
   investmentId: string;
+  vacationId: string;
 };
 
 function TransactionsPage({
@@ -1450,6 +1489,7 @@ function TransactionsPage({
   loans,
   subscriptions,
   mutualFunds,
+  vacations,
   categoryTypes,
   refresh,
   refreshKey,
@@ -1461,6 +1501,7 @@ function TransactionsPage({
   loans: Loan[];
   subscriptions: AutopaySubscription[];
   mutualFunds: Investment[];
+  vacations: Vacation[];
   categoryTypes: CategoryType[];
   refresh: () => Promise<void>;
   refreshKey: number;
@@ -1578,7 +1619,8 @@ function TransactionsPage({
         subscriptionId:
           editDraft.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? editDraft.subscriptionId : "",
         investmentId:
-          editDraft.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? editDraft.investmentId : ""
+          editDraft.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? editDraft.investmentId : "",
+        vacationId: behavior === "expense" ? editDraft.vacationId : ""
       });
       setEditDraft(null);
       await loadPage();
@@ -1683,6 +1725,7 @@ function TransactionsPage({
                 {editDraft?.id === transaction.id ? (
                   <TransactionEditRow
                     draft={editDraft}
+                    vacations={vacations}
                     accounts={accounts}
                     loans={loans}
                     subscriptions={subscriptions}
@@ -1764,6 +1807,7 @@ function TransactionEditRow({
   loans,
   subscriptions,
   mutualFunds,
+  vacations,
   categoryTypes,
   cardAccounts,
   saving,
@@ -1777,6 +1821,7 @@ function TransactionEditRow({
   loans: Loan[];
   subscriptions: AutopaySubscription[];
   mutualFunds: Investment[];
+  vacations: Vacation[];
   categoryTypes: CategoryType[];
   cardAccounts: Account[];
   saving: boolean;
@@ -1792,6 +1837,7 @@ function TransactionEditRow({
   const availableLoans = loans.filter((loan) => loan.subcategoryId === draft.subcategoryId);
   const isAutopaySelected = draft.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
   const isMutualFundsSelected = draft.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
+  const isExpenseSelected = behavior === "expense";
   const isSelfTransferSelected = draft.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID;
   const selfTransferTargets = selfTransferTargetAccounts(accounts, draft.accountId);
   const availableSubscriptions = subscriptions.filter(
@@ -1846,7 +1892,8 @@ function TransactionEditRow({
                 loanId: "",
                 loanPaymentType: "emi",
                 subscriptionId: "",
-                investmentId: ""
+                investmentId: "",
+                vacationId: ""
               });
             }}
           >
@@ -1969,6 +2016,22 @@ function TransactionEditRow({
               {mutualFunds.map((fund) => (
                 <option key={fund.id} value={fund.id}>
                   {fund.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {isExpenseSelected && vacations.length > 0 && (
+          <label>
+            Vacation
+            <select
+              value={draft.vacationId}
+              onChange={(event) => onChange({ ...draft, vacationId: event.target.value })}
+            >
+              <option value="">Not part of a vacation</option>
+              {vacations.map((vacation) => (
+                <option key={vacation.id} value={vacation.id}>
+                  {vacation.name}
                 </option>
               ))}
             </select>
@@ -3980,6 +4043,290 @@ function formatDateWithYear(dateLike: string) {
   return date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
+function VacationsPage({
+  vacations,
+  refresh,
+  showNotice,
+  requestConfirm
+}: {
+  vacations: Vacation[];
+  refresh: () => Promise<void>;
+  showNotice: (message: string) => void;
+  requestConfirm: (request: ConfirmRequest) => void;
+}) {
+  const [editing, setEditing] = useState<Vacation | null>(null);
+  const totalSpent = vacations.reduce((sum, item) => sum + item.totalSpentPaise, 0);
+  const totalBudget = vacations.reduce((sum, item) => sum + (item.budgetPaise ?? 0), 0);
+
+  function remove(vacation: Vacation) {
+    requestConfirm({
+      message: "Remove this vacation?",
+      detail: `${vacation.name} will be removed. The tagged expenses stay in your normal expenses — only the trip grouping is deleted.`,
+      confirmLabel: "Remove",
+      tone: "danger",
+      onConfirm: async () => {
+        try {
+          await Api.deleteVacation(vacation.id);
+          if (editing?.id === vacation.id) setEditing(null);
+          await refresh();
+          showNotice("Vacation removed.");
+        } catch (err) {
+          showNotice(err instanceof Error ? err.message : "Could not remove vacation.");
+        }
+      }
+    });
+  }
+
+  return (
+    <div className="page-grid loans-page">
+      <section className="summary-grid report-summary">
+        <SummaryCard label="Trips" value={String(vacations.length)} icon={<Plane />} />
+        <SummaryCard label="Total spent" value={formatINR(totalSpent)} icon={<WalletCards />} />
+        {totalBudget > 0 && <SummaryCard label="Total budget" value={formatINR(totalBudget)} icon={<Target />} />}
+        {totalBudget > 0 && (
+          <SummaryCard
+            label="Left in budget"
+            value={formatINR(totalBudget - totalSpent)}
+            icon={<PiggyBank />}
+            tone={totalBudget - totalSpent >= 0 ? "good" : "warning"}
+          />
+        )}
+      </section>
+
+      <p className="helper-text investments-asof">
+        <Info size={14} />
+        Tag any expense to a trip from the Weekly Entry form — it still counts in your normal expenses, and also rolls up here.
+      </p>
+
+      <div className="two-column loans-layout">
+        <Panel title="Your trips">
+          {vacations.length === 0 ? (
+            <EmptyState text="No vacations yet. Create your first trip on the right, then tag expenses to it." />
+          ) : (
+            <div className="vacation-list">
+              {vacations.map((vacation) => (
+                <VacationCard key={vacation.id} vacation={vacation} onEdit={setEditing} onDelete={remove} />
+              ))}
+            </div>
+          )}
+        </Panel>
+
+        <Panel title={editing ? "Edit vacation" : "Add vacation"}>
+          <VacationForm
+            key={editing?.id ?? "new-vacation"}
+            vacation={editing}
+            onCancel={editing ? () => setEditing(null) : undefined}
+            onSaved={async (message) => {
+              setEditing(null);
+              await refresh();
+              showNotice(message);
+            }}
+          />
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function VacationCard({
+  vacation,
+  onEdit,
+  onDelete
+}: {
+  vacation: Vacation;
+  onEdit: (vacation: Vacation) => void;
+  onDelete: (vacation: Vacation) => void;
+}) {
+  const overBudget = vacation.budgetPaise !== null && vacation.totalSpentPaise > vacation.budgetPaise;
+  const usedPercent =
+    vacation.budgetPaise && vacation.budgetPaise > 0
+      ? Math.min(100, Math.round((vacation.totalSpentPaise / vacation.budgetPaise) * 100))
+      : 0;
+  const dateLabel =
+    vacation.startDate && vacation.endDate
+      ? `${formatDateWithYear(vacation.startDate)} – ${formatDateWithYear(vacation.endDate)}`
+      : vacation.startDate
+        ? `From ${formatDateWithYear(vacation.startDate)}`
+        : "";
+
+  return (
+    <article className="loan-card vacation-card">
+      <div className="loan-card-header">
+        <div className="loan-title">
+          <span className="loan-icon" style={{ color: "#0ea5e9", background: "#0ea5e918" }}>
+            <Plane size={18} />
+          </span>
+          <div>
+            <strong>{vacation.name}</strong>
+            <span>
+              {vacation.transactionCount} expense{vacation.transactionCount === 1 ? "" : "s"}
+              {dateLabel ? ` · ${dateLabel}` : ""}
+            </span>
+          </div>
+        </div>
+        <strong className="vacation-total">{formatINR(vacation.totalSpentPaise)}</strong>
+      </div>
+
+      {vacation.budgetPaise !== null && (
+        <div className="vacation-budget">
+          <div className="vacation-budget-head">
+            <span>Budget</span>
+            <strong className={overBudget ? "amount-out" : "amount-in"}>
+              {formatINR(vacation.totalSpentPaise)} / {formatINR(vacation.budgetPaise)}
+            </strong>
+          </div>
+          <div className="vacation-budget-bar">
+            <span style={{ width: `${usedPercent}%`, background: overBudget ? "#dc2626" : "#0ea5e9" }} />
+          </div>
+          <small>
+            {overBudget
+              ? `Over by ${formatINR(vacation.totalSpentPaise - vacation.budgetPaise)}`
+              : `${formatINR(vacation.budgetPaise - vacation.totalSpentPaise)} left`}
+          </small>
+        </div>
+      )}
+
+      {vacation.breakdown.length > 0 ? (
+        <div className="vacation-breakdown">
+          {vacation.breakdown.map((item) => {
+            const share =
+              vacation.totalSpentPaise > 0 ? Math.round((item.amountPaise / vacation.totalSpentPaise) * 100) : 0;
+            return (
+              <div className="vacation-breakdown-row" key={item.subcategoryId}>
+                <span className="vacation-breakdown-name">
+                  <IconGlyph name={item.icon} size={14} />
+                  {item.name}
+                </span>
+                <div className="vacation-breakdown-bar">
+                  <span style={{ width: `${share}%`, background: item.color }} />
+                </div>
+                <strong>{formatINR(item.amountPaise)}</strong>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="investment-note">No expenses tagged to this trip yet.</p>
+      )}
+
+      {vacation.note && <p className="investment-note">{vacation.note}</p>}
+
+      <div className="loan-actions">
+        <button type="button" className="secondary-action" onClick={() => onEdit(vacation)}>
+          <Pencil size={16} />
+          Edit
+        </button>
+        <button type="button" className="secondary-action danger-action" onClick={() => onDelete(vacation)}>
+          <Trash2 size={16} />
+          Remove
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function VacationForm({
+  vacation,
+  onSaved,
+  onCancel
+}: {
+  vacation: Vacation | null;
+  onSaved: (message: string) => Promise<void>;
+  onCancel?: () => void;
+}) {
+  const [name, setName] = useState(vacation?.name ?? "");
+  const [startDate, setStartDate] = useState(vacation?.startDate ?? "");
+  const [endDate, setEndDate] = useState(vacation?.endDate ?? "");
+  const [budget, setBudget] = useState(vacation?.budgetPaise != null ? amountInputFromPaise(vacation.budgetPaise) : "");
+  const [note, setNote] = useState(vacation?.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!name.trim()) {
+      setError("Enter a trip name.");
+      return;
+    }
+    if (startDate && endDate && startDate > endDate) {
+      setError("Trip start date must be on or before the end date.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const budgetPaise = budget.trim() ? parseAmountToPaise(budget) : 0;
+      if (vacation) {
+        await Api.updateVacation(vacation.id, {
+          name: name.trim(),
+          startDate: startDate || "",
+          endDate: endDate || "",
+          budgetPaise,
+          note: note.trim()
+        });
+        await onSaved("Vacation updated.");
+      } else {
+        await Api.createVacation({
+          name: name.trim(),
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+          budgetPaise: budgetPaise > 0 ? budgetPaise : undefined,
+          note: note.trim() || undefined
+        });
+        setName("");
+        setStartDate("");
+        setEndDate("");
+        setBudget("");
+        setNote("");
+        await onSaved("Vacation created.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save vacation.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="stack-form loan-form" onSubmit={submit}>
+      <label>
+        Trip name
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Goa trip, Europe 2026..." required />
+      </label>
+      <div className="loan-detail-grid">
+        <label>
+          Start date (optional)
+          <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+        </label>
+        <label>
+          End date (optional)
+          <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+        </label>
+      </div>
+      <label>
+        Trip budget (optional)
+        <input value={budget} onChange={(event) => setBudget(event.target.value)} placeholder="₹0" inputMode="decimal" />
+      </label>
+      <label>
+        Note (optional)
+        <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="e.g. family trip, 5 nights" />
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <div className="loan-form-actions">
+        {onCancel && (
+          <button type="button" className="secondary-action" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+        )}
+        <button className="primary-action" disabled={saving}>
+          <Plus size={18} />
+          {saving ? "Saving..." : vacation ? "Save vacation" : "Add vacation"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function SubscriptionsPage({
   subscriptions,
   refresh,
@@ -5132,6 +5479,11 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
       "No. Stocks, mutual funds, gold, land, property, PF and fixed-deposit (FD) values are entered by you and stay fixed until you edit them. The Investments page shows the date you last saved a change so you know how current the figures are. Each investment type is a dropdown showing its total invested, current value and net gain — click it to reveal every holding of that type."
   },
   {
+    question: "How do vacations work, and do trip expenses still count as normal expenses?",
+    answer:
+      "A vacation is a label you put on expenses, not a new category. First create a trip on the Vacations page (optionally with dates and a budget). Then, when you add an Expense in Weekly Entry, pick the trip from the 'Vacation' dropdown. That expense keeps its normal SubType (Food, Travel, Hotel…) and still counts in all your normal expense totals, reports and budgets — and it also rolls up under the trip. The Vacations page shows each trip's total spend, budget-vs-spent, and a breakdown by SubType. Deleting a trip only removes the grouping; the expenses themselves stay untouched."
+  },
+  {
     question: "How are Inflow, Outflow and Savings in Reports calculated?",
     answer:
       "Inflow adds up everything that brought money in for the period (income and refunds across all their categories). Outflow adds up everything that took money out (expense, loan, investment, transfer, credit-card payment and any other outflow categories). Savings is simply Inflow minus Outflow — positive means you kept money, negative means you spent more than came in. Self transfers are left out of both sides, because moving money between your own accounts is not income or spending. The Outflow figure on the Overview uses this exact same calculation."
@@ -5662,7 +6014,8 @@ function draftFromTransaction(
     loanId: transaction.loanId ?? "",
     loanPaymentType: transaction.loanPaymentType ?? "emi",
     subscriptionId: transaction.subscriptionId ?? "",
-    investmentId: transaction.investmentId ?? ""
+    investmentId: transaction.investmentId ?? "",
+    vacationId: transaction.vacationId ?? ""
   };
 }
 
