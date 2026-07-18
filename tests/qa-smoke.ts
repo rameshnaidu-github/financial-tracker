@@ -1722,6 +1722,79 @@ test("tags expenses to a vacation, rolls them up by subtype, and double-counts",
   );
 });
 
+test("attributes a split vacation expense across its subtypes", async () => {
+  assert(state.bankId, "Bank should exist.");
+  const trip = services.createVacation({ name: "QA Split Trip" });
+  const grocSub = subcategoryId("Expense", "Groceries");
+  const diningSub = subcategoryId("Expense", "Dining/Food");
+  services.createTransaction({
+    date: "2026-06-02",
+    accountId: state.bankId,
+    method: "upi",
+    merchant: "Goa combined bill",
+    typeId: typeId("Expense"),
+    amountPaise: 10_000_00,
+    direction: "outflow",
+    kind: "expense",
+    vacationId: trip.id,
+    splits: [
+      { subcategoryId: grocSub, amountPaise: 6_000_00 },
+      { subcategoryId: diningSub, amountPaise: 4_000_00 }
+    ]
+  });
+
+  const summary = services.listVacations(true).find((item) => item.id === trip.id);
+  assert(summary, "Split trip should be listed.");
+  assert(summary!.totalSpentPaise === 10_000_00, "Trip total should be the full split amount.");
+  assert(summary!.transactionCount === 1, "A split is a single tagged transaction.");
+  const groc = summary!.breakdown.find((row) => row.subcategoryId === grocSub);
+  const dining = summary!.breakdown.find((row) => row.subcategoryId === diningSub);
+  assert(
+    groc?.amountPaise === 6_000_00 && dining?.amountPaise === 4_000_00,
+    "Each split amount should land on its own SubType, not 'Uncategorized'."
+  );
+  assert(
+    summary!.breakdown.reduce((sum, row) => sum + row.amountPaise, 0) === summary!.totalSpentPaise,
+    "The breakdown must sum to the trip total."
+  );
+  services.deleteVacation(trip.id);
+});
+
+test("re-typing a vacation-tagged expense to a non-expense drops the tag without error", async () => {
+  assert(state.bankId, "Bank should exist.");
+  const trip = services.createVacation({ name: "QA Retag Trip" });
+  const txn = services.createTransaction({
+    date: "2026-07-02",
+    accountId: state.bankId,
+    method: "upi",
+    merchant: "trip food",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 5_000_00,
+    direction: "outflow",
+    kind: "expense",
+    vacationId: trip.id
+  });
+  assert(
+    services.listVacations(true).find((item) => item.id === trip.id)!.totalSpentPaise === 5_000_00,
+    "Tagged expense should count on the trip."
+  );
+
+  // Change the Type to Income WITHOUT clearing vacationId in the patch — the server must
+  // drop the tag rather than reject the update with a validation error.
+  services.updateTransaction(txn.transaction.id, {
+    typeId: typeId("Income"),
+    subcategoryId: subcategoryId("Income", "Salary"),
+    direction: "inflow",
+    kind: "income"
+  });
+  assert(
+    services.listVacations(true).find((item) => item.id === trip.id)!.totalSpentPaise === 0,
+    "The re-typed transaction should no longer be tagged to the trip."
+  );
+  services.deleteVacation(trip.id);
+});
+
 test("computes net worth, asset allocation, cashflow and runway", async () => {
   const suffix = Date.now().toString().slice(-5);
   const bank = services.createAccount({

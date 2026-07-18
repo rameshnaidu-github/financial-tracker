@@ -3220,9 +3220,8 @@ function budgetScopeKey(scope: BudgetScope) {
 
 
 function budgetSubLabel(scope: BudgetScope) {
-  if (scope.scopeType === "type") {
-    return "All subtypes";
-  }
+  // The Budget Planner only offers Expense SubType scopes, so the label is just the
+  // SubType name (its "Expense / " prefix stripped).
   const prefix = `${scope.typeName} / `;
   return scope.name.startsWith(prefix) ? scope.name.slice(prefix.length) : scope.name;
 }

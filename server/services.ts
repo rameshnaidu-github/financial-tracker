@@ -780,6 +780,26 @@ export type VacationSummary = {
 type VacationSpend = { total: number; count: number; breakdown: VacationSubtypeBreakdown[] };
 
 function vacationSpendByVacation(): Map<string, VacationSpend> {
+  const map = new Map<string, VacationSpend>();
+
+  // Trip total and how many transactions are tagged (one row per tagged transaction).
+  const totals = asRecords<{ vacation_id: string; total: number; cnt: number }>(
+    db
+      .prepare(
+        `SELECT ve.vacation_id AS vacation_id, SUM(t.amount_paise) AS total, COUNT(*) AS cnt
+         FROM vacation_expenses ve
+         JOIN transactions t ON t.id = ve.transaction_id
+         GROUP BY ve.vacation_id`
+      )
+      .all()
+  );
+  for (const row of totals) {
+    map.set(row.vacation_id, { total: row.total, count: row.cnt, breakdown: [] });
+  }
+
+  // Breakdown by SubType, split-aware: a split expense is attributed across its split
+  // SubTypes and amounts, while a plain expense uses its own SubType. The sum of the
+  // breakdown therefore equals the trip total.
   const rows = asRecords<{
     vacation_id: string;
     subcategory_id: string | null;
@@ -787,26 +807,23 @@ function vacationSpendByVacation(): Map<string, VacationSpend> {
     icon: string | null;
     color: string | null;
     amount: number;
-    cnt: number;
   }>(
     db
       .prepare(
         `SELECT ve.vacation_id AS vacation_id,
-                t.subcategory_id AS subcategory_id,
+                COALESCE(ts.subcategory_id, t.subcategory_id) AS subcategory_id,
                 sc.name AS name, sc.icon AS icon, sc.color AS color,
-                SUM(t.amount_paise) AS amount, COUNT(*) AS cnt
+                SUM(COALESCE(ts.amount_paise, t.amount_paise)) AS amount
          FROM vacation_expenses ve
          JOIN transactions t ON t.id = ve.transaction_id
-         LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
-         GROUP BY ve.vacation_id, t.subcategory_id`
+         LEFT JOIN transaction_splits ts ON ts.transaction_id = t.id
+         LEFT JOIN subcategories sc ON sc.id = COALESCE(ts.subcategory_id, t.subcategory_id)
+         GROUP BY ve.vacation_id, COALESCE(ts.subcategory_id, t.subcategory_id)`
       )
       .all()
   );
-  const map = new Map<string, VacationSpend>();
   for (const row of rows) {
     const entry = map.get(row.vacation_id) ?? { total: 0, count: 0, breakdown: [] };
-    entry.total += row.amount;
-    entry.count += row.cnt;
     entry.breakdown.push({
       subcategoryId: row.subcategory_id ?? "uncategorized",
       name: row.name ?? "Uncategorized",
@@ -1528,13 +1545,13 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
   if (mergedInput.subcategoryId !== MUTUAL_FUNDS_SUBCATEGORY_ID) {
     mergedInput.investmentId = undefined;
   }
+  if (mergedInput.kind !== "expense") {
+    mergedInput.vacationId = undefined;
+  }
   const merged = createTransactionSchema.parse(mergedInput);
   if (merged.kind !== "emi") {
     merged.loanId = undefined;
     merged.loanPaymentType = undefined;
-  }
-  if (merged.kind !== "expense") {
-    merged.vacationId = undefined;
   }
 
   const account = requireAccount(merged.accountId);
@@ -1938,8 +1955,6 @@ export type BudgetTrendReport = {
   mode: TrendMode;
   subcategoryId: string;
   name: string;
-  typeName: string;
-  color: string;
   month: string | null;
   points: BudgetTrendPoint[];
 };
@@ -2024,8 +2039,6 @@ export function getBudgetTrendReport(
     mode,
     subcategoryId,
     name: scope.name,
-    typeName: scope.typeName,
-    color: scope.color,
     month: selectedMonth,
     points
   };

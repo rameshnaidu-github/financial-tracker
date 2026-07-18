@@ -331,8 +331,6 @@ export type BudgetTrendReport = {
   mode: TrendMode;
   subcategoryId: string;
   name: string;
-  typeName: string;
-  color: string;
   month: string | null;
   points: BudgetTrendPoint[];
 };
