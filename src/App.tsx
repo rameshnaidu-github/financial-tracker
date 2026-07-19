@@ -1311,13 +1311,27 @@ function WeeklyEntryPage({
                 </label>
               )}
               {isExpenseSelected && vacations.length > 0 && (
+                <label className="vacation-check">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.vacationId)}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        vacationId: event.target.checked ? current.vacationId || vacations[0].id : ""
+                      }))
+                    }
+                  />
+                  <span>Part of a vacation?</span>
+                </label>
+              )}
+              {isExpenseSelected && vacations.length > 0 && form.vacationId && (
                 <label>
                   Vacation
                   <select
                     value={form.vacationId}
                     onChange={(event) => setForm({ ...form, vacationId: event.target.value })}
                   >
-                    <option value="">Not part of a vacation</option>
                     {vacations.map((vacation) => (
                       <option key={vacation.id} value={vacation.id}>
                         {vacation.name}
@@ -2022,13 +2036,24 @@ function TransactionEditRow({
           </label>
         )}
         {isExpenseSelected && vacations.length > 0 && (
+          <label className="vacation-check">
+            <input
+              type="checkbox"
+              checked={Boolean(draft.vacationId)}
+              onChange={(event) =>
+                onChange({ ...draft, vacationId: event.target.checked ? draft.vacationId || vacations[0].id : "" })
+              }
+            />
+            <span>Part of a vacation?</span>
+          </label>
+        )}
+        {isExpenseSelected && vacations.length > 0 && draft.vacationId && (
           <label>
             Vacation
             <select
               value={draft.vacationId}
               onChange={(event) => onChange({ ...draft, vacationId: event.target.value })}
             >
-              <option value="">Not part of a vacation</option>
               {vacations.map((vacation) => (
                 <option key={vacation.id} value={vacation.id}>
                   {vacation.name}
@@ -5456,7 +5481,7 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "How do vacations work, and do trip expenses still count as normal expenses?",
     answer:
-      "A vacation is a label you put on expenses, not a new category. First create a trip on the Vacations page (optionally with dates and a budget). Then, when you add an Expense in Weekly Entry, pick the trip from the 'Vacation' dropdown. That expense keeps its normal SubType (Food, Travel, Hotel…) and still counts in all your normal expense totals, reports and budgets — and it also rolls up under the trip. The Vacations page shows each trip's total spend, budget-vs-spent, and a breakdown by SubType. Deleting a trip only removes the grouping; the expenses themselves stay untouched."
+      "A vacation is a label you put on expenses, not a new category. First create a trip on the Vacations page (optionally with dates and a budget). Then, when you add an Expense in Weekly Entry, tick 'Part of a vacation?' and choose the trip. That expense keeps its normal SubType (Food, Travel, Hotel…) and still counts in all your normal expense totals, reports and budgets — and it also rolls up under the trip. The Vacations page shows each trip's total spend, budget-vs-spent, and a breakdown by SubType. Deleting a trip only removes the grouping; the expenses themselves stay untouched."
   },
   {
     question: "How are Inflow, Outflow and Savings in Reports calculated?",

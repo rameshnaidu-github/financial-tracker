@@ -14,9 +14,13 @@ database both live on your computer, with no external hosting and no cloud accou
 - Weekly transaction entry across bank accounts, credit cards, and food cards
 - Full transaction ledger with search and type/subtype filters
 - Self transfers between your own bank accounts, which move both balances without counting as spending
-- Reports with inflow/outflow/savings, category breakdowns, and week-, month- and year-on-year Type trends
-- Budget Planner for monthly Type/SubType budgets, usage percentage, projected spend, and early warning states
-- Investment holdings with per-holding payment history
+- Reports with inflow/outflow/savings, an outflow mix and per-Type breakdowns, week-/month-/year-on-year
+  trends, and a budget-vs-actual chart per expense SubType
+- Budget Planner for monthly expense-SubType budgets, usage percentage, projected spend, and early warning states
+- Investment holdings — stocks, mutual funds, gold, land, property, PF and fixed deposits — grouped by type with
+  invested/current/net-gain, feeding the Overview's asset-allocation donut, plus per-holding SIP payment history
+- Vacations — tag any expense to a trip and it still counts as a normal expense while also rolling up under the
+  trip, with a per-SubType breakdown and an optional trip budget
 - Loan, AutoPay subscription, account, credit-card, and food-card tracking
 - Custom Types and SubTypes
 - Built-in FAQ explaining how each figure is calculated

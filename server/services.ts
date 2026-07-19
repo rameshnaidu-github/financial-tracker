@@ -1750,6 +1750,7 @@ export function getWealthSummary(): WealthSummary {
     { key: "gold", label: "Gold", color: "#d97706", valuePaise: byType(["gold"]) },
     { key: "realestate", label: "Real estate", color: "#0f766e", valuePaise: byType(["land", "property"]) },
     { key: "pf", label: "PF", color: "#059669", valuePaise: byType(["pf"]) },
+    { key: "fd", label: "Fixed deposit", color: "#0891b2", valuePaise: byType(["fd"]) },
     { key: "other", label: "Other", color: "#64748b", valuePaise: byType(["other"]) }
   ].filter((segment) => segment.valuePaise > 0);
 

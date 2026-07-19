@@ -1814,6 +1814,12 @@ test("computes net worth, asset allocation, cashflow and runway", async () => {
     investedPaise: 50_000_00,
     currentValuePaise: 60_000_00
   });
+  services.createInvestment({
+    type: "fd",
+    name: `QA Wealth FD ${suffix}`,
+    investedPaise: 2_00_000_00,
+    currentValuePaise: 2_00_000_00
+  });
 
   const before = services.getWealthSummary();
   // Net worth = liquid + investments − liabilities (no loans/cards here).
@@ -1824,8 +1830,19 @@ test("computes net worth, asset allocation, cashflow and runway", async () => {
   assert(before.netWorth.investmentsPaise >= 2_10_000_00, "Investments should include both holdings' current value.");
   const equity = before.allocation.find((segment) => segment.key === "equity");
   const gold = before.allocation.find((segment) => segment.key === "gold");
+  const fd = before.allocation.find((segment) => segment.key === "fd");
   assert(equity && equity.valuePaise >= 1_50_000_00, "Equity allocation should include the stock's current value.");
   assert(gold && gold.valuePaise === 60_000_00, "Gold allocation should equal the gold holding value.");
+  assert(fd && fd.valuePaise >= 2_00_000_00, "Fixed deposits must appear in the asset allocation.");
+  // Every investment type must land in some allocation bucket — the non-cash segments
+  // should sum to the total invested value, so no holding is silently dropped.
+  const nonCashAllocation = before.allocation
+    .filter((segment) => segment.key !== "cash")
+    .reduce((sum, segment) => sum + segment.valuePaise, 0);
+  assert(
+    nonCashAllocation === before.netWorth.investmentsPaise,
+    "Allocation segments must cover every investment type (sum equals total investments)."
+  );
 
   // Snapshot persisted and reflected in history for the current month.
   assert(before.history.length >= 1, "A net-worth snapshot should be recorded for the current month.");
