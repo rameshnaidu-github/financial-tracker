@@ -2209,6 +2209,25 @@ a {
   grid-column: span 2;
 }
 
+.vacation-check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  align-self: end;
+  min-height: 40px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.vacation-check input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  accent-color: #0ea5e9;
+  cursor: pointer;
+}
+
 .add-button {
   align-self: end;
 }

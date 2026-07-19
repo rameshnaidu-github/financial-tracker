@@ -989,6 +989,7 @@ function WeeklyEntryPage({
   const [importOpen, setImportOpen] = useState(false);
   const [duplicateCount, setDuplicateCount] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [vacationOn, setVacationOn] = useState(false);
   const [form, setForm] = useState({
     date: todayISO(),
     accountId: firstAccount?.id ?? "",
@@ -1311,13 +1312,29 @@ function WeeklyEntryPage({
                 </label>
               )}
               {isExpenseSelected && vacations.length > 0 && (
+                <label className="vacation-check">
+                  <input
+                    type="checkbox"
+                    checked={vacationOn}
+                    onChange={(event) => {
+                      const on = event.target.checked;
+                      setVacationOn(on);
+                      setForm((current) => ({
+                        ...current,
+                        vacationId: on ? current.vacationId || vacations[0].id : ""
+                      }));
+                    }}
+                  />
+                  <span>Part of a vacation?</span>
+                </label>
+              )}
+              {isExpenseSelected && vacations.length > 0 && vacationOn && (
                 <label>
                   Vacation
                   <select
                     value={form.vacationId}
                     onChange={(event) => setForm({ ...form, vacationId: event.target.value })}
                   >
-                    <option value="">Not part of a vacation</option>
                     {vacations.map((vacation) => (
                       <option key={vacation.id} value={vacation.id}>
                         {vacation.name}
@@ -1838,6 +1855,7 @@ function TransactionEditRow({
   const isAutopaySelected = draft.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
   const isMutualFundsSelected = draft.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
   const isExpenseSelected = behavior === "expense";
+  const [vacationOn, setVacationOn] = useState(Boolean(draft.vacationId));
   const isSelfTransferSelected = draft.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID;
   const selfTransferTargets = selfTransferTargetAccounts(accounts, draft.accountId);
   const availableSubscriptions = subscriptions.filter(
@@ -2022,13 +2040,26 @@ function TransactionEditRow({
           </label>
         )}
         {isExpenseSelected && vacations.length > 0 && (
+          <label className="vacation-check">
+            <input
+              type="checkbox"
+              checked={vacationOn}
+              onChange={(event) => {
+                const on = event.target.checked;
+                setVacationOn(on);
+                onChange({ ...draft, vacationId: on ? draft.vacationId || vacations[0].id : "" });
+              }}
+            />
+            <span>Part of a vacation?</span>
+          </label>
+        )}
+        {isExpenseSelected && vacations.length > 0 && vacationOn && (
           <label>
             Vacation
             <select
               value={draft.vacationId}
               onChange={(event) => onChange({ ...draft, vacationId: event.target.value })}
             >
-              <option value="">Not part of a vacation</option>
               {vacations.map((vacation) => (
                 <option key={vacation.id} value={vacation.id}>
                   {vacation.name}
@@ -5456,7 +5487,7 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "How do vacations work, and do trip expenses still count as normal expenses?",
     answer:
-      "A vacation is a label you put on expenses, not a new category. First create a trip on the Vacations page (optionally with dates and a budget). Then, when you add an Expense in Weekly Entry, pick the trip from the 'Vacation' dropdown. That expense keeps its normal SubType (Food, Travel, Hotel…) and still counts in all your normal expense totals, reports and budgets — and it also rolls up under the trip. The Vacations page shows each trip's total spend, budget-vs-spent, and a breakdown by SubType. Deleting a trip only removes the grouping; the expenses themselves stay untouched."
+      "A vacation is a label you put on expenses, not a new category. First create a trip on the Vacations page (optionally with dates and a budget). Then, when you add an Expense in Weekly Entry, tick 'Part of a vacation?' and choose the trip. That expense keeps its normal SubType (Food, Travel, Hotel…) and still counts in all your normal expense totals, reports and budgets — and it also rolls up under the trip. The Vacations page shows each trip's total spend, budget-vs-spent, and a breakdown by SubType. Deleting a trip only removes the grouping; the expenses themselves stay untouched."
   },
   {
     question: "How are Inflow, Outflow and Savings in Reports calculated?",
