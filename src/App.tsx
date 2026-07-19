@@ -989,7 +989,6 @@ function WeeklyEntryPage({
   const [importOpen, setImportOpen] = useState(false);
   const [duplicateCount, setDuplicateCount] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [vacationOn, setVacationOn] = useState(false);
   const [form, setForm] = useState({
     date: todayISO(),
     accountId: firstAccount?.id ?? "",
@@ -1315,20 +1314,18 @@ function WeeklyEntryPage({
                 <label className="vacation-check">
                   <input
                     type="checkbox"
-                    checked={vacationOn}
-                    onChange={(event) => {
-                      const on = event.target.checked;
-                      setVacationOn(on);
+                    checked={Boolean(form.vacationId)}
+                    onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        vacationId: on ? current.vacationId || vacations[0].id : ""
-                      }));
-                    }}
+                        vacationId: event.target.checked ? current.vacationId || vacations[0].id : ""
+                      }))
+                    }
                   />
                   <span>Part of a vacation?</span>
                 </label>
               )}
-              {isExpenseSelected && vacations.length > 0 && vacationOn && (
+              {isExpenseSelected && vacations.length > 0 && form.vacationId && (
                 <label>
                   Vacation
                   <select
@@ -1855,7 +1852,6 @@ function TransactionEditRow({
   const isAutopaySelected = draft.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
   const isMutualFundsSelected = draft.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
   const isExpenseSelected = behavior === "expense";
-  const [vacationOn, setVacationOn] = useState(Boolean(draft.vacationId));
   const isSelfTransferSelected = draft.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID;
   const selfTransferTargets = selfTransferTargetAccounts(accounts, draft.accountId);
   const availableSubscriptions = subscriptions.filter(
@@ -2043,17 +2039,15 @@ function TransactionEditRow({
           <label className="vacation-check">
             <input
               type="checkbox"
-              checked={vacationOn}
-              onChange={(event) => {
-                const on = event.target.checked;
-                setVacationOn(on);
-                onChange({ ...draft, vacationId: on ? draft.vacationId || vacations[0].id : "" });
-              }}
+              checked={Boolean(draft.vacationId)}
+              onChange={(event) =>
+                onChange({ ...draft, vacationId: event.target.checked ? draft.vacationId || vacations[0].id : "" })
+              }
             />
             <span>Part of a vacation?</span>
           </label>
         )}
-        {isExpenseSelected && vacations.length > 0 && vacationOn && (
+        {isExpenseSelected && vacations.length > 0 && draft.vacationId && (
           <label>
             Vacation
             <select
