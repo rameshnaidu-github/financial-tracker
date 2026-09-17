@@ -1756,7 +1756,7 @@ export function getWealthSummary(): WealthSummary {
 
   // Cashflow this month.
   const monthReport = getMonthlyReport(undefined, month);
-  const incomePaise = monthReport.incomePaise;
+  const incomePaise = monthReport.totalInflowPaise;
   const expensePaise = monthReport.totalOutflowPaise;
   const savedPaise = incomePaise - expensePaise;
   const savingsRatePercent = incomePaise > 0 ? Math.round((savedPaise / incomePaise) * 100) : 0;
@@ -2181,9 +2181,11 @@ export function getMonthlyReport(
       continue;
     }
 
-    // Self transfers only move money between the user's own accounts, so they are
-    // neither inflow nor outflow and stay out of every report figure.
-    if (bucket.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID) {
+    // Self transfers only move money between the user's own accounts, and a credit-card
+    // payment only settles a balance whose charges were already counted as spending when
+    // they were made. Counting either would double-count, so both stay out of every
+    // report figure.
+    if (bucket.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID || bucket.behavior === "card_payment") {
       continue;
     }
 
@@ -2301,6 +2303,12 @@ export function getMonthlyReport(
     (sum, type) => (INFLOW_BEHAVIORS.has(type.behavior) ? sum : sum + type.amountPaise),
     0
   );
+  // Inflow uses the same behaviour rule the Reports page applies (Income + Refund), so
+  // the Overview and Reports figures always agree.
+  const totalInflowPaise = reportTypes.reduce(
+    (sum, type) => (INFLOW_BEHAVIORS.has(type.behavior) ? sum + type.amountPaise : sum),
+    0
+  );
 
   return {
     month: range.month,
@@ -2308,6 +2316,7 @@ export function getMonthlyReport(
     end,
     totalSpendingPaise: Math.max(0, totalSpending),
     totalOutflowPaise: Math.max(0, totalOutflowPaise),
+    totalInflowPaise: Math.max(0, totalInflowPaise),
     incomePaise: totals.income ?? 0,
     emiPaise: totals.loan ?? 0,
     loanPaise: totals.loan ?? 0,

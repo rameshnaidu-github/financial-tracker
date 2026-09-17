@@ -872,7 +872,7 @@ function CashflowPanel({ wealth }: { wealth: WealthSummary }) {
     <div className="cashflow-panel">
       <div className="cashflow-metrics">
         <div>
-          <span>Income</span>
+          <span>Inflow</span>
           <strong className="amount-in">{formatINR(cashflow.incomePaise)}</strong>
         </div>
         <div>

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
 import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
-import { SELF_TRANSFER_SUBCATEGORY_ID } from "../shared/finance.ts";
+import { INFLOW_BEHAVIORS, SELF_TRANSFER_SUBCATEGORY_ID } from "../shared/finance.ts";
 import type { ReportType } from "../src/types.ts";
 
 const testDbPath = path.join(tmpdir(), `finance-tracker-qa-${Date.now()}.db`);
@@ -837,11 +837,22 @@ test("tracks loan statement values, linked transactions, unlink, and archive", a
   assert(updatedLoan?.trackedInterestPaidPaise === 612_617, "Linked EMI should track interest on opening balance.");
   assert(updatedLoan?.outstandingPaise === 67_011_017, "Linked EMI principal should reduce current outstanding.");
   assert(updatedLoan?.principalPaidPaise === 10_161_683, "Principal paid should combine history and tracked payments.");
+  // The estimated-history part grows with the wall clock (more installments are assumed
+  // paid as time passes), so assert the invariant rather than a frozen total.
   assert(
-    updatedLoan?.interestPaidPaise === 6_540_317,
+    updatedLoan?.interestPaidPaise ===
+      (updatedLoan?.estimatedHistoricalInterestPaidPaise ?? 0) + (updatedLoan?.trackedInterestPaidPaise ?? 0),
     "Interest paid should combine estimated history and tracked actual interest."
   );
-  assert(updatedLoan?.monthsLeft === 50, "Months left should be recalculated from current outstanding.");
+  assert(
+    (updatedLoan?.estimatedHistoricalInterestPaidPaise ?? 0) > 0,
+    "A loan that started before tracking should estimate some historical interest."
+  );
+  assert(
+    updatedLoan !== undefined && updatedLoan.monthsLeft !== null && updatedLoan.monthsLeft > 0 &&
+      updatedLoan.monthsLeft <= updatedLoan.tenureMonths,
+    "Months left should be recalculated from current outstanding and stay within the tenure."
+  );
   assert(linkedTransaction?.loanName === "QA HDFC Personal Loan", "Transaction should expose linked loan name.");
   await assertRejectsWithMessage(
     "loan subtype in use",
@@ -1950,6 +1961,119 @@ test("self transfers move money between accounts without counting as outflow", a
   );
 });
 
+test("credit-card payments settle a balance and never count as outflow", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Card Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 1_00_000_00
+  });
+  const card = services.createAccount({
+    name: `QA Card ${suffix}`,
+    type: "credit_card",
+    startingBalancePaise: 0,
+    creditLimitPaise: 1_00_000_00
+  });
+
+  // Charge the card — this is the real spending and must be counted once.
+  services.createTransaction({
+    date: "2026-09-12",
+    accountId: card.id,
+    method: "credit_card",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 5_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  const beforePayment = services.getMonthlyReport(undefined, "2026-09");
+
+  // Paying the card bill only moves money to settle that charge.
+  services.createTransaction({
+    date: "2026-09-13",
+    accountId: bank.id,
+    method: "bank_transfer",
+    typeId: typeId("Credit Card Payment"),
+    amountPaise: 5_000_00,
+    direction: "outflow",
+    kind: "card_payment",
+    transferAccountId: card.id
+  });
+
+  const afterPayment = services.getMonthlyReport(undefined, "2026-09");
+  assert(
+    afterPayment.totalOutflowPaise === beforePayment.totalOutflowPaise,
+    "A card payment must not add to outflow — the charge was already counted."
+  );
+  assert(
+    !afterPayment.types.some((type) => type.behavior === "card_payment"),
+    "Card payments must not appear as a report line."
+  );
+
+  // Balances still move: the bank pays out and the card balance clears.
+  const accounts = services.listAccounts();
+  assert(
+    accounts.find((account) => account.id === bank.id)?.balancePaise === 95_000_00,
+    "The paying bank account should drop by the payment."
+  );
+  assert(
+    accounts.find((account) => account.id === card.id)?.outstandingPaise === 0,
+    "The card outstanding should be cleared by the payment."
+  );
+});
+
+test("overview cashflow inflow matches the reports inflow rule (income + refund)", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Inflow Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 10_000_00
+  });
+  const refundType = services.createCategoryType({
+    name: `QA Cashback ${suffix}`,
+    behavior: "refund",
+    icon: "rotate-ccw",
+    color: "#059669"
+  });
+  const refundSub = services.createSubcategory({
+    typeId: refundType.id,
+    name: `QA Cashback Sub ${suffix}`,
+    icon: "rotate-ccw",
+    color: "#059669"
+  });
+
+  // A standalone refund (not linked to an original expense) is money coming in.
+  services.createTransaction({
+    date: "2026-09-14",
+    accountId: bank.id,
+    method: "bank_transfer",
+    typeId: refundType.id,
+    subcategoryId: refundSub.id,
+    amountPaise: 2_000_00,
+    direction: "inflow",
+    kind: "refund"
+  });
+
+  const report = services.getMonthlyReport(undefined, "2026-09");
+  const reportsInflow = report.types
+    .filter((type) => INFLOW_BEHAVIORS.has(type.behavior))
+    .reduce((sum, type) => sum + type.amountPaise, 0);
+
+  assert(
+    report.totalInflowPaise === reportsInflow,
+    "The report's inflow total must equal the sum of its inflow-behaviour types."
+  );
+  assert(
+    report.totalInflowPaise >= 2_000_00,
+    "A standalone refund must count towards inflow."
+  );
+  assert(
+    report.totalInflowPaise !== report.incomePaise,
+    "Inflow includes refunds, so it should differ from the income-only figure here."
+  );
+});
+
 test("report outflow covers every non-inflow type and matches the overview", async () => {
   const suffix = Date.now().toString().slice(-5);
   const bank = services.createAccount({
@@ -2011,8 +2135,13 @@ test("report outflow covers every non-inflow type and matches the overview", asy
     0
   );
 
-  // 4,000 expense + 3,000 transfer + 2,000 card expense + 2,000 card payment.
-  assert(report.totalOutflowPaise === 11_000_00, "Outflow should add up every non-inflow type.");
+  // 4,000 expense + 3,000 transfer + 2,000 card expense. The 2,000 card payment only
+  // settles the card expense already counted above, so it must not be added again.
+  assert(report.totalOutflowPaise === 9_000_00, "Outflow should add up every non-inflow type once.");
+  assert(
+    !report.types.some((type) => type.behavior === "card_payment"),
+    "A card payment must not appear as its own outflow line."
+  );
   assert(
     report.totalOutflowPaise === outflowFromTypes,
     "The outflow total must equal the Reports outflow breakdown."

@@ -259,6 +259,7 @@ export type MonthlyReport = {
   end: string;
   totalSpendingPaise: number;
   totalOutflowPaise: number;
+  totalInflowPaise: number;
   incomePaise: number;
   emiPaise: number;
   loanPaise: number;
