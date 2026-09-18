@@ -77,7 +77,10 @@ export const Api = {
     startingBalancePaise: number;
     creditLimitPaise?: number;
   }) => api<Account>("/api/accounts", { method: "POST", body }),
-  updateAccount: (id: string, body: { name?: string; creditLimitPaise?: number; isArchived?: boolean }) =>
+  updateAccount: (
+    id: string,
+    body: { name?: string; startingBalancePaise?: number; creditLimitPaise?: number; isArchived?: boolean }
+  ) =>
     api<Account>(`/api/accounts/${id}`, { method: "PATCH", body }),
   deleteAccount: (id: string) =>
     api<{ ok: true; mode: "deleted" | "hidden" }>(`/api/accounts/${id}`, { method: "DELETE" }),
@@ -240,6 +243,11 @@ export const Api = {
   },
   createBudgetLine: (body: { month: string; scopeType: "type" | "subcategory"; scopeId: string; amountPaise: number }) =>
     api<BudgetLine>("/api/budgets", { method: "POST", body }),
+  copyPreviousBudget: (month: string) =>
+    api<{ month: string; fromMonth: string; copiedCount: number; skippedCount: number }>("/api/budgets/copy-previous", {
+      method: "POST",
+      body: { month }
+    }),
   updateBudgetLine: (id: string, body: { amountPaise: number }) =>
     api<BudgetLine>(`/api/budgets/${id}`, { method: "PATCH", body }),
   deleteBudgetLine: (id: string) => api<{ ok: true }>(`/api/budgets/${id}`, { method: "DELETE" }),

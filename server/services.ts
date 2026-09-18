@@ -188,6 +188,7 @@ export type TransactionSummary = {
   transferAccountId: string | null;
   transferAccountName: string | null;
   linkedTransactionId: string | null;
+  refundedPaise: number;
   loanId: string | null;
   loanName: string | null;
   loanPaymentType: LoanPaymentType | null;
@@ -1218,6 +1219,7 @@ export function updateAccount(id: string, input: UpdateAccountInput) {
       : null;
   const isArchived =
     parsed.isArchived === undefined ? existing.is_archived : parsed.isArchived ? 1 : 0;
+  const startingBalance = parsed.startingBalancePaise ?? existing.starting_balance_paise;
 
   if (isArchived === 0) {
     const activeDuplicate = getActiveAccountByName(name, id);
@@ -1228,9 +1230,10 @@ export function updateAccount(id: string, input: UpdateAccountInput) {
 
   db.prepare(
     `UPDATE accounts
-     SET name = ?, credit_limit_paise = ?, is_archived = ?, updated_at = CURRENT_TIMESTAMP
+     SET name = ?, starting_balance_paise = ?, credit_limit_paise = ?, is_archived = ?,
+         updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`
-  ).run(name, creditLimit, isArchived, id);
+  ).run(name, startingBalance, creditLimit, isArchived, id);
 
   return getAccount(id);
 }
@@ -1491,13 +1494,10 @@ function insertValidatedTransaction(parsed: CreateTransactionInput) {
   const taxonomy = resolveTransactionTaxonomy(parsed);
 
   validateTransactionAgainstAccounts(parsed, account);
+  validateLinkedRefund(parsed);
 
   const id = randomUUID();
-  const status = parsed.splits?.length
-    ? "split"
-    : !taxonomy.typeId || (!taxonomy.subcategoryId && parsed.kind !== "card_payment")
-      ? "uncategorized"
-      : "categorized";
+  const status = transactionStatus(parsed, taxonomy);
 
   db.prepare(
       `INSERT INTO transactions
@@ -1546,6 +1546,72 @@ function insertValidatedTransaction(parsed: CreateTransactionInput) {
   syncVacationExpenseForTransaction(id, parsed);
 
   return id;
+}
+
+function transactionStatus(
+  input: CreateTransactionInput,
+  taxonomy: { typeId: string | null; subcategoryId: string | null }
+): "split" | "uncategorized" | "categorized" {
+  if (input.splits?.length) {
+    return "split";
+  }
+  // A refund tied to its purchase is fully described by that purchase.
+  if ((input.kind === "refund" || input.kind === "reversal") && input.linkedTransactionId) {
+    return "categorized";
+  }
+  if (!taxonomy.typeId) {
+    return "uncategorized";
+  }
+  if (taxonomy.subcategoryId || input.kind === "card_payment") {
+    return "categorized";
+  }
+  // A Type with no SubTypes (e.g. Refund) has nothing further to choose.
+  const subCount = asRecord<{ count: number }>(
+    db.prepare("SELECT COUNT(*) AS count FROM subcategories WHERE type_id = ?").get(taxonomy.typeId)
+  ).count;
+  return subCount === 0 ? "categorized" : "uncategorized";
+}
+
+/**
+ * A refund linked to a purchase must point at a real outflow and, together with any other
+ * refunds of that purchase, can't give back more than was paid.
+ */
+function validateLinkedRefund(input: CreateTransactionInput, selfId?: string) {
+  if (!input.linkedTransactionId || (input.kind !== "refund" && input.kind !== "reversal")) {
+    return;
+  }
+  const original = getTransactionRow(input.linkedTransactionId);
+  if (!original || original.id === selfId) {
+    throw badRequest("The purchase this refund belongs to no longer exists.");
+  }
+  if (
+    original.direction !== "outflow" ||
+    original.kind === "transfer" ||
+    original.kind === "card_payment"
+  ) {
+    throw badRequest("Only a purchase or payment can be refunded.");
+  }
+  if (original.status === "split") {
+    // A refund can't tell which split line it belongs to, so it can't net out correctly.
+    throw badRequest("A split transaction can't take a linked refund. Lower the split line that was refunded instead.");
+  }
+  const alreadyRefunded = asRecord<{ total: number }>(
+    db
+      .prepare(
+        `SELECT COALESCE(SUM(amount_paise), 0) AS total
+         FROM transactions
+         WHERE linked_transaction_id = ? AND kind IN ('refund', 'reversal') AND id != ?`
+      )
+      .get(original.id, selfId ?? "")
+  ).total;
+  if (alreadyRefunded + input.amountPaise > original.amount_paise) {
+    const left = Math.max(original.amount_paise - alreadyRefunded, 0);
+    throw badRequest(
+      left === 0
+        ? "This purchase has already been fully refunded."
+        : `Refunds can't add up to more than was paid. At most ₹${(left / 100).toLocaleString("en-IN")} is left to refund.`
+    );
+  }
 }
 
 export function updateTransaction(id: string, input: UpdateTransactionInput) {
@@ -1604,12 +1670,9 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
   const account = requireAccount(merged.accountId);
   const taxonomy = resolveTransactionTaxonomy(merged);
   validateTransactionAgainstAccounts(merged, account);
+  validateLinkedRefund(merged, id);
 
-  const status = merged.splits?.length
-    ? "split"
-    : !taxonomy.typeId || (!taxonomy.subcategoryId && merged.kind !== "card_payment")
-      ? "uncategorized"
-      : "categorized";
+  const status = transactionStatus(merged, taxonomy);
 
   transaction(() => {
     db.prepare(
@@ -1717,6 +1780,19 @@ export function getOverview(accountId?: string, month = currentMonth()) {
       .get(...(accountId ? [accountId] : []))
   );
 
+  // Money put into investments is saved, not spent: keep it out of the spending mix and
+  // report it on its own. (Outflow still includes it, matching Reports.)
+  const investmentTypeIds = new Set(
+    monthly.types.filter((type) => type.behavior === "investment").map((type) => type.typeId)
+  );
+  const investedPaise = monthly.types
+    .filter((type) => investmentTypeIds.has(type.typeId))
+    .reduce((sum, type) => sum + type.amountPaise, 0);
+  const spendingCategories = monthly.categories.filter(
+    (category) => !category.typeId || !investmentTypeIds.has(category.typeId)
+  );
+  const spendingPaise = spendingCategories.reduce((sum, category) => sum + Math.max(category.amountPaise, 0), 0);
+
   return {
     month,
     accounts: scopedAccounts,
@@ -1731,6 +1807,8 @@ export function getOverview(accountId?: string, month = currentMonth()) {
       totalOutflowPaise: monthly.totalOutflowPaise,
       totalInflowPaise: monthly.totalInflowPaise,
       incomePaise: monthly.incomePaise,
+      spendingPaise,
+      investedPaise,
       uncategorizedCount: uncategorized.count
     },
     comparison: {
@@ -1741,7 +1819,10 @@ export function getOverview(accountId?: string, month = currentMonth()) {
       outflowPaise: previous.totalOutflowPaise
     },
     recentTransactions: listTransactions({ accountId, limit: 5 }),
-    categoryReport: monthly.categories.slice(0, 6)
+    categoryReport: spendingCategories.slice(0, 6).map((category) => ({
+      ...category,
+      share: spendingPaise > 0 ? Math.round((Math.max(category.amountPaise, 0) / spendingPaise) * 1000) / 10 : 0
+    }))
   };
 }
 
@@ -1968,7 +2049,8 @@ export function getBudgetPlan(month = currentMonth(), asOfDate = localIsoDate(ne
   const report = getMonthlyReport(undefined, safeMonth);
   const actuals = budgetActualMaps(report);
   const rows = listBudgetRows(safeMonth);
-  const lines = rows.map((row) => budgetLineFromRow(row, actuals, pace));
+  const history = rows.length > 0 ? restOfMonthHistory(safeMonth, pace) : [];
+  const lines = rows.map((row) => budgetLineFromRow(row, actuals, pace, history));
   const covered = new Set(lines.map((line) => `${line.scopeType}:${line.scopeId}`));
   const coveredTypeIds = new Set(lines.filter((line) => line.scopeType === "type").map((line) => line.typeId));
   const coveredSubcategoryIds = new Set(
@@ -2033,6 +2115,35 @@ export function createBudgetLine(input: CreateBudgetLineInput): BudgetLineSummar
   }
 
   return getBudgetLine(id);
+}
+
+/**
+ * Starts a month from last month's plan: copies every previous-month line this month doesn't
+ * already cover. Lines whose Type/SubType was deleted, or that would overlap a line already
+ * set this month, are skipped rather than failing the whole copy.
+ */
+export function copyBudgetFromPreviousMonth(month: string) {
+  const safeMonth = createBudgetLineSchema.shape.month.parse(month);
+  const previousMonth = addMonths(safeMonth, -1);
+  let copiedCount = 0;
+  let skippedCount = 0;
+
+  transaction(() => {
+    for (const row of listBudgetRows(previousMonth)) {
+      try {
+        ensureNoBudgetOverlap(safeMonth, row.scope_type, row.scope_id);
+        db.prepare(
+          `INSERT INTO budget_lines (id, month, scope_type, scope_id, amount_paise)
+           VALUES (?, ?, ?, ?, ?)`
+        ).run(randomUUID(), safeMonth, row.scope_type, row.scope_id, row.amount_paise);
+        copiedCount += 1;
+      } catch {
+        skippedCount += 1;
+      }
+    }
+  });
+
+  return { month: safeMonth, fromMonth: previousMonth, copiedCount, skippedCount };
 }
 
 export function updateBudgetLine(id: string, input: UpdateBudgetLineInput): BudgetLineSummary {
@@ -2704,7 +2815,8 @@ function requireBudgetLineRow(id: string) {
 function getBudgetLine(id: string): BudgetLineSummary {
   const row = requireBudgetLineRow(id);
   const report = getMonthlyReport(undefined, row.month);
-  return budgetLineFromRow(row, budgetActualMaps(report), budgetPace(row.month, localIsoDate(new Date())));
+  const pace = budgetPace(row.month, localIsoDate(new Date()));
+  return budgetLineFromRow(row, budgetActualMaps(report), pace, restOfMonthHistory(row.month, pace));
 }
 
 function budgetActualMaps(report: ReturnType<typeof getMonthlyReport>) {
@@ -2724,10 +2836,78 @@ function budgetActualMaps(report: ReturnType<typeof getMonthlyReport>) {
   return { typeActuals, subcategoryActuals };
 }
 
+type BudgetActuals = ReturnType<typeof budgetActualMaps>;
+
+function scopeActual(actuals: BudgetActuals, scopeType: string, scopeId: string) {
+  return scopeType === "type"
+    ? actuals.typeActuals.get(scopeId) ?? 0
+    : actuals.subcategoryActuals.get(scopeId) ?? 0;
+}
+
+/**
+ * For up to three recent months that have any activity, what was spent *after* today's day
+ * of the month, per budget scope. Rent and bills land early in the month, so the typical
+ * remainder is a far better guide to month-end than stretching today's total in a line.
+ */
+function restOfMonthHistory(month: string, pace: ReturnType<typeof budgetPace>) {
+  if (pace.dayOfMonth <= 0 || pace.dayOfMonth >= pace.daysInMonth) {
+    return [];
+  }
+  const history: Array<{ full: BudgetActuals; toDate: BudgetActuals }> = [];
+  for (let back = 1; back <= 6 && history.length < 3; back += 1) {
+    const past = addMonths(month, -back);
+    const start = `${past}-01`;
+    const end = monthEndDate(past);
+    const active = asRecord<{ count: number }>(
+      db.prepare("SELECT COUNT(*) AS count FROM transactions WHERE date BETWEEN ? AND ?").get(start, end)
+    ).count;
+    if (active === 0) {
+      continue;
+    }
+    const sameDay = `${past}-${String(Math.min(pace.dayOfMonth, Number(end.slice(8, 10)))).padStart(2, "0")}`;
+    history.push({
+      full: budgetActualMaps(getMonthlyReport(undefined, past)),
+      toDate: budgetActualMaps(getMonthlyReport(undefined, past, start, sameDay))
+    });
+  }
+  return history;
+}
+
+/**
+ * Month-end estimate for one budget line. With recent history it adds the typical spend for
+ * the rest of the month; without it, it extrapolates today's pace once enough of the month has
+ * passed to mean anything. Always whole rupees, and never below what is already spent.
+ */
+// One earlier month is too thin to call "typical" (a first, partly tracked month, say).
+const MIN_HISTORY_MONTHS_FOR_PROJECTION = 2;
+
+export function projectionUsesHistory(elapsedPercent: number, restOfMonthPaise: number[]) {
+  return (
+    elapsedPercent >= MIN_PROJECTION_ELAPSED_PERCENT &&
+    elapsedPercent < 100 &&
+    restOfMonthPaise.length >= MIN_HISTORY_MONTHS_FOR_PROJECTION
+  );
+}
+
+export function projectBudgetPaise(actualPaise: number, elapsedPercent: number, restOfMonthPaise: number[]) {
+  let projected = actualPaise;
+  if (elapsedPercent >= 100 || elapsedPercent < MIN_PROJECTION_ELAPSED_PERCENT) {
+    // Finished month: the actual. Too early: one purchase says nothing about month-end yet.
+    projected = actualPaise;
+  } else if (projectionUsesHistory(elapsedPercent, restOfMonthPaise)) {
+    const typicalRest = restOfMonthPaise.reduce((sum, value) => sum + Math.max(value, 0), 0) / restOfMonthPaise.length;
+    projected = actualPaise + typicalRest;
+  } else {
+    projected = actualPaise / (elapsedPercent / 100);
+  }
+  return Math.max(actualPaise, Math.round(projected / 100) * 100);
+}
+
 function budgetLineFromRow(
   row: BudgetLineRow,
-  actuals: ReturnType<typeof budgetActualMaps>,
-  pace: ReturnType<typeof budgetPace>
+  actuals: BudgetActuals,
+  pace: ReturnType<typeof budgetPace>,
+  history: Array<{ full: BudgetActuals; toDate: BudgetActuals }> = []
 ): BudgetLineSummary {
   const scope = resolveBudgetScope(row.scope_type, row.scope_id);
   const actualPaise =
@@ -2735,15 +2915,22 @@ function budgetLineFromRow(
       ? actuals.typeActuals.get(row.scope_id) ?? 0
       : actuals.subcategoryActuals.get(row.scope_id) ?? 0;
   const usedPercent = percent(actualPaise, row.amount_paise);
-  // Extrapolating from the first day or two turns one ordinary purchase into a wild
-  // month-end figure and a false "Likely to exceed" alarm, so only project once enough
-  // of the month has passed for the pace to mean anything.
-  const projectedPaise =
-    pace.elapsedPercent >= MIN_PROJECTION_ELAPSED_PERCENT
-      ? Math.max(actualPaise, Math.round(actualPaise / (pace.elapsedPercent / 100)))
-      : actualPaise;
+  // Only months in which this line was actually used say anything about how it usually runs.
+  const restOfMonth = history
+    .filter((month) => scopeActual(month.full, row.scope_type, row.scope_id) > 0)
+    .map(
+      (month) => scopeActual(month.full, row.scope_type, row.scope_id) - scopeActual(month.toDate, row.scope_type, row.scope_id)
+    );
+  const projectedPaise = projectBudgetPaise(actualPaise, pace.elapsedPercent, restOfMonth);
   const remainingPaise = row.amount_paise - actualPaise;
-  const status = budgetStatus(row.amount_paise, actualPaise, usedPercent, projectedPaise, pace.elapsedPercent);
+  const status = budgetStatus(
+    row.amount_paise,
+    actualPaise,
+    usedPercent,
+    projectedPaise,
+    pace.elapsedPercent,
+    projectionUsesHistory(pace.elapsedPercent, restOfMonth)
+  );
 
   return {
     ...scope,
@@ -2783,12 +2970,15 @@ function budgetStatus(
   actualPaise: number,
   usedPercent: number,
   projectedPaise: number,
-  elapsedPercent: number
+  elapsedPercent: number,
+  projectedFromHistory = false
 ): BudgetStatus {
   if (actualPaise > amountPaise) {
     return "over";
   }
-  if (usedPercent > 90 || projectedPaise > amountPaise) {
+  // With real history the projection already knows whether this line usually keeps growing
+  // (groceries) or is done for the month (rent), so "Likely to exceed" follows it alone.
+  if (projectedPaise > amountPaise || (!projectedFromHistory && usedPercent > 90)) {
     return "critical";
   }
   if (usedPercent >= 75 || usedPercent > elapsedPercent + 10) {
@@ -3390,7 +3580,23 @@ function mapLoan(row: LoanRow): LoanSummary {
     row.principal_amount_paise - row.starting_outstanding_paise,
     0
   );
-  const trackingStartMonth = localMonthFromSqliteTimestamp(row.created_at);
+  // The entered outstanding is the balance before the first EMI recorded here, so the
+  // estimated history must stop the month before that EMI. Otherwise an EMI backfilled for
+  // an earlier month is counted once as "history" and again as a tracked payment.
+  const earliestEmiMonth = asRecord<{ month: string | null }>(
+    db
+      .prepare(
+        `SELECT MIN(substr(t.date, 1, 7)) AS month
+         FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id
+         WHERE lp.loan_id = ? AND lp.payment_type = 'emi'`
+      )
+      .get(row.id)
+  ).month;
+  const createdMonth = localMonthFromSqliteTimestamp(row.created_at);
+  const trackingStartMonth =
+    earliestEmiMonth && addMonths(earliestEmiMonth, -1) < createdMonth
+      ? addMonths(earliestEmiMonth, -1)
+      : createdMonth;
   const historicalInstallments = paidInstallmentsThroughMonth(
     row.start_month,
     trackingStartMonth,
@@ -4698,6 +4904,7 @@ function mapSubcategory(row: SubcategoryRow): SubcategorySummary {
 }
 
 type JoinedFields = {
+  refunded_paise: number;
   account_name: string;
   account_type: AccountType;
   category_name: string | null;
@@ -4741,6 +4948,8 @@ const transactionSelectFields = `
   t.status,
   t.transfer_account_id,
   t.linked_transaction_id,
+  (SELECT COALESCE(SUM(r.amount_paise), 0) FROM transactions r
+   WHERE r.linked_transaction_id = t.id AND r.kind IN ('refund', 'reversal')) AS refunded_paise,
   t.created_at,
   t.updated_at,
   a.name AS account_name,
@@ -4800,6 +5009,7 @@ function mapTransaction(row: TransactionRow & JoinedFields): TransactionSummary 
     transferAccountId: row.transfer_account_id,
     transferAccountName: row.transfer_account_name,
     linkedTransactionId: row.linked_transaction_id,
+    refundedPaise: row.refunded_paise ?? 0,
     loanId: row.loan_id,
     loanName: row.loan_name,
     loanPaymentType: row.loan_payment_type,

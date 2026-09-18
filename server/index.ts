@@ -12,6 +12,7 @@ import {
   createAccount,
   createAutopaySubscription,
   createBackup,
+  copyBudgetFromPreviousMonth,
   createBudgetLine,
   createCategoryType,
   createInvestment,
@@ -360,6 +361,11 @@ app.post("/api/budgets", async (request, reply) => {
   return reply.status(201).send(line);
 });
 
+app.post("/api/budgets/copy-previous", async (request) => {
+  const body = (request.body ?? {}) as { month?: string };
+  return copyBudgetFromPreviousMonth(body.month ?? "");
+});
+
 app.patch("/api/budgets/:id", async (request) => {
   const params = request.params as { id: string };
   return updateBudgetLine(params.id, request.body as never);
@@ -436,6 +442,7 @@ app.get("/api/export/transactions.csv", expensiveRouteLimit, async (request, rep
         accountId: blankToUndefined(query.accountId),
         typeId: blankToUndefined(query.typeId),
         subcategoryId: blankToUndefined(query.subcategoryId),
+        status: blankToUndefined(query.status),
         search: blankToUndefined(query.search),
         from: blankToUndefined(query.from),
         to: blankToUndefined(query.to)

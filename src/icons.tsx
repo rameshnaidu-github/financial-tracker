@@ -10,19 +10,23 @@ import {
   CreditCard,
   Film,
   Gift,
+  GraduationCap,
   HeartPulse,
   Home,
   Landmark,
   Plane,
   Receipt,
+  ShieldCheck,
   RotateCcw,
+  Sparkles,
   ShoppingBag,
   ShoppingBasket,
   Ticket,
   CalendarClock,
   TrendingUp,
   Utensils,
-  Wallet
+  Wallet,
+  Zap
 } from "lucide-react";
 import type { ComponentType } from "react";
 
@@ -56,7 +60,11 @@ const iconMap: Record<string, ComponentType<IconProps>> = {
   landmark: Landmark,
   banknote: Banknote,
   "trending-up": TrendingUp,
-  "calendar-clock": CalendarClock
+  "calendar-clock": CalendarClock,
+  zap: Zap,
+  shield: ShieldCheck,
+  "graduation-cap": GraduationCap,
+  sparkles: Sparkles
 };
 
 export function IconGlyph({ name, ...props }: IconProps & { name: string }) {

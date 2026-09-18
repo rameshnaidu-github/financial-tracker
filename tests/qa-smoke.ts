@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -116,7 +116,12 @@ test("seeds INR, Monday week start, and Type/SubType taxonomy", () => {
     "Income should include the Loan SubType."
   );
   assert(!names.includes("Bills"), "Bills should not be preserved as a visible Type.");
-  assert(!names.includes("Refund"), "Refund should not be preserved as a visible seed Type.");
+  // Legacy "Refund" categories are not migrated as Types; the Refund Type is a system default
+  // with refund behavior so a refund can be tied to its purchase.
+  assert(
+    taxonomy.filter((type) => type.name === "Refund").every((type) => type.id === "type_refund" && type.behavior === "refund"),
+    "The only Refund Type should be the system default with refund behavior."
+  );
   assert(!names.includes("Uncategorized"), "Uncategorized should remain a state, not a visible Type.");
 });
 
@@ -377,7 +382,7 @@ test("creates, saves, and reloads a weekly batch", () => {
   assert(saved.status === "saved", "Batch should save.");
 });
 
-test("creates backup, stores last-backup status, and keeps only the latest three backups", async () => {
+test("creates backup, stores last-backup status, and removes empty backups", async () => {
   const result = services.createBackup("manual");
   const status = services.getBackupStatus();
   const backupDb = new DatabaseSync(result.path);
@@ -410,11 +415,7 @@ test("creates backup, stores last-backup status, and keeps only the latest three
   }
 
   const backups = readdirSync(testBackupDir).filter((name) => /^finance.*\.db$/.test(name));
-  assert(backups.length === 3, "Only the latest three backups should be kept.");
-  assert(
-    !backups.some((name) => name.includes("before-taxonomy")),
-    "Old migration backups should obey the same retention rule."
-  );
+  assert(backups.length === 5, `The five newest backups should be kept, found ${backups.length}.`);
   assert(!backups.includes("finance-2099-01-01T00-00-00-000Z.db"), "Zero-byte backups should be removed.");
 });
 
@@ -1050,7 +1051,10 @@ test("filters transactions by uncategorized status and exports CSV", () => {
   const uncategorized = services.listTransactions({ status: "uncategorized" });
   const csv = services.exportTransactionsCsv();
 
-  assert(uncategorized.length === 4, "Four uncategorized transactions should be present.");
+  // A refund tied to its purchase (the PVR refund) is described by that purchase, so it is
+  // not something left to categorize.
+  assert(uncategorized.length === 3, `Three uncategorized transactions should be present, got ${uncategorized.length}.`);
+  assert(!uncategorized.some((item) => item.linkedTransactionId), "A linked refund is never uncategorized.");
   assert(csv.includes("date,account,type,subtype,method"), "CSV should include new taxonomy headers.");
   assert(csv.includes("DMart"), "CSV should include transaction rows.");
 });
@@ -1240,7 +1244,12 @@ test("plans selected monthly budgets with pace warnings and overlap protection",
   const investmentLine = earlyPlan.lines.find((line) => line.id === investments.id);
 
   assert(groceryLine?.actualPaise === 6_000_00, "SubType budget should use monthly report actuals.");
-  assert(groceryLine.status === "critical", "Fast spending should warn before crossing the line.");
+  // 60% used a third of the way in is flagged. Whether it reads "Watch" or "Likely to exceed"
+  // depends on how groceries usually run for the rest of the month.
+  assert(
+    groceryLine.status === "critical" || groceryLine.status === "watch",
+    `Fast spending should be flagged before crossing the line, got ${groceryLine.status}.`
+  );
   assert(groceryLine.projectedPaise > groceryLine.amountPaise, "Projection should show likely overspend.");
   assert(investmentLine?.status === "safe", "Investment budget within pace should remain safe.");
   assert(
@@ -2272,6 +2281,7 @@ test("the overview compares a past month against the whole previous month", asyn
 });
 
 test("a budget only projects once enough of the month has passed", async () => {
+  // Education has no spending history in this database, so this exercises the pace path.
   const suffix = Date.now().toString().slice(-5);
   const bank = services.createAccount({
     name: `QA Projection Bank ${suffix}`,
@@ -2281,7 +2291,7 @@ test("a budget only projects once enough of the month has passed", async () => {
   services.createBudgetLine({
     month: "2026-12",
     scopeType: "subcategory",
-    scopeId: subcategoryId("Expense", "Movies"),
+    scopeId: subcategoryId("Expense", "Education"),
     amountPaise: 15_000_00
   });
   services.createTransaction({
@@ -2289,7 +2299,7 @@ test("a budget only projects once enough of the month has passed", async () => {
     accountId: bank.id,
     method: "upi",
     typeId: typeId("Expense"),
-    subcategoryId: subcategoryId("Expense", "Movies"),
+    subcategoryId: subcategoryId("Expense", "Education"),
     amountPaise: 1_000_00,
     direction: "outflow",
     kind: "expense"
@@ -2449,6 +2459,309 @@ test("budget totals keep budgeted equal to used plus remaining", async () => {
     "Budgeted must equal used plus remaining, even when a line is over budget."
   );
   assert(plan.totals.remainingPaise === -1_000_00, "Remaining should go negative once spending passes the budget.");
+});
+
+// ---- Principal-PM review: gaps found in the full-app audit ----
+
+function hasTaxonomyId(id: string) {
+  return services.listCategoryTypes().some((type) => type.id === id || type.subcategories.some((sub) => sub.id === id));
+}
+
+test("defaults cover rent, bills, insurance, education, personal care and refunds", () => {
+  const expense = services.listCategoryTypes().find((type) => type.id === "type_expense");
+  const names = new Set(expense?.subcategories.map((sub) => sub.name));
+  for (const name of ["Rent", "Bills & Utilities", "Insurance", "Education", "Personal care"]) {
+    assert(names.has(name), `Expense should include a ${name} SubType by default.`);
+  }
+  const refund = services.listCategoryTypes().find((type) => type.id === "type_refund");
+  assert(refund?.behavior === "refund" && refund.subcategories.length === 0, "A Refund type with refund behavior should exist.");
+});
+
+test("deleted defaults stay deleted after a restart while new defaults arrive once", () => {
+  services.deleteSubcategory("sub_entertainment");
+  dbModule.initDatabase();
+  assert(!hasTaxonomyId("sub_entertainment"), "A deleted default must not come back on restart.");
+
+  // A database from before the seeded-defaults ledger, missing a newly shipped default.
+  services.deleteSubcategory("sub_personal_care");
+  dbModule.db.prepare("DELETE FROM settings WHERE key = 'seeded_default_taxonomy_ids'").run();
+  dbModule.initDatabase();
+  assert(hasTaxonomyId("sub_personal_care"), "A newly shipped default should reach an existing database.");
+  assert(!hasTaxonomyId("sub_entertainment"), "An original default the user deleted stays deleted on upgrade.");
+
+  services.deleteSubcategory("sub_personal_care");
+  dbModule.initDatabase();
+  assert(!hasTaxonomyId("sub_personal_care"), "Once delivered and deleted, a new default stays deleted.");
+});
+
+test("backups follow a custom database and keep daily history", async () => {
+  const backupFiles = await import("../server/backup-files.ts");
+  assert(
+    backupFiles.resolveBackupDir({ FINANCE_DB_PATH: "/tmp/qa-copy/app.db" }, "/project") === path.join("/tmp/qa-copy", "backups"),
+    "A custom database path should keep its backups beside it."
+  );
+  assert(
+    backupFiles.resolveBackupDir({}, "/project") === path.join("/project", "backups"),
+    "The default database keeps backups in <project>/backups."
+  );
+  assert(
+    backupFiles.resolveBackupDir({ FINANCE_BACKUP_DIR: "/b", FINANCE_DB_PATH: "/tmp/x.db" }, "/project") === "/b",
+    "An explicit backup folder always wins."
+  );
+
+  const dir = path.join(tmpdir(), `finance-tracker-retention-${Date.now()}`);
+  mkdirSync(dir, { recursive: true });
+  const now = new Date(2030, 5, 15, 12, 0).getTime();
+  const hour = 60 * 60 * 1000;
+  const day = 24 * hour;
+  const make = (name: string, mtime: number) => {
+    const file = path.join(dir, name);
+    writeFileSync(file, "x");
+    utimesSync(file, mtime / 1000, mtime / 1000);
+  };
+  for (let k = 0; k < 6; k += 1) make(`finance-2030-06-15T0${k}-00-00-000Z.db`, now - k * 10 * 60 * 1000);
+  for (let d = 1; d <= 9; d += 1) make(`finance-2030-06-${String(15 - d).padStart(2, "0")}T12-00-00-000Z.db`, now - d * day + hour);
+
+  backupFiles.pruneBackupFiles(dir, 5, 7, now);
+  const kept = new Set(readdirSync(dir));
+  assert(kept.size === 12, `Expected 5 newest + 7 daily backups, kept ${kept.size}.`);
+  assert(!kept.has("finance-2030-06-15T05-00-00-000Z.db"), "The sixth backup of the same day should be pruned.");
+  for (let d = 1; d <= 7; d += 1) {
+    assert(kept.has(`finance-2030-06-${String(15 - d).padStart(2, "0")}T12-00-00-000Z.db`), `Day -${d} should keep a backup.`);
+  }
+  assert(!kept.has("finance-2030-06-07T12-00-00-000Z.db"), "Backups older than a week fall back to the newest-count rule.");
+});
+
+test("backfilled EMIs are not double counted in loan history", () => {
+  assert(state.bankId, "Bank should exist.");
+  const emiPaise = 16_607_00;
+  const loan = services.createLoan({
+    name: "QA Backfilled Car Loan",
+    subcategoryId: subcategoryId("Loan", "Vehicle"),
+    principalAmountPaise: 8_00_000_00,
+    startingOutstandingPaise: 7_00_000_00,
+    startMonth: "2025-04",
+    annualInterestRateBps: 900,
+    tenureMonths: 60,
+    monthlyEmiPaise: emiPaise
+  });
+  for (const date of ["2026-01-07", "2026-02-07", "2026-03-07"]) {
+    services.createTransaction({
+      date,
+      accountId: state.bankId,
+      method: "bank_transfer",
+      merchant: "QA backfilled EMI",
+      typeId: typeId("Loan"),
+      subcategoryId: subcategoryId("Loan", "Vehicle"),
+      amountPaise: emiPaise,
+      direction: "outflow",
+      kind: "emi",
+      loanId: loan.id,
+      loanPaymentType: "emi"
+    });
+  }
+  const summary = services.listLoans(true).find((item) => item.id === loan.id);
+  assert(summary, "Loan should be listed.");
+  // Apr 2025 – Dec 2025 are estimated history; Jan–Mar 2026 are the recorded EMIs.
+  const historical = 9;
+  assert(summary.monthsElapsed === historical + 3, `Months elapsed should be 12, got ${summary.monthsElapsed}.`);
+  assert(
+    summary.estimatedHistoricalInterestPaidPaise === historical * emiPaise - (8_00_000_00 - 7_00_000_00),
+    `Historical interest should cover only the 9 unrecorded months, got ${summary.estimatedHistoricalInterestPaidPaise}.`
+  );
+  const r = 900 / 10_000 / 12;
+  const amortized = Math.ceil(-Math.log(1 - (summary.outstandingPaise * r) / emiPaise) / Math.log(1 + r));
+  assert(
+    summary.monthsLeft === Math.min(amortized, 60 - (historical + 3)),
+    `Months left should come from the outstanding balance (${amortized}), got ${summary.monthsLeft}.`
+  );
+});
+
+test("budget projection uses the typical rest of month from recent history", () => {
+  // Pure rule: history beats a straight line; pace only without history; whole rupees.
+  assert(services.projectBudgetPaise(30_450_00, 60, [1_200_00, 800_00, 1_000_00]) === 31_450_00, "History adds the typical remainder.");
+  assert(services.projectBudgetPaise(10_001_50, 60, []) === 16_669_00, "Without history it follows pace, in whole rupees.");
+  assert(services.projectBudgetPaise(5_000_00, 10, []) === 5_000_00, "Too early in the month to extrapolate.");
+  assert(services.projectBudgetPaise(5_000_00, 100, [9_000_00]) === 5_000_00, "A finished month projects to its actual.");
+  assert(services.projectBudgetPaise(5_000_00, 50, [-3_000_00, -1_000_00]) === 5_000_00, "A negative remainder never lowers the projection.");
+  assert(services.projectBudgetPaise(5_000_00, 50, [200_00]) === 10_000_00, "One month of history is too thin; follow pace.");
+
+  // End to end: rent paid on the 3rd every month must not be extrapolated to double.
+  assert(state.bankId, "Bank should exist.");
+  const rentId = subcategoryId("Expense", "Rent");
+  for (const date of ["2031-02-03", "2031-03-03", "2031-04-03", "2031-05-03"]) {
+    services.createTransaction({
+      date,
+      accountId: state.bankId,
+      method: "bank_transfer",
+      merchant: "QA rent",
+      typeId: typeId("Expense"),
+      subcategoryId: rentId,
+      amountPaise: 25_000_00,
+      direction: "outflow",
+      kind: "expense"
+    });
+  }
+  services.createBudgetLine({ month: "2031-05", scopeType: "subcategory", scopeId: rentId, amountPaise: 26_000_00 });
+  const line = services.getBudgetPlan("2031-05", "2031-05-15").lines.find((item) => item.subcategoryId === rentId);
+  assert(line?.projectedPaise === 25_000_00, `Rent should project to 25,000, got ${line?.projectedPaise}.`);
+  assert(line?.status !== "critical" && line?.status !== "over", "Rent paid in full should not raise an alarm.");
+});
+
+test("weekly account impact shows the real direction of a card's outstanding", async () => {
+  const { accountImpact } = await import("../src/account-impact.ts");
+  const card = { id: "card", type: "credit_card", creditLimitPaise: 2_00_000_00, balancePaise: 0 } as never;
+  const bank = { id: "bank", type: "bank", creditLimitPaise: null, balancePaise: 2_16_800_00 } as never;
+  const txns = [
+    { accountId: "card", direction: "outflow", kind: "expense", amountPaise: 4_100_00 },
+    { accountId: "bank", direction: "outflow", kind: "card_payment", transferAccountId: "card", amountPaise: 21_000_00 },
+    { accountId: "bank", direction: "outflow", kind: "expense", amountPaise: 3_000_00 },
+    { accountId: "bank", direction: "outflow", kind: "expense", amountPaise: 750_00 }
+  ] as never[];
+  const cardImpact = accountImpact(card, txns);
+  assert(cardImpact.amountPaise === 4_100_00 - 21_000_00, `Card outstanding should fall by 16,900, got ${cardImpact.amountPaise}.`);
+  assert(cardImpact.isGood && cardImpact.label === "Outstanding movement", "Paying down a card is good news.");
+  assert(cardImpact.percentLabel === "8.5% of limit", `Card movement is measured against the limit: ${cardImpact.percentLabel}`);
+  const bankImpact = accountImpact(bank, txns);
+  const moved = -(21_000_00 + 3_000_00 + 750_00);
+  assert(bankImpact.amountPaise === moved && !bankImpact.isGood, "Bank balance should fall by the week's outflows.");
+  const expected = `${Math.round((-moved / (2_16_800_00 - moved)) * 1000) / 10}% of balance`;
+  assert(bankImpact.percentLabel === expected, `Bank movement compares with the balance before it: ${bankImpact.percentLabel}`);
+});
+
+test("the spending mix leaves investments out and reports them as invested", () => {
+  assert(state.bankId, "Bank should exist.");
+  const base = { accountId: state.bankId, method: "upi" as const, direction: "outflow" as const };
+  services.createTransaction({ ...base, date: "2032-02-05", typeId: typeId("Expense"), subcategoryId: subcategoryId("Expense", "Groceries"), amountPaise: 1_000_00, kind: "expense" });
+  services.createTransaction({ ...base, date: "2032-02-06", typeId: typeId("Investment"), subcategoryId: subcategoryId("Investment", "Stocks"), amountPaise: 500_00, kind: "investment" });
+  const overview = services.getOverview(undefined, "2032-02");
+  assert(overview.summary.investedPaise === 500_00, `Invested should be 500, got ${overview.summary.investedPaise}.`);
+  assert(overview.summary.spendingPaise === 1_000_00, `Spending should exclude the investment, got ${overview.summary.spendingPaise}.`);
+  assert(overview.summary.totalOutflowPaise === 1_500_00, "Outflow still includes the investment.");
+  assert(
+    !overview.categoryReport.some((category) => category.typeId === typeId("Investment")),
+    "No investment line should appear in the spending mix."
+  );
+});
+
+test("a linked refund nets out of its purchase and cannot exceed it", async () => {
+  assert(state.cardId, "Card should exist.");
+  const outstanding = () => services.listAccounts().find((account) => account.id === state.cardId)?.outstandingPaise ?? 0;
+  const purchase = services.createTransaction({
+    date: "2032-03-08",
+    accountId: state.cardId,
+    method: "credit_card",
+    merchant: "QA headphones",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Shopping"),
+    amountPaise: 5_499_00,
+    direction: "outflow",
+    kind: "expense"
+  }).transaction;
+  assert(purchase, "Purchase should be created.");
+  const before = outstanding();
+  const refund = (amountPaise: number) =>
+    services.createTransaction({
+      date: "2032-03-12",
+      accountId: state.cardId as string,
+      method: "credit_card",
+      merchant: "QA headphones refund",
+      typeId: "type_refund",
+      amountPaise,
+      direction: "inflow",
+      kind: "refund",
+      linkedTransactionId: purchase.id
+    }).transaction;
+  const first = refund(2_000_00);
+  assert(first?.status === "categorized", `A linked refund is categorized, got ${first?.status}.`);
+  assert(outstanding() === before - 2_000_00, "A card refund lowers the outstanding.");
+  const report = services.getMonthlyReport(undefined, "2032-03");
+  const shopping = report.categories.find((category) => category.subcategoryId === subcategoryId("Expense", "Shopping"));
+  assert(shopping?.amountPaise === 3_499_00, `Shopping should net to 3,499, got ${shopping?.amountPaise}.`);
+  assert(report.totalInflowPaise === 0, "A linked refund is not income.");
+  await assertRejectsWithMessage("over-refund", () => refund(4_000_00), "Refunds can't add up to more than was paid");
+  refund(3_499_00);
+  await assertRejectsWithMessage("refund after full refund", () => refund(1_00), "already been fully refunded");
+  assert(
+    services.getTransaction(purchase.id)?.refundedPaise === 5_499_00,
+    "The purchase should report how much of it has been refunded."
+  );
+
+  const split = services.createTransaction({
+    date: "2032-03-14",
+    accountId: state.cardId,
+    method: "credit_card",
+    merchant: "QA split basket",
+    typeId: typeId("Expense"),
+    amountPaise: 3_000_00,
+    direction: "outflow",
+    kind: "expense",
+    splits: [
+      { subcategoryId: subcategoryId("Expense", "Groceries"), amountPaise: 2_000_00 },
+      { subcategoryId: subcategoryId("Expense", "Shopping"), amountPaise: 1_000_00 }
+    ]
+  }).transaction;
+  await assertRejectsWithMessage(
+    "refund of a split",
+    () =>
+      services.createTransaction({
+        date: "2032-03-15",
+        accountId: state.cardId as string,
+        method: "credit_card",
+        typeId: "type_refund",
+        amountPaise: 500_00,
+        direction: "inflow",
+        kind: "refund",
+        linkedTransactionId: split?.id
+      }),
+    "split transaction can't take a linked refund"
+  );
+});
+
+test("a month can copy last month's budget without duplicates", () => {
+  const groceries = subcategoryId("Expense", "Groceries");
+  const transport = subcategoryId("Expense", "Transport");
+  services.createBudgetLine({ month: "2032-04", scopeType: "subcategory", scopeId: groceries, amountPaise: 12_000_00 });
+  services.createBudgetLine({ month: "2032-04", scopeType: "subcategory", scopeId: transport, amountPaise: 3_000_00 });
+  services.createBudgetLine({ month: "2032-05", scopeType: "subcategory", scopeId: groceries, amountPaise: 15_000_00 });
+  const result = services.copyBudgetFromPreviousMonth("2032-05");
+  assert(result.copiedCount === 1 && result.skippedCount === 1, `Expected 1 copied and 1 skipped, got ${JSON.stringify(result)}.`);
+  const lines = services.getBudgetPlan("2032-05", "2032-05-01").lines;
+  assert(lines.find((line) => line.subcategoryId === groceries)?.amountPaise === 15_000_00, "An existing line keeps its amount.");
+  assert(lines.find((line) => line.subcategoryId === transport)?.amountPaise === 3_000_00, "A missing line is copied.");
+  assert(services.copyBudgetFromPreviousMonth("2032-05").copiedCount === 0, "Copying twice adds nothing.");
+});
+
+test("correcting a starting balance shifts the balance by the same amount", () => {
+  const account = services.createAccount({ name: "QA Reconcile Bank", type: "bank", startingBalancePaise: 10_000_00 });
+  services.createTransaction({
+    date: "2032-06-02",
+    accountId: account.id,
+    method: "upi",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 1_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+  const balance = () => services.listAccounts().find((item) => item.id === account.id)?.balancePaise;
+  assert(balance() === 9_000_00, "Balance before the correction.");
+  const updated = services.updateAccount(account.id, { startingBalancePaise: 12_500_00 });
+  assert(updated.startingBalancePaise === 12_500_00, "The starting balance should be stored.");
+  assert(balance() === 11_500_00, `Balance should move by the +2,500 correction, got ${balance()}.`);
+});
+
+test("the transaction list filters to uncategorized rows", () => {
+  assert(state.bankId, "Bank should exist.");
+  const base = { accountId: state.bankId, method: "upi" as const, direction: "outflow" as const, kind: "expense" as const };
+  services.createTransaction({ ...base, date: "2032-07-03", merchant: "QA mystery UPI", amountPaise: 321_00 });
+  services.createTransaction({ ...base, date: "2032-07-04", merchant: "QA known shop", typeId: typeId("Expense"), subcategoryId: subcategoryId("Expense", "Groceries"), amountPaise: 400_00 });
+  const query = { status: "uncategorized", from: "2032-07-01", to: "2032-07-31" };
+  const rows = services.listTransactions(query);
+  assert(rows.length === 1 && rows[0].merchant === "QA mystery UPI", "Only the uncategorized row should be listed.");
+  assert(services.summarizeTransactions(query).count === 1, "Totals should use the same filter.");
+  const csv = services.exportTransactionsCsv(query);
+  assert(csv.includes("QA mystery UPI") && !csv.includes("QA known shop"), "Export should use the same filter.");
 });
 
 let failed = 0;
