@@ -44,7 +44,11 @@ export const ICON_OPTIONS = [
   "briefcase",
   "landmark",
   "trending-up",
-  "calendar-clock"
+  "calendar-clock",
+  "zap",
+  "shield",
+  "graduation-cap",
+  "sparkles"
 ] as const;
 
 export const COLOR_OPTIONS = [
@@ -96,7 +100,12 @@ export const DEFAULT_CATEGORY_TYPES = [
       { id: "sub_shopping", name: "Shopping", icon: "shopping-bag", color: "#db2777" },
       { id: "sub_health", name: "Health", icon: "heart-pulse", color: "#10b981" },
       { id: "sub_travel", name: "Travel", icon: "plane", color: "#0891b2" },
-      { id: "sub_autopay", name: "AutoPay", icon: "calendar-clock", color: "#4f46e5" }
+      { id: "sub_autopay", name: "AutoPay", icon: "calendar-clock", color: "#4f46e5" },
+      { id: "sub_rent", name: "Rent", icon: "home", color: "#0f766e" },
+      { id: "sub_bills_utilities", name: "Bills & Utilities", icon: "zap", color: "#d97706" },
+      { id: "sub_insurance", name: "Insurance", icon: "shield", color: "#0284c7" },
+      { id: "sub_education", name: "Education", icon: "graduation-cap", color: "#4f46e5" },
+      { id: "sub_personal_care", name: "Personal care", icon: "sparkles", color: "#db2777" }
     ]
   },
   {
@@ -159,8 +168,29 @@ export const DEFAULT_CATEGORY_TYPES = [
     icon: "credit-card",
     color: "#ea580c",
     subcategories: []
+  },
+  {
+    // Money given back for a purchase. Linked to the original purchase, a refund nets out of
+    // that purchase's SubType instead of counting as income.
+    id: "type_refund",
+    name: "Refund",
+    behavior: "refund",
+    icon: "rotate-ccw",
+    color: "#0891b2",
+    subcategories: []
   }
 ] as const;
+
+// Defaults added after the first release. A database created before the seeded-defaults ledger
+// existed gets these once; every other default it lacks was deleted by the user and stays gone.
+export const DEFAULTS_ADDED_AFTER_LEDGER = new Set<string>([
+  "sub_rent",
+  "sub_bills_utilities",
+  "sub_insurance",
+  "sub_education",
+  "sub_personal_care",
+  "type_refund"
+]);
 
 export const accountTypeSchema = z.enum(["bank", "credit_card", "food_card"]);
 export const paymentMethodSchema = z.enum([
@@ -236,6 +266,8 @@ export const createAccountSchema = z
 export const updateAccountSchema = z
   .object({
     name: z.string().trim().min(2).max(80).optional(),
+    // Correcting the opening balance is how a user reconciles with their bank statement.
+    startingBalancePaise: paiseSchema.optional(),
     creditLimitPaise: paiseSchema.optional(),
     isArchived: z.boolean().optional()
   })

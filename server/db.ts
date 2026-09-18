@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   DEFAULT_CATEGORY_TYPES,
+  DEFAULTS_ADDED_AFTER_LEDGER,
   SELF_TRANSFER_SUBCATEGORY_ID,
   WEEK_START,
   CURRENCY
@@ -569,6 +570,13 @@ function ensureTaxonomySchema() {
   );
 }
 
+const SEEDED_DEFAULTS_SETTING = "seeded_default_taxonomy_ids";
+
+/**
+ * Inserts each shipped default Type/SubType exactly once per database. The ids already
+ * delivered are recorded in settings, so a default the user deletes stays deleted after a
+ * restart, while a default added in a later release still reaches existing databases.
+ */
 function seedTaxonomy() {
   const insertType = db.prepare(`
     INSERT OR IGNORE INTO category_types
@@ -580,19 +588,47 @@ function seedTaxonomy() {
       (id, type_id, name, icon, color, is_system, is_locked, sort_order)
     VALUES (?, ?, ?, ?, ?, 1, ?, ?)
   `);
+  const typeExists = db.prepare("SELECT 1 FROM category_types WHERE id = ?");
+
+  const recorded = getSetting(SEEDED_DEFAULTS_SETTING);
+  let seeded: Set<string>;
+  if (recorded !== undefined) {
+    seeded = new Set(JSON.parse(recorded) as string[]);
+  } else {
+    const hasTaxonomy = (db.prepare("SELECT COUNT(*) AS count FROM category_types").get() as { count: number }).count > 0;
+    // Before this ledger existed every original default was inserted on each boot, so an
+    // original default missing from an existing database is one the user deleted.
+    seeded = new Set(
+      hasTaxonomy
+        ? DEFAULT_CATEGORY_TYPES.flatMap((type) => [type.id, ...type.subcategories.map((sub) => sub.id)]).filter(
+            (id) => !DEFAULTS_ADDED_AFTER_LEDGER.has(id)
+          )
+        : []
+    );
+  }
 
   DEFAULT_CATEGORY_TYPES.forEach((type, typeIndex) => {
-    insertType.run(
-      type.id,
-      type.name,
-      type.behavior,
-      type.icon,
-      type.color,
-      type.name === "Credit Card Payment" ? 1 : 0,
-      typeIndex + 1
-    );
+    if (!seeded.has(type.id)) {
+      insertType.run(
+        type.id,
+        type.name,
+        type.behavior,
+        type.icon,
+        type.color,
+        type.name === "Credit Card Payment" ? 1 : 0,
+        typeIndex + 1
+      );
+      seeded.add(type.id);
+    }
 
     type.subcategories.forEach((subcategory, subIndex) => {
+      if (seeded.has(subcategory.id)) {
+        return;
+      }
+      // A default SubType can only be added under a parent Type the user still has.
+      if (!typeExists.get(type.id)) {
+        return;
+      }
       insertSubcategory.run(
         subcategory.id,
         type.id,
@@ -602,8 +638,11 @@ function seedTaxonomy() {
         subcategory.id === SELF_TRANSFER_SUBCATEGORY_ID ? 1 : 0,
         subIndex + 1
       );
+      seeded.add(subcategory.id);
     });
   });
+
+  setSetting(SEEDED_DEFAULTS_SETTING, JSON.stringify([...seeded].sort()));
 }
 
 function migrateLegacyCategoriesToTaxonomy() {

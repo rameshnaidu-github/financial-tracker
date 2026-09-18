@@ -15,6 +15,7 @@ import {
   Home,
   Info,
   Landmark,
+  LayoutGrid,
   Loader2,
   Archive,
   Moon,
@@ -24,6 +25,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  SlidersHorizontal,
   Sun,
   Tags,
   Target,
@@ -32,7 +34,8 @@ import {
   Upload,
   UserCircle,
   Utensils,
-  WalletCards
+  WalletCards,
+  X
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Api } from "./api";
@@ -47,6 +50,7 @@ import {
   todayISO
 } from "./format";
 import { IconGlyph } from "./icons";
+import { accountImpact } from "./account-impact";
 import { cashflowPartsFromTypes, INFLOW_BEHAVIORS, type CashflowPart } from "./report-cashflow";
 import type {
   Account,
@@ -88,6 +92,9 @@ import {
   SELF_TRANSFER_SUBCATEGORY_ID,
   INVESTMENT_TYPES
 } from "../shared/finance";
+
+// System Type that ties a refund to the purchase it came from (see shared/finance.ts).
+const REFUND_TYPE_ID = "type_refund";
 
 type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "vacations" | "subscriptions" | "categories" | "faq" | "profile";
 type Theme = "light" | "dark";
@@ -131,11 +138,14 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home }> = [
   { page: "profile", label: "Profile", icon: UserCircle }
 ];
 
+// The phone bar keeps the four daily destinations; everything else lives under "More".
+const MOBILE_PRIMARY_PAGES: Page[] = ["overview", "weekly", "transactions", "reports"];
+
 const mobileLabels: Record<Page, string> = {
   overview: "Home",
   weekly: "Week",
   transactions: "Txns",
-  reports: "Rpt",
+  reports: "Reports",
   budgets: "Bdgt",
   accounts: "Accts",
   loans: "Loan",
@@ -225,6 +235,7 @@ export default function App() {
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<{ message: string; action?: NoticeAction } | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
   const noticeTimer = useRef<number | undefined>(undefined);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
@@ -584,20 +595,67 @@ export default function App() {
         </section>
       </main>
 
-      <nav className="mobile-nav">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button
-              key={item.page}
-              className={activePage === item.page ? "active" : ""}
-              onClick={() => navigate(item.page)}
-            >
-              <Icon size={19} />
-              <span>{mobileLabels[item.page]}</span>
-            </button>
-          );
-        })}
+      {moreOpen && (
+        <div className="mobile-more-backdrop" onClick={() => setMoreOpen(false)}>
+          <div
+            className="mobile-more-sheet"
+            id="mobile-more-sheet"
+            role="dialog"
+            aria-label="More pages"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {navItems
+              .filter((item) => !MOBILE_PRIMARY_PAGES.includes(item.page))
+              .map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.page}
+                    type="button"
+                    className={activePage === item.page ? "active" : ""}
+                    onClick={() => {
+                      setMoreOpen(false);
+                      navigate(item.page);
+                    }}
+                  >
+                    <Icon size={20} />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+          </div>
+        </div>
+      )}
+
+      <nav className="mobile-nav" aria-label="Main">
+        {navItems
+          .filter((item) => MOBILE_PRIMARY_PAGES.includes(item.page))
+          .map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.page}
+                className={activePage === item.page && !moreOpen ? "active" : ""}
+                onClick={() => {
+                  setMoreOpen(false);
+                  navigate(item.page);
+                }}
+              >
+                <Icon size={19} />
+                <span>{mobileLabels[item.page]}</span>
+              </button>
+            );
+          })}
+        <button
+          type="button"
+          className={moreOpen || !MOBILE_PRIMARY_PAGES.includes(activePage) ? "active" : ""}
+          aria-expanded={moreOpen}
+          aria-controls="mobile-more-sheet"
+          onClick={() => setMoreOpen((open) => !open)}
+        >
+          <LayoutGrid size={19} />
+          <span>{MOBILE_PRIMARY_PAGES.includes(activePage) ? "More" : mobileLabels[activePage]}</span>
+        </button>
       </nav>
 
       {notice && (
@@ -784,6 +842,22 @@ function OverviewPage({
         </button>
       </div>
 
+      {overview.summary.uncategorizedCount > 0 && (
+        <div className="attention-banner" role="status">
+          <CircleAlert size={18} />
+          <span>
+            <strong>
+              {overview.summary.uncategorizedCount} transaction{overview.summary.uncategorizedCount === 1 ? "" : "s"}
+            </strong>{" "}
+            {overview.summary.uncategorizedCount === 1 ? "needs" : "need"} a category, so reports and budgets can
+            count {overview.summary.uncategorizedCount === 1 ? "it" : "them"} properly.
+          </span>
+          <button type="button" onClick={() => onNavigate("transactions", { status: "uncategorized" })}>
+            Review
+          </button>
+        </div>
+      )}
+
       <OverviewDisclosure title="Financial highlights" expanded={allExpanded}>
       <section className="summary-grid overview-summary">
         <SummaryCard
@@ -860,15 +934,15 @@ function OverviewPage({
           expanded={allExpanded}
           action={<button onClick={() => onNavigate("reports")}>Open reports</button>}
         >
-          {spendingSegments.length === 0 || overview.summary.totalSpendingPaise <= 0 ? (
+          {spendingSegments.length === 0 || overview.summary.spendingPaise <= 0 ? (
             <EmptyState text="No category spending yet this month." />
           ) : (
             <DonutChart
               segments={spendingSegments}
-              totalPaise={overview.summary.totalSpendingPaise}
+              totalPaise={overview.summary.spendingPaise}
               ariaLabel="Spending by category"
               centerLabel="Spent"
-              centerValue={formatINR(overview.summary.totalSpendingPaise)}
+              centerValue={formatINR(overview.summary.spendingPaise)}
               className="overview-donut-chart"
               onSegmentClick={(segment) => showMonthTransactions(segment.id)}
             />
@@ -893,7 +967,11 @@ function OverviewPage({
         </CollapsiblePanel>
 
         <CollapsiblePanel title="Budget guardrails" expanded={allExpanded} action={<button onClick={() => onNavigate("budgets")}>Plan</button>}>
-          <BudgetGuardrails plan={budgetPlan} uncategorizedCount={overview.summary.uncategorizedCount} />
+          <BudgetGuardrails
+            plan={budgetPlan}
+            uncategorizedCount={overview.summary.uncategorizedCount}
+            onReviewUncategorized={() => onNavigate("transactions", { status: "uncategorized" })}
+          />
         </CollapsiblePanel>
       </section>
 
@@ -921,7 +999,11 @@ function OverviewPage({
 
       <section className="overview-report-section">
         <CollapsiblePanel title={`This month's cashflow · ${formatMonth(overview.month)}`} expanded={allExpanded}>
-          {wealth ? <CashflowPanel wealth={wealth} /> : <EmptyState text="Cashflow is loading." />}
+          {wealth ? (
+            <CashflowPanel wealth={wealth} investedPaise={overview.summary.investedPaise} />
+          ) : (
+            <EmptyState text="Cashflow is loading." />
+          )}
         </CollapsiblePanel>
       </section>
     </div>
@@ -964,7 +1046,7 @@ function NetWorthPanel({ wealth }: { wealth: WealthSummary }) {
   );
 }
 
-function CashflowPanel({ wealth }: { wealth: WealthSummary }) {
+function CashflowPanel({ wealth, investedPaise }: { wealth: WealthSummary; investedPaise: number }) {
   const { cashflow, runwayMonths } = wealth;
   return (
     <div className="cashflow-panel">
@@ -998,6 +1080,12 @@ function CashflowPanel({ wealth }: { wealth: WealthSummary }) {
           </strong>
         </div>
       </div>
+      {investedPaise > 0 && (
+        <p className="cashflow-invested">
+          Outflow includes <strong>{formatINR(investedPaise)}</strong> you invested. That money is still yours,
+          just not as cash.
+        </p>
+      )}
       <div className="cashflow-runway">
         <span>Emergency-fund runway</span>
         <strong>{runwayMonths === null ? "—" : `${runwayMonths} months`}</strong>
@@ -1009,10 +1097,12 @@ function CashflowPanel({ wealth }: { wealth: WealthSummary }) {
 
 function BudgetGuardrails({
   plan,
-  uncategorizedCount
+  uncategorizedCount,
+  onReviewUncategorized
 }: {
   plan: BudgetPlan | null;
   uncategorizedCount: number;
+  onReviewUncategorized: () => void;
 }) {
   if (!plan || plan.lines.length === 0) {
     return <EmptyState text="Add budget lines to see month-to-date guardrails." />;
@@ -1049,7 +1139,13 @@ function BudgetGuardrails({
       </div>
       <div className="budget-signal-list">
         <Metric label="Unplanned spend" value={formatINR(plan.totals.unplannedActualPaise)} warning={plan.totals.unplannedActualPaise > 0} />
-        <Metric label="Uncategorized" value={`${uncategorizedCount} item${uncategorizedCount === 1 ? "" : "s"}`} warning={uncategorizedCount > 0} />
+        {uncategorizedCount > 0 ? (
+          <button type="button" className="metric-link" onClick={onReviewUncategorized}>
+            <Metric label="Uncategorized" value={`${uncategorizedCount} item${uncategorizedCount === 1 ? "" : "s"} · Review`} warning />
+          </button>
+        ) : (
+          <Metric label="Uncategorized" value="0 items" />
+        )}
       </div>
     </div>
   );
@@ -1527,7 +1623,7 @@ function WeeklyEntryPage({
             <Metric label="Loan" value={formatINR(emiTotal)} warning={emiTotal > 0} />
             <Metric label="Investment" value={formatINR(investmentTotal)} />
             <Metric label="Income" value={formatINR(incomeTotal)} />
-            <Metric label="Uncategorized" value={`${uncategorizedCount} items`} warning={uncategorizedCount > 0} />
+            <Metric label="Uncategorized" value={`${uncategorizedCount} ${uncategorizedCount === 1 ? "item" : "items"}`} warning={uncategorizedCount > 0} />
             <Metric label="Possible duplicate" value={`${duplicateCount} found`} warning={duplicateCount > 0} />
           </div>
         </Panel>
@@ -1636,6 +1732,13 @@ function TransactionsPage({
   const [subcategoryId, setSubcategoryId] = useState(() => initialFilters.get("subcategoryId") ?? "");
   const [from, setFrom] = useState(() => initialFilters.get("from") ?? "");
   const [to, setTo] = useState(() => initialFilters.get("to") ?? "");
+  const [statusFilter, setStatusFilter] = useState(() =>
+    initialFilters.get("status") === "uncategorized" ? "uncategorized" : ""
+  );
+  // On phones the filters fold away behind one button so transactions show on the first screen.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [refundDraft, setRefundDraft] = useState<{ id: string; amount: string; date: string } | null>(null);
+  const [savingRefund, setSavingRefund] = useState(false);
   // Deletes wait a few seconds before reaching the server so they can be undone.
   const pendingDeletes = useRef(new Map<string, { transaction: Transaction; timer: number }>());
   const [pendingDeleteIds, setPendingDeleteIds] = useState<string[]>([]);
@@ -1669,6 +1772,7 @@ function TransactionsPage({
         search: search || undefined,
         typeId: typeId || undefined,
         subcategoryId: subcategoryId || undefined,
+        status: statusFilter || undefined,
         from: rangeIsValid ? from || undefined : undefined,
         to: rangeIsValid ? to || undefined : undefined
       };
@@ -1686,7 +1790,7 @@ function TransactionsPage({
       setLoadingTransactions(false);
       setLoadingMoreTransactions(false);
     }
-  }, [from, rangeIsValid, search, selectedAccountId, showNotice, subcategoryId, to, typeId]);
+  }, [from, rangeIsValid, search, selectedAccountId, showNotice, statusFilter, subcategoryId, to, typeId]);
 
   useEffect(() => {
     setEditDraft(null);
@@ -1807,9 +1911,11 @@ function TransactionsPage({
     }
   }
 
-  const hasActiveFilters = Boolean(search || typeId || subcategoryId || from || to);
+  const hasActiveFilters = Boolean(search || typeId || subcategoryId || from || to || statusFilter);
+  const activeFilterCount = [typeId, subcategoryId, from, to, statusFilter].filter(Boolean).length;
 
   function clearFilters() {
+    setStatusFilter("");
     setSearch("");
     setTypeId("");
     setSubcategoryId("");
@@ -1838,10 +1944,55 @@ function TransactionsPage({
       search,
       typeId,
       subcategoryId,
+      status: statusFilter,
       from: rangeIsValid ? from : "",
       to: rangeIsValid ? to : ""
     }).filter(([, value]) => Boolean(value))
   ).toString();
+
+  function startRefund(transaction: Transaction) {
+    setEditDraft(null);
+    setRefundDraft({
+      id: transaction.id,
+      amount: amountInputFromPaise(transaction.amountPaise - transaction.refundedPaise),
+      date: todayISO()
+    });
+  }
+
+  // A refund is tied to its purchase, so it nets out of that purchase's SubType (and lowers a
+  // card's outstanding) instead of showing up as income.
+  async function saveRefund(transaction: Transaction) {
+    if (!refundDraft) return;
+    const amountPaise = parseAmountToPaise(refundDraft.amount);
+    if (amountPaise <= 0) {
+      showNotice("Enter the amount you got back.");
+      return;
+    }
+    setSavingRefund(true);
+    try {
+      await Api.createTransaction({
+        date: refundDraft.date,
+        accountId: transaction.accountId,
+        method: transaction.method,
+        merchant: `Refund: ${transaction.merchant || transaction.note || "purchase"}`.slice(0, 160),
+        typeId: REFUND_TYPE_ID,
+        amountPaise,
+        direction: "inflow",
+        kind: "refund",
+        linkedTransactionId: transaction.id
+      });
+      setRefundDraft(null);
+      await loadPage();
+      await refresh();
+      showNotice(
+        `Recorded a ${formatINR(amountPaise)} refund. ${transaction.subcategoryName ?? "The purchase's category"} spending is reduced by the same amount.`
+      );
+    } catch (err) {
+      showNotice(err instanceof Error ? err.message : "Could not record the refund.");
+    } finally {
+      setSavingRefund(false);
+    }
+  }
 
   async function saveEdit() {
     if (!editDraft) return;
@@ -1903,11 +2054,23 @@ function TransactionsPage({
           <label className="search-box">
             <Search size={17} />
             <input
-              placeholder="Search merchant, note, SubType or amount"
+              placeholder="Search merchant or amount"
+              aria-label="Search merchant, note, SubType or amount"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
           </label>
+          <button
+            type="button"
+            className="secondary-action filters-toggle"
+            aria-expanded={filtersOpen}
+            aria-controls="transaction-filters"
+            onClick={() => setFiltersOpen((open) => !open)}
+          >
+            <SlidersHorizontal size={16} />
+            Filters{activeFilterCount > 0 ? ` · ${activeFilterCount}` : ""}
+          </button>
+          <div id="transaction-filters" className={`filter-extra${filtersOpen ? " open" : ""}`}>
           <label className="control-field toolbar-control">
             <span className="control-label">Type</span>
             <select
@@ -1955,10 +2118,12 @@ function TransactionsPage({
                 return;
               }
               loadPage();
+              setFiltersOpen(false);
             }}
           >
             Apply
           </button>
+          </div>
           {hasActiveFilters && (
             <button type="button" className="secondary-action" onClick={clearFilters}>
               <RotateCcw size={16} />
@@ -1967,6 +2132,21 @@ function TransactionsPage({
           )}
         </div>
       </div>
+
+      {statusFilter === "uncategorized" && (
+        <div className="filter-chips">
+          <button
+            type="button"
+            className="filter-chip"
+            onClick={() => setStatusFilter("")}
+            aria-label="Stop showing only uncategorized transactions"
+          >
+            Only uncategorized
+            <X size={14} />
+          </button>
+          <span className="helper-text">Edit a row to give it a Type and SubType.</span>
+        </div>
+      )}
 
       <div className="ledger-result-summary">
         <span>
@@ -1983,7 +2163,7 @@ function TransactionsPage({
           <span className="ledger-totals-label">
             {search.trim()
               ? `Total for “${search.trim()}”`
-              : typeId || subcategoryId || from || to || selectedAccountId
+              : typeId || subcategoryId || from || to || selectedAccountId || statusFilter
                 ? "Total for these filters"
                 : "Total of all transactions"}
           </span>
@@ -2073,17 +2253,35 @@ function TransactionsPage({
                     </div>
                     <strong className={`transaction-amount-cell ${transaction.direction === "inflow" ? "amount-in" : "amount-out"}`}>
                       {signedAmount(transaction.amountPaise, transaction.direction)}
+                      {transaction.refundedPaise > 0 && (
+                        <small className="refunded-note">
+                          {transaction.refundedPaise >= transaction.amountPaise
+                            ? "Fully refunded"
+                            : `${formatINR(transaction.refundedPaise)} refunded`}
+                        </small>
+                      )}
                     </strong>
                     <div className="row-actions">
+                      {canRefund(transaction) && (
+                        <button
+                          type="button"
+                          className="secondary-action row-icon-action"
+                          onClick={() => startRefund(transaction)}
+                          title="Refund: record money you got back for this"
+                          aria-label={`Record a refund for ${transaction.merchant || "this transaction"}`}
+                        >
+                          <RotateCcw size={16} />
+                        </button>
+                      )}
                       {canAddAgain(transaction) && (
                         <button
                           type="button"
-                          className="secondary-action row-repeat-action"
+                          className="secondary-action row-icon-action"
                           onClick={() => void addAgain(transaction)}
-                          title="Add this again with today's date"
+                          title="Add again with today's date"
+                          aria-label={`Add ${transaction.merchant || "this transaction"} again with today's date`}
                         >
                           <Plus size={16} />
-                          Add again
                         </button>
                       )}
                       <button
@@ -2096,6 +2294,42 @@ function TransactionsPage({
                     </div>
                   </div>
                 )}
+                {refundDraft?.id === transaction.id && (
+                  <form
+                    className="refund-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void saveRefund(transaction);
+                    }}
+                  >
+                    <strong>Refund for {transaction.merchant || "this purchase"}</strong>
+                    <label className="control-field">
+                      <span className="control-label">Amount back</span>
+                      <input
+                        inputMode="decimal"
+                        value={refundDraft.amount}
+                        onChange={(event) => setRefundDraft({ ...refundDraft, amount: event.target.value })}
+                        autoFocus
+                      />
+                    </label>
+                    <label className="control-field">
+                      <span className="control-label">Date</span>
+                      <input
+                        type="date"
+                        value={refundDraft.date}
+                        onChange={(event) => setRefundDraft({ ...refundDraft, date: event.target.value })}
+                      />
+                    </label>
+                    <div className="refund-form-actions">
+                      <button type="submit" className="primary-action" disabled={savingRefund}>
+                        {savingRefund ? "Saving..." : "Save refund"}
+                      </button>
+                      <button type="button" className="secondary-action" onClick={() => setRefundDraft(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
             );
           })
@@ -2106,7 +2340,9 @@ function TransactionsPage({
           <span>
             {hasMoreTransactions
               ? `Showing latest ${visibleTransactions.length}. Use More to load older transactions.`
-              : `Showing all ${visibleTransactions.length} matching transaction${visibleTransactions.length === 1 ? "" : "s"}.`}
+              : visibleTransactions.length === 1
+                ? "That's the only matching transaction."
+                : `Showing all ${visibleTransactions.length} matching transactions.`}
           </span>
           {hasMoreTransactions && (
             <button className="secondary-action" onClick={loadMore} disabled={loadingMoreTransactions}>
@@ -2698,6 +2934,14 @@ function ReportsPage({
           </div>
         }
       >
+        <ReportPeriodBar
+          from={from}
+          to={to}
+          onChange={(nextFrom, nextTo) => {
+            setFrom(nextFrom);
+            setTo(nextTo);
+          }}
+        />
         {!rangeIsValid ? (
           <EmptyState text="Choose a valid date range." />
         ) : reportError ? (
@@ -3320,6 +3564,24 @@ function BudgetPlannerPage({
     }
   }
 
+  // A new month starts empty; most people want last month's plan as the starting point.
+  async function copyPreviousMonth() {
+    setSaving(true);
+    try {
+      const result = await Api.copyPreviousBudget(month);
+      await loadPlan();
+      showNotice(
+        result.copiedCount === 0
+          ? `${formatMonth(result.fromMonth)} has no budget lines to copy.`
+          : `Copied ${result.copiedCount} budget line${result.copiedCount === 1 ? "" : "s"} from ${formatMonth(result.fromMonth)}. Adjust any amounts below.`
+      );
+    } catch (err) {
+      showNotice(err instanceof Error ? err.message : "Could not copy last month's budget.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveEdit(line: BudgetLine) {
     const amountPaise = parseAmountToPaise(editAmount);
     if (amountPaise <= 0) {
@@ -3387,7 +3649,12 @@ function BudgetPlannerPage({
             <div className="summary-grid report-summary">
               <SummaryCard label="Budgeted" value={formatINR(plan.totals.amountPaise)} icon={<PiggyBank />} />
               <SummaryCard label="Used" value={formatINR(plan.totals.actualPaise)} icon={<BarChart3 />} tone={budgetSummaryTone(plan)} />
-              <SummaryCard label="Remaining" value={formatINR(plan.totals.remainingPaise)} icon={<WalletCards />} tone="good" />
+              <SummaryCard
+                label="Remaining"
+                value={formatINR(plan.totals.remainingPaise)}
+                icon={<WalletCards />}
+                tone={plan.totals.remainingPaise < 0 ? "warning" : "good"}
+              />
               <SummaryCard label="Projected" value={formatINR(plan.totals.projectedPaise)} icon={<TrendingUp />} tone={plan.totals.projectedPaise > plan.totals.amountPaise ? "warning" : "neutral"} />
             </div>
 
@@ -3419,7 +3686,13 @@ function BudgetPlannerPage({
             </form>
 
             {plan.lines.length === 0 ? (
-              <EmptyState text="No budget lines for this month." />
+              <div className="stacked-empty-state">
+                <EmptyState text="No budget lines for this month yet." />
+                <button type="button" className="secondary-action" onClick={() => void copyPreviousMonth()} disabled={saving}>
+                  <RotateCcw size={17} />
+                  Copy {formatMonth(previousMonthOf(month))} budget
+                </button>
+              </div>
             ) : (
               <div className="budget-line-list">
                 {plan.lines.map((line) => (
@@ -3611,7 +3884,17 @@ function AccountsPage({
         ) : (
           <div className="account-stack">
             {activeAccounts.map((account) => (
-              <AccountManagerLine key={account.id} account={account} alertPercent={cardAlertPercent} onRemove={remove} />
+              <AccountManagerLine
+                key={account.id}
+                account={account}
+                alertPercent={cardAlertPercent}
+                onRemove={remove}
+                onSaved={async (message) => {
+                  await refresh();
+                  showNotice(message);
+                }}
+                onError={showNotice}
+              />
             ))}
           </div>
         )}
@@ -3858,6 +4141,7 @@ function LoanForm({
       <label>
         Current outstanding
         <input value={outstanding} onChange={(event) => setOutstanding(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+        <small className="field-hint">Planning to add past EMIs too? Enter the outstanding before the earliest one.</small>
       </label>
       <label>
         Month and year taken
@@ -5259,8 +5543,38 @@ function TransactionTable({
     return <EmptyState text={empty} />;
   }
 
+  if (compact) {
+    // Narrow panels (Overview): date and account sit under the merchant so the amount, the
+    // figure people scan for, always has room.
+    return (
+      <div className="transaction-table compact">
+        <div className="table-head">
+          <span>Transaction</span>
+          <span>Type / SubType</span>
+          <span className="table-amount">Amount</span>
+        </div>
+        {transactions.map((transaction) => (
+          <div className="table-row" key={transaction.id}>
+            <span className="table-primary">
+              <strong>{transaction.merchant || transaction.note || "Unknown"}</strong>
+              <small>
+                {formatShortDate(transaction.date)} · {transaction.accountName}
+              </small>
+            </span>
+            <span>
+              <TransactionTaxonomyBadge transaction={transaction} />
+            </span>
+            <strong className={`table-amount ${transaction.direction === "inflow" ? "amount-in" : "amount-out"}`}>
+              {signedAmount(transaction.amountPaise, transaction.direction)}
+            </strong>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   return (
-    <div className={`transaction-table ${compact ? "compact" : ""}`}>
+    <div className="transaction-table">
       <div className="table-head">
         <span>Date</span>
         <span>Account</span>
@@ -5764,6 +6078,21 @@ function typeCategoryFromTransaction(transaction: Transaction): Category {
 }
 
 function categoryFromTransaction(transaction: Transaction): Category {
+  // Say what the row actually is instead of repeating the Type name.
+  if (transaction.status === "split") {
+    return { id: "split", name: "Split", icon: "arrow-left-right", color: transaction.typeColor ?? "#64748b", isSystem: true, isLocked: false, sortOrder: 0 };
+  }
+  if ((transaction.kind === "refund" || transaction.kind === "reversal") && !transaction.subcategoryId) {
+    return {
+      id: "refund",
+      name: transaction.linkedTransactionId ? "Linked to purchase" : "Refund",
+      icon: "rotate-ccw",
+      color: transaction.typeColor ?? "#0891b2",
+      isSystem: true,
+      isLocked: false,
+      sortOrder: 0
+    };
+  }
   if (transaction.kind === "card_payment" && transaction.transferAccountName) {
     return {
       id: transaction.transferAccountId ?? "",
@@ -5857,7 +6186,7 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "What do the budget labels mean — On track, Watch, Likely to exceed, Over budget?",
     answer:
-      "On track means spending is comfortably within budget. Watch means you're getting close. Likely to exceed means that, at your current pace, the projection lands over the budget. Over budget means you've already spent more than the budgeted amount."
+      "On track means spending is comfortably within budget. Watch means you're getting close. Likely to exceed means the month-end projection lands over the budget. Over budget means you've already spent more than the budgeted amount. The projection is what you've spent so far plus what that line usually adds in the rest of the month (from recent months that used it), so rent paid early isn't doubled. Without two months of history it follows your pace, and in the first days of a month it just shows what you've spent."
   },
   {
     question: "Are my investment values updated automatically?",
@@ -5872,7 +6201,7 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "How are Inflow, Outflow and Savings in Reports calculated?",
     answer:
-      "Inflow adds up everything that brought money in for the period (income and refunds across all their categories). Outflow adds up everything that took money out (expense, loan, investment, transfer, credit-card payment and any other outflow categories). Savings is simply Inflow minus Outflow — positive means you kept money, negative means you spent more than came in. Self transfers are left out of both sides, because moving money between your own accounts is not income or spending. The Outflow figure on the Overview uses this exact same calculation."
+      "Inflow adds up everything that brought money in for the period (income, plus any refund that isn't tied to a purchase). A refund recorded with the Refund button on a purchase isn't inflow: it reduces that purchase's SubType instead, so it never makes a month look like you earned more. Outflow adds up everything that took money out (expense, loan, investment, transfer, credit-card payment and any other outflow categories). Savings is simply Inflow minus Outflow — positive means you kept money, negative means you spent more than came in. Self transfers are left out of both sides, because moving money between your own accounts is not income or spending. The Outflow figure on the Overview uses this exact same calculation."
   },
   {
     question: "How do I move money between my own bank accounts?",
@@ -5882,7 +6211,7 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "How are backups made?",
     answer:
-      "The app saves a local backup automatically every 30 minutes while it's running, and once more when you close it normally. Backups are kept in a local 'backups' folder on this device."
+      "The app saves a local backup automatically every 30 minutes while it's running, and once more when you close it normally. Backups are kept in a local 'backups' folder on this device: the newest 5, plus the newest one from each of the last 7 days."
   }
 ];
 
@@ -5957,16 +6286,15 @@ function CardLimitSummary({ account, alertPercent }: { account: Account; alertPe
 
 function AccountImpactCard({ account, transactions }: { account: Account; transactions: Transaction[] }) {
   const impact = accountImpact(account, transactions);
-  const isPositive = impact.amountPaise > 0;
-  const isNegative = impact.amountPaise < 0;
+  const tone = impact.amountPaise === 0 ? "flat" : impact.isGood ? "positive" : "negative";
 
   return (
-    <div className={`impact-card ${isPositive ? "positive" : isNegative ? "negative" : "flat"}`}>
+    <div className={`impact-card ${tone}`}>
       <div className="impact-main">
-        <span className="impact-arrow">{isPositive ? "↑" : isNegative ? "↓" : "→"}</span>
+        <span className="impact-arrow">{impact.amountPaise > 0 ? "↑" : impact.amountPaise < 0 ? "↓" : "→"}</span>
         <div>
           <strong>{account.name}</strong>
-          <span>{account.type === "credit_card" ? "Outstanding movement" : "Balance movement"}</span>
+          <span>{impact.label}</span>
         </div>
       </div>
       <div className="impact-values">
@@ -6114,13 +6442,64 @@ function ProfilePage({
 function AccountManagerLine({
   account,
   alertPercent,
-  onRemove
+  onRemove,
+  onSaved,
+  onError
 }: {
   account: Account;
   alertPercent: number;
   onRemove?: (account: Account) => void;
+  onSaved?: (message: string) => Promise<void>;
+  onError?: (message: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState({ name: "", opening: "", limit: "" });
+
+  function startEdit() {
+    setDraft({
+      name: account.name,
+      opening: amountInputFromPaise(account.startingBalancePaise),
+      limit: account.creditLimitPaise === null ? "" : amountInputFromPaise(account.creditLimitPaise)
+    });
+    setEditing(true);
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    const openingPaise = parseAmountToPaise(draft.opening || "0");
+    const limitPaise = isCardAccount ? parseAmountToPaise(draft.limit || "0") : undefined;
+    if (draft.name.trim().length < 2) {
+      onError?.("Give the account a name of at least 2 characters.");
+      return;
+    }
+    if (openingPaise < 0 || (limitPaise !== undefined && limitPaise < 0)) {
+      onError?.("Amounts can't be negative.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await Api.updateAccount(account.id, {
+        name: draft.name.trim(),
+        startingBalancePaise: openingPaise,
+        ...(limitPaise !== undefined ? { creditLimitPaise: limitPaise } : {})
+      });
+      const shift = openingPaise - account.startingBalancePaise;
+      setEditing(false);
+      await onSaved?.(
+        shift === 0
+          ? "Account updated."
+          : `Account updated. ${isCardAccount ? "Outstanding" : "Balance"} moved by ${signedImpact(shift)}.`
+      );
+    } catch (err) {
+      onError?.(err instanceof Error ? err.message : "Could not update the account.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const isCardAccount = account.type === "credit_card";
   const isCard = account.type === "credit_card";
   const primaryValue = isCard ? account.outstandingPaise : account.balancePaise;
   const primaryLabel = isCard ? "Outstanding" : "Balance";
@@ -6156,12 +6535,56 @@ function AccountManagerLine({
 
       {expanded && <>
         {isCard && <CardLimitSummary account={account} alertPercent={alertPercent} />}
+        {editing ? (
+          <form className="account-edit-form" onSubmit={save}>
+            <label className="control-field">
+              <span className="control-label">Name</span>
+              <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+            </label>
+            <label className="control-field">
+              <span className="control-label">{isCard ? "Opening outstanding" : "Opening balance"}</span>
+              <input
+                inputMode="decimal"
+                value={draft.opening}
+                onChange={(event) => setDraft({ ...draft, opening: event.target.value })}
+              />
+            </label>
+            {isCard && (
+              <label className="control-field">
+                <span className="control-label">Credit limit</span>
+                <input
+                  inputMode="decimal"
+                  value={draft.limit}
+                  onChange={(event) => setDraft({ ...draft, limit: event.target.value })}
+                />
+              </label>
+            )}
+            <p className="helper-text account-edit-hint">
+              {isCard
+                ? "What you owed on this card before your first transaction here. Change it to match your statement."
+                : "The balance before your first transaction here. Change it if the app doesn't match your bank."}
+            </p>
+            <div className="account-actions">
+              <button type="submit" disabled={saving}>
+                {saving ? "Saving..." : "Save"}
+              </button>
+              <button type="button" className="secondary-action" onClick={() => setEditing(false)}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
         <div className="account-actions">
+          <button type="button" className="secondary-action" onClick={startEdit}>
+            <Pencil size={16} />
+            Edit
+          </button>
           <button className="secondary-action danger-action" onClick={() => onRemove?.(account)}>
             <Trash2 size={16} />
             Delete
           </button>
         </div>
+        )}
       </>}
     </article>
   );
@@ -6441,6 +6864,90 @@ function recentMonthOptions(fromMonth: string, count: number) {
 
 // Splits and refunds depend on other records (split lines, the original purchase), so a
 // one-tap copy can't reproduce them faithfully — those are left to the normal form.
+// Money back only makes sense for something that was paid out: not transfers or card bills.
+function shiftMonth(month: string, count: number) {
+  const [year, monthIndex] = month.split("-").map(Number);
+  const date = new Date(year, monthIndex - 1 + count, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/** One-tap periods for Reports: step month by month, or jump to the ranges people ask about. */
+function ReportPeriodBar({
+  from,
+  to,
+  onChange
+}: {
+  from: string;
+  to: string;
+  onChange: (from: string, to: string) => void;
+}) {
+  const thisMonth = todayISO().slice(0, 7);
+  const anchorMonth = (from || `${thisMonth}-01`).slice(0, 7);
+  const isWholeMonth = from === `${anchorMonth}-01` && to === monthEndForInput(anchorMonth);
+  const setMonth = (month: string) => onChange(`${month}-01`, monthEndForInput(month));
+  const presets = [
+    { label: "This month", from: `${thisMonth}-01`, to: monthEndForInput(thisMonth) },
+    { label: "Last month", from: `${shiftMonth(thisMonth, -1)}-01`, to: monthEndForInput(shiftMonth(thisMonth, -1)) },
+    { label: "Last 3 months", from: `${shiftMonth(thisMonth, -2)}-01`, to: monthEndForInput(thisMonth) },
+    { label: "This year", from: `${thisMonth.slice(0, 4)}-01-01`, to: monthEndForInput(thisMonth) }
+  ];
+
+  return (
+    <div className="report-period-bar">
+      <div className="report-month-stepper">
+        <button type="button" className="icon-button" aria-label="Previous month" onClick={() => setMonth(shiftMonth(anchorMonth, -1))}>
+          <ChevronLeft size={18} />
+        </button>
+        <strong>
+          {isWholeMonth
+            ? formatMonth(anchorMonth)
+            : presets.find((preset) => preset.from === from && preset.to === to)?.label ?? "Custom range"}
+        </strong>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Next month"
+          disabled={anchorMonth >= thisMonth && isWholeMonth}
+          onClick={() => setMonth(shiftMonth(anchorMonth, 1))}
+        >
+          <ChevronRight size={18} />
+        </button>
+      </div>
+      <div className="report-presets" role="group" aria-label="Report period">
+        {presets.map((preset) => {
+          const active = preset.from === from && preset.to === to;
+          return (
+            <button
+              key={preset.label}
+              type="button"
+              className={`filter-chip${active ? " active" : ""}`}
+              aria-pressed={active}
+              onClick={() => onChange(preset.from, preset.to)}
+            >
+              {preset.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function previousMonthOf(month: string) {
+  const [year, monthIndex] = month.split("-").map(Number);
+  const date = new Date(year, monthIndex - 2, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function canRefund(transaction: Transaction) {
+  return (
+    transaction.direction === "outflow" &&
+    transaction.status !== "split" &&
+    transaction.refundedPaise < transaction.amountPaise &&
+    (transaction.kind === "expense" || transaction.kind === "investment" || transaction.kind === "emi")
+  );
+}
+
 function canAddAgain(transaction: Transaction) {
   return transaction.status !== "split" && transaction.kind !== "refund" && transaction.kind !== "reversal";
 }
@@ -6544,32 +7051,6 @@ function selfTransferTargetAccounts(accounts: Account[], sourceAccountId: string
 
 function isSelfTransfer(transaction: Transaction) {
   return transaction.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID && Boolean(transaction.transferAccountId);
-}
-
-function accountImpact(account: Account, transactions: Transaction[]) {
-  const amountPaise = transactions.reduce((sum, transaction) => {
-    if (account.type === "credit_card") {
-      if (transaction.accountId === account.id && transaction.direction === "outflow") return sum - transaction.amountPaise;
-      if (transaction.accountId === account.id && transaction.direction === "inflow") return sum + transaction.amountPaise;
-      if (transaction.kind === "card_payment" && transaction.transferAccountId === account.id) return sum + transaction.amountPaise;
-      return sum;
-    }
-
-    if (transaction.accountId !== account.id) {
-      return isSelfTransfer(transaction) && transaction.transferAccountId === account.id
-        ? sum + transaction.amountPaise
-        : sum;
-    }
-    return sum + (transaction.direction === "inflow" ? transaction.amountPaise : -transaction.amountPaise);
-  }, 0);
-
-  const base = account.type === "credit_card" ? account.creditLimitPaise ?? 0 : account.startingBalancePaise;
-  const percent = base > 0 ? Math.round((Math.abs(amountPaise) / base) * 1000) / 10 : null;
-
-  return {
-    amountPaise,
-    percentLabel: percent === null ? "New activity" : `${percent}%`
-  };
 }
 
 function signedImpact(paise: number) {

@@ -4317,3 +4317,326 @@ a {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+
+/* Compact transaction table (Overview): three columns so the amount is never clipped. */
+.transaction-table.compact .table-head,
+.transaction-table.compact .table-row {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  min-width: 0;
+}
+
+.transaction-table.compact .table-primary {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.transaction-table.compact .table-primary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transaction-table.compact .table-primary small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.transaction-table.compact .table-amount {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Transactions: filters fold behind one button on phones; desktop keeps the full toolbar. */
+.filters-toggle {
+  display: none;
+}
+
+.filter-extra {
+  display: contents;
+}
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 10px;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+/* Refund: a small inline form under the purchase it belongs to. */
+.refund-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  margin: 8px 0 4px;
+  padding: 12px;
+}
+
+.refund-form > strong {
+  flex: 1 1 100%;
+}
+
+.refund-form .control-field {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.refund-form-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.cashflow-invested {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+/* Phone "More" sheet: every page that isn't on the bottom bar. */
+.mobile-more-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  background: rgba(15, 23, 42, 0.28);
+}
+
+.mobile-more-sheet {
+  position: fixed;
+  right: 12px;
+  bottom: 84px;
+  left: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 10px;
+}
+
+.mobile-more-sheet button {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  padding: 12px 4px;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.mobile-more-sheet button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+@media (max-width: 1120px) {
+  .mobile-nav {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .main-shell {
+    padding-bottom: 104px;
+  }
+
+  .toast {
+    bottom: 96px;
+  }
+}
+
+@media (max-width: 720px) {
+  .main-shell {
+    padding-bottom: 104px;
+  }
+
+  .filters-toggle {
+    display: inline-flex;
+    justify-content: center;
+  }
+
+  .filter-extra {
+    display: none;
+  }
+
+  .filter-extra.open {
+    display: grid;
+    gap: 10px;
+  }
+
+  /* Four headline figures read better as a 2×2 block than a long scroll. */
+  .summary-grid.overview-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .overview-summary .summary-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    min-height: 0;
+    padding: 12px;
+  }
+
+  .overview-summary .summary-card strong {
+    font-size: 1.15rem;
+  }
+}
+
+.attention-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, #ea580c 35%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, #ea580c 8%, var(--panel));
+  color: var(--text);
+  padding: 10px 14px;
+  font-size: 0.9rem;
+}
+
+.attention-banner > svg {
+  flex: none;
+  color: #ea580c;
+}
+
+.attention-banner > span {
+  flex: 1;
+}
+
+.attention-banner > button {
+  flex: none;
+}
+
+.metric-link {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.metric-link:hover {
+  text-decoration: underline;
+}
+
+.account-edit-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.account-edit-form .account-edit-hint,
+.account-edit-form .account-actions {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.report-period-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.report-month-stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.report-month-stepper strong {
+  min-width: 130px;
+  text-align: center;
+}
+
+.report-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.report-presets .filter-chip {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.report-presets .filter-chip.active {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+}
+
+.field-hint {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.row-actions {
+  flex-wrap: nowrap;
+}
+
+.row-icon-action {
+  width: 38px;
+  min-width: 38px;
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.refunded-note {
+  display: block;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  /* Keep the totals to two short lines so the first transaction fits on the first screen. */
+  .ledger-totals {
+    gap: 4px 14px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+  }
+
+  .ledger-totals-label {
+    flex: 1 1 auto;
+    font-size: 0.9rem;
+  }
+
+  .ledger-export {
+    order: -1;
+    margin-left: auto;
+    padding: 4px 10px;
+  }
+
+  .ledger-result-summary {
+    margin-bottom: 8px;
+  }
+}

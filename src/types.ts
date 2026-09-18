@@ -96,6 +96,8 @@ export type Transaction = {
   transferAccountId: string | null;
   transferAccountName: string | null;
   linkedTransactionId: string | null;
+  /** How much of this purchase has already come back as linked refunds. */
+  refundedPaise: number;
   loanId: string | null;
   loanName: string | null;
   loanPaymentType: LoanPaymentType | null;
@@ -219,6 +221,9 @@ export type Overview = {
     totalOutflowPaise: number;
     totalInflowPaise: number;
     incomePaise: number;
+    /** Spending mix total: everything spent this month except money put into investments. */
+    spendingPaise: number;
+    investedPaise: number;
     uncategorizedCount: number;
   };
   comparison: {
