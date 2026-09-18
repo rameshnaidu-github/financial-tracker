@@ -52,12 +52,16 @@ One rule decides what counts as money coming in versus going out, and both the O
 their figures always agree:
 
 - **Inflow** — Income and Refund categories.
-- **Outflow** — everything else: Expense, Loan, Investment, Transfer, Credit Card Payment, and anything uncategorized.
+- **Outflow** — everything else: Expense, Loan, Investment, Transfer, and anything uncategorized.
 - **Savings** — Inflow minus Outflow.
 
-**Self transfers are excluded from both sides.** Moving money from one of your own bank accounts to another is neither
-income nor spending, so it never appears in the outflow figures. It still shows in your transaction list and adjusts
-both account balances. To record one, add a transaction on the account the money leaves, choose Type = Transfer and
+**Self transfers and credit-card payments are excluded from both sides.** Moving money from one of your own bank
+accounts to another is neither income nor spending. A credit-card payment is the same idea: the spending was already
+counted when you charged the card, so counting the bill payment again would double-count it. Both still show in your
+transaction list and adjust the balances involved — a card payment lowers your bank balance and clears the card's
+outstanding.
+
+To record a self transfer, add a transaction on the account the money leaves, choose Type = Transfer and
 SubType = Self transfer, then pick the receiving account.
 
 The **emergency-fund runway** divides your liquid cash by your average monthly outflow over the last three months.

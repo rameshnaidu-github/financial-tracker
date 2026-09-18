@@ -39,6 +39,7 @@ import {
   getTrendReport,
   getBudgetTrendReport,
   getWealthSummary,
+  getUpcomingPayments,
   getProfile,
   getSettings,
   importTransactionsWorkbook,
@@ -48,6 +49,7 @@ import {
   listInvestments,
   listLoans,
   listTransactions,
+  summarizeTransactions,
   listVacations,
   saveBatch,
   startAutoBackup,
@@ -247,6 +249,20 @@ app.post("/api/batches/:id/save", async (request) => {
   return saveBatch(params.id);
 });
 
+app.get("/api/transactions/totals", async (request) => {
+  const query = request.query as Record<string, string | undefined>;
+  return summarizeTransactions({
+    accountId: blankToUndefined(query.accountId),
+    categoryId: blankToUndefined(query.categoryId),
+    typeId: blankToUndefined(query.typeId),
+    subcategoryId: blankToUndefined(query.subcategoryId),
+    status: blankToUndefined(query.status),
+    search: blankToUndefined(query.search),
+    from: blankToUndefined(query.from),
+    to: blankToUndefined(query.to)
+  });
+});
+
 app.get("/api/transactions", async (request) => {
   const query = request.query as {
     accountId?: string;
@@ -300,6 +316,8 @@ app.get("/api/reports/monthly", async (request) => {
 });
 
 app.get("/api/wealth", async () => getWealthSummary());
+
+app.get("/api/upcoming", async () => getUpcomingPayments());
 
 app.get("/api/reports/trends", async (request) => {
   const query = request.query as { accountId?: string; typeId?: string; mode?: string; month?: string };
@@ -408,27 +426,37 @@ app.post("/api/import/transactions", expensiveRouteLimit, async (request, reply)
   return importTransactionsWorkbook(buffer, blankToUndefined(query.batchId));
 });
 
-app.get("/api/export/transactions.csv", expensiveRouteLimit, async (_request, reply) => {
+app.get("/api/export/transactions.csv", expensiveRouteLimit, async (request, reply) => {
+  const query = request.query as Record<string, string | undefined>;
   return reply
     .header("content-type", "text/csv; charset=utf-8")
     .header("content-disposition", "attachment; filename=\"transactions.csv\"")
-    .send(exportTransactionsCsv());
+    .send(
+      exportTransactionsCsv({
+        accountId: blankToUndefined(query.accountId),
+        typeId: blankToUndefined(query.typeId),
+        subcategoryId: blankToUndefined(query.subcategoryId),
+        search: blankToUndefined(query.search),
+        from: blankToUndefined(query.from),
+        to: blankToUndefined(query.to)
+      })
+    );
 });
 
 if (existsSync(distDir)) {
   await app.register(fastifyStatic, {
     root: distDir,
     cacheControl: false,
-    setHeaders(res, filePath) {
+    setHeaders(reply, filePath) {
       // Content-hashed assets are immutable and safe to cache forever.
       // index.html must never be cached, so a full reload always loads the
       // newest build (and the fresh asset hashes it references).
       if (filePath.endsWith(`${path.sep}index.html`) || filePath.endsWith("/index.html")) {
-        res.setHeader("cache-control", "no-store");
+        reply.header("cache-control", "no-store");
       } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
-        res.setHeader("cache-control", "public, max-age=31536000, immutable");
+        reply.header("cache-control", "public, max-age=31536000, immutable");
       } else {
-        res.setHeader("cache-control", "no-cache");
+        reply.header("cache-control", "no-cache");
       }
     }
   });

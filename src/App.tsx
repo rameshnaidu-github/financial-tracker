@@ -34,7 +34,7 @@ import {
   Utensils,
   WalletCards
 } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Api } from "./api";
 import {
   currentMonth,
@@ -78,7 +78,8 @@ import type {
   BudgetTrendReport,
   BudgetTrendPoint,
   UserProfile,
-  WealthSummary
+  WealthSummary,
+  UpcomingPayments
 } from "./types";
 import {
   AUTOPAY_DURATION_MONTH_OPTIONS,
@@ -97,6 +98,9 @@ type DonutSegment = {
   amountPaise: number;
   labelShare?: number;
 };
+type NoticeAction = { label: string; onClick: () => void };
+type NoticeOptions = { action?: NoticeAction; durationMs?: number };
+type Navigate = (page: Page, filters?: Record<string, string | undefined>) => void;
 type ConfirmRequest = {
   message: string;
   detail?: string;
@@ -209,6 +213,7 @@ const colorOptions = [
   "#be123c"
 ];
 
+const UNDO_WINDOW_MS = 8000;
 const INITIAL_TRANSACTION_LIMIT = 12;
 const TRANSACTION_PAGE_SIZE = 10;
 
@@ -219,7 +224,8 @@ export default function App() {
   );
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [loading, setLoading] = useState(true);
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState<{ message: string; action?: NoticeAction } | null>(null);
+  const noticeTimer = useRef<number | undefined>(undefined);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const [profileDraft, setProfileDraft] = useState<UserProfile>(emptyProfile);
@@ -253,9 +259,15 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  const navigate = useCallback((page: Page) => {
-    if (window.location.pathname !== pagePaths[page]) {
-      window.history.pushState({}, "", pagePaths[page]);
+  const navigate = useCallback((page: Page, filters?: Record<string, string | undefined>) => {
+    // Optional filters travel in the URL so a page can open pre-filtered (e.g. drill-down).
+    const params = new URLSearchParams();
+    Object.entries(filters ?? {}).forEach(([key, value]) => {
+      if (value) params.set(key, value);
+    });
+    const target = params.toString() ? `${pagePaths[page]}?${params}` : pagePaths[page];
+    if (`${window.location.pathname}${window.location.search}` !== target) {
+      window.history.pushState({}, "", target);
     }
     setActivePage(page);
   }, []);
@@ -285,9 +297,16 @@ export default function App() {
     setRefreshKey((key) => key + 1);
   }, [loadBootstrap]);
 
-  const showNotice = useCallback((message: string) => {
-    setNotice(message);
-    window.setTimeout(() => setNotice(""), 3200);
+  const showNotice = useCallback((message: string, options: NoticeOptions = {}) => {
+    // Cancel the previous timer so a new message is never cut short by an old one.
+    window.clearTimeout(noticeTimer.current);
+    setNotice({ message, action: options.action });
+    noticeTimer.current = window.setTimeout(() => setNotice(null), options.durationMs ?? 3200);
+  }, []);
+
+  const dismissNotice = useCallback(() => {
+    window.clearTimeout(noticeTimer.current);
+    setNotice(null);
   }, []);
 
   const requestConfirm = useCallback((request: ConfirmRequest) => {
@@ -483,7 +502,12 @@ export default function App() {
             />
           )}
           {activePage === "reports" && (
-            <ReportsPage selectedAccountId={selectedAccountId} categoryTypes={categoryTypes} refreshKey={refreshKey} />
+            <ReportsPage
+              selectedAccountId={selectedAccountId}
+              categoryTypes={categoryTypes}
+              refreshKey={refreshKey}
+              onNavigate={navigate}
+            />
           )}
           {activePage === "budgets" && (
             <BudgetPlannerPage
@@ -576,7 +600,24 @@ export default function App() {
         })}
       </nav>
 
-      {notice && <div className="toast">{notice}</div>}
+      {notice && (
+        <div className="toast" role="status" aria-live="polite">
+          <span>{notice.message}</span>
+          {notice.action && (
+            <button
+              type="button"
+              className="toast-action"
+              onClick={() => {
+                const action = notice.action;
+                dismissNotice();
+                action?.onClick();
+              }}
+            >
+              {notice.action.label}
+            </button>
+          )}
+        </div>
+      )}
       {confirmRequest && (
         <ConfirmModal
           request={confirmRequest}
@@ -635,7 +676,7 @@ function OverviewPage({
   selectedAccount?: Account;
   cardAlertPercent: number;
   refreshKey: number;
-  onNavigate: (page: Page) => void;
+  onNavigate: Navigate;
 }) {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -643,6 +684,7 @@ function OverviewPage({
   const [allExpanded, setAllExpanded] = useState(true);
   const [budgetPlan, setBudgetPlan] = useState<BudgetPlan | null>(null);
   const [wealth, setWealth] = useState<WealthSummary | null>(null);
+  const [upcoming, setUpcoming] = useState<UpcomingPayments | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -686,12 +728,38 @@ function OverviewPage({
     };
   }, [refreshKey]);
 
+  useEffect(() => {
+    let active = true;
+    Api.upcoming()
+      .then((next) => {
+        if (active) setUpcoming(next);
+      })
+      .catch(() => {
+        if (active) setUpcoming(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [refreshKey]);
+
   if (loading) {
     return <PanelLoader label="Loading overview" />;
   }
 
   if (loadError || !overview) {
     return <EmptyState text={loadError || "Could not load the overview."} />;
+  }
+
+  // Drill from a spending figure into the transactions that make it up, for this month.
+  function showMonthTransactions(subcategoryId: string | undefined) {
+    if (!overview || !subcategoryId) return;
+    const line = overview.categoryReport.find((category) => category.subcategoryId === subcategoryId);
+    onNavigate("transactions", {
+      typeId: line?.typeId,
+      subcategoryId,
+      from: `${overview.month}-01`,
+      to: monthEndForInput(overview.month)
+    });
   }
 
   const spendingSegments = consolidateDonutSegments(
@@ -737,11 +805,27 @@ function OverviewPage({
           label="Outflow"
           value={formatINR(overview.summary.totalOutflowPaise)}
           icon={<BarChart3 />}
+          note={
+            <ChangeVsLastMonth
+              current={overview.summary.totalOutflowPaise}
+              previous={overview.comparison.outflowPaise}
+              comparison={overview.comparison}
+              higherIsGood={false}
+            />
+          }
         />
         <SummaryCard
-          label="This month income"
-          value={formatINR(overview.summary.incomePaise)}
+          label="Inflow"
+          value={formatINR(overview.summary.totalInflowPaise)}
           icon={<TrendingUp />}
+          note={
+            <ChangeVsLastMonth
+              current={overview.summary.totalInflowPaise}
+              previous={overview.comparison.inflowPaise}
+              comparison={overview.comparison}
+              higherIsGood
+            />
+          }
         />
       </section>
       </OverviewDisclosure>
@@ -751,13 +835,23 @@ function OverviewPage({
           <TransactionTable transactions={overview.recentTransactions} empty="No transactions yet." compact />
         </CollapsiblePanel>
 
-        <CollapsiblePanel title={`Account snapshot · ${overview.accounts.length}`} expanded={allExpanded} action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
-          <div className="account-stack">
-            {overview.accounts.map((account) => (
-              <OverviewAccountLine key={account.id} account={account} alertPercent={cardAlertPercent} />
-            ))}
-          </div>
-        </CollapsiblePanel>
+        <div className="overview-side-stack">
+          <CollapsiblePanel title={`Account snapshot · ${overview.accounts.length}`} expanded={allExpanded} action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
+            <div className="account-stack">
+              {overview.accounts.map((account) => (
+                <OverviewAccountLine key={account.id} account={account} alertPercent={cardAlertPercent} />
+              ))}
+            </div>
+          </CollapsiblePanel>
+
+          <CollapsiblePanel
+            title={`Coming up · next ${upcoming?.windowDays ?? 14} days`}
+            expanded={allExpanded}
+            action={<button onClick={() => onNavigate("subscriptions")}>AutoPay</button>}
+          >
+            <UpcomingPaymentsList upcoming={upcoming} availableCashPaise={overview.summary.availableCashPaise} />
+          </CollapsiblePanel>
+        </div>
       </section>
 
       <section className="two-column overview-analytics">
@@ -776,6 +870,7 @@ function OverviewPage({
               centerLabel="Spent"
               centerValue={formatINR(overview.summary.totalSpendingPaise)}
               className="overview-donut-chart"
+              onSegmentClick={(segment) => showMonthTransactions(segment.id)}
             />
           )}
         </CollapsiblePanel>
@@ -791,7 +886,10 @@ function OverviewPage({
 
       <section className="two-column overview-analytics">
         <CollapsiblePanel title="Top spending lines" expanded={allExpanded} action={<button onClick={() => onNavigate("reports")}>Details</button>}>
-          <CategoryBars categories={overview.categoryReport.slice(0, 5)} />
+          <CategoryBars
+            categories={overview.categoryReport.slice(0, 5)}
+            onSelect={(category) => showMonthTransactions(category.subcategoryId)}
+          />
         </CollapsiblePanel>
 
         <CollapsiblePanel title="Budget guardrails" expanded={allExpanded} action={<button onClick={() => onNavigate("budgets")}>Plan</button>}>
@@ -872,7 +970,7 @@ function CashflowPanel({ wealth }: { wealth: WealthSummary }) {
     <div className="cashflow-panel">
       <div className="cashflow-metrics">
         <div>
-          <span>Income</span>
+          <span>Inflow</span>
           <strong className="amount-in">{formatINR(cashflow.incomePaise)}</strong>
         </div>
         <div>
@@ -887,8 +985,16 @@ function CashflowPanel({ wealth }: { wealth: WealthSummary }) {
         </div>
         <div>
           <span>Savings rate</span>
-          <strong className={cashflow.savingsRatePercent >= 0 ? "amount-in" : "amount-out"}>
-            {cashflow.savingsRatePercent}%
+          <strong
+            className={
+              cashflow.savingsRatePercent === null
+                ? ""
+                : cashflow.savingsRatePercent >= 0
+                  ? "amount-in"
+                  : "amount-out"
+            }
+          >
+            {cashflow.savingsRatePercent === null ? "—" : `${cashflow.savingsRatePercent}%`}
           </strong>
         </div>
       </div>
@@ -1519,15 +1625,20 @@ function TransactionsPage({
   categoryTypes: CategoryType[];
   refresh: () => Promise<void>;
   refreshKey: number;
-  showNotice: (message: string) => void;
+  showNotice: (message: string, options?: NoticeOptions) => void;
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [search, setSearch] = useState("");
-  const [typeId, setTypeId] = useState("");
-  const [subcategoryId, setSubcategoryId] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  // A drill-down (e.g. clicking "Groceries" in Reports) opens this page pre-filtered via the URL.
+  const [initialFilters] = useState(() => new URLSearchParams(window.location.search));
+  const [search, setSearch] = useState(() => initialFilters.get("search") ?? "");
+  const [typeId, setTypeId] = useState(() => initialFilters.get("typeId") ?? "");
+  const [subcategoryId, setSubcategoryId] = useState(() => initialFilters.get("subcategoryId") ?? "");
+  const [from, setFrom] = useState(() => initialFilters.get("from") ?? "");
+  const [to, setTo] = useState(() => initialFilters.get("to") ?? "");
+  // Deletes wait a few seconds before reaching the server so they can be undone.
+  const pendingDeletes = useRef(new Map<string, { transaction: Transaction; timer: number }>());
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[]>([]);
   const rangeIsValid = !from || !to || from <= to;
   const [hasMoreTransactions, setHasMoreTransactions] = useState(false);
   const [loadingTransactions, setLoadingTransactions] = useState(false);
@@ -1538,6 +1649,12 @@ function TransactionsPage({
   const selectedFilterType = categoryTypes.find((type) => type.id === typeId);
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
 
+  const [transactionTotals, setTransactionTotals] = useState<{
+    count: number;
+    outflowPaise: number;
+    inflowPaise: number;
+  } | null>(null);
+
   const loadPage = useCallback(async (offset = 0, append = false) => {
     const pageSize = offset === 0 ? INITIAL_TRANSACTION_LIMIT : TRANSACTION_PAGE_SIZE;
     if (offset === 0) {
@@ -1547,16 +1664,20 @@ function TransactionsPage({
     }
 
     try {
-      const rows = await Api.transactions({
+      const filters = {
         accountId: selectedAccountId || undefined,
         search: search || undefined,
         typeId: typeId || undefined,
         subcategoryId: subcategoryId || undefined,
         from: rangeIsValid ? from || undefined : undefined,
-        to: rangeIsValid ? to || undefined : undefined,
-        limit: pageSize + 1,
-        offset
-      });
+        to: rangeIsValid ? to || undefined : undefined
+      };
+      // Totals cover every match, not just the rows loaded so far, so "More" never changes them.
+      const [rows, totals] = await Promise.all([
+        Api.transactions({ ...filters, limit: pageSize + 1, offset }),
+        offset === 0 ? Api.transactionTotals(filters) : Promise.resolve(null)
+      ]);
+      if (totals) setTransactionTotals(totals);
       setHasMoreTransactions(rows.length > pageSize);
       setTransactions((current) => (append ? [...current, ...rows.slice(0, pageSize)] : rows.slice(0, pageSize)));
     } catch (err) {
@@ -1578,25 +1699,149 @@ function TransactionsPage({
 
   const cardAccounts = accounts.filter((account) => account.type === "credit_card");
 
-  async function remove(transaction: Transaction) {
-    requestConfirm({
-      message: "Are you sure you want to delete this?",
-      detail: `${transaction.merchant || transaction.note || "Transaction"} will be removed and balances will recalculate immediately.`,
-      confirmLabel: "Delete",
-      tone: "danger",
-      onConfirm: async () => {
-        try {
-          await Api.deleteTransaction(transaction.id);
-          setEditDraft(null);
-          await loadPage();
-          await refresh();
-          showNotice("Transaction deleted.");
-        } catch (err) {
-          showNotice(err instanceof Error ? err.message : "Could not delete transaction.");
-        }
+  // Keep the latest loader in a ref: a delete committed seconds later must reload the
+  // filters the user is looking at *then*, not the ones active when they pressed Delete.
+  const loadPageRef = useRef(loadPage);
+  loadPageRef.current = loadPage;
+
+  const commitDelete = useCallback(
+    async (id: string) => {
+      const pending = pendingDeletes.current.get(id);
+      if (!pending) return;
+      window.clearTimeout(pending.timer);
+      pendingDeletes.current.delete(id);
+      try {
+        await Api.deleteTransaction(id);
+        await loadPageRef.current();
+        await refresh();
+      } catch (err) {
+        showNotice(err instanceof Error ? err.message : "Could not delete transaction.");
+      } finally {
+        setPendingDeleteIds((ids) => ids.filter((pendingId) => pendingId !== id));
       }
+    },
+    [refresh, showNotice]
+  );
+
+  // Leaving the page or closing the tab must still carry out deletes the user didn't undo.
+  useEffect(() => {
+    const flushOnExit = () => {
+      for (const id of pendingDeletes.current.keys()) {
+        void fetch(`/api/transactions/${id}`, { method: "DELETE", keepalive: true });
+      }
+      pendingDeletes.current.clear();
+    };
+    window.addEventListener("pagehide", flushOnExit);
+    return () => {
+      window.removeEventListener("pagehide", flushOnExit);
+      const ids = [...pendingDeletes.current.keys()];
+      for (const pending of pendingDeletes.current.values()) window.clearTimeout(pending.timer);
+      pendingDeletes.current.clear();
+      if (ids.length) {
+        void Promise.all(ids.map((id) => Api.deleteTransaction(id).catch(() => undefined))).then(() => refresh());
+      }
+    };
+  }, [refresh]);
+
+  function undoDelete(id: string) {
+    const pending = pendingDeletes.current.get(id);
+    if (!pending) return;
+    window.clearTimeout(pending.timer);
+    pendingDeletes.current.delete(id);
+    setPendingDeleteIds((ids) => ids.filter((pendingId) => pendingId !== id));
+    showNotice("Transaction restored.");
+  }
+
+  function remove(transaction: Transaction) {
+    setEditDraft(null);
+    const timer = window.setTimeout(() => void commitDelete(transaction.id), UNDO_WINDOW_MS);
+    pendingDeletes.current.set(transaction.id, { transaction, timer });
+    setPendingDeleteIds((ids) => [...ids, transaction.id]);
+    showNotice(`Deleted ${transaction.merchant || transaction.note || "transaction"}.`, {
+      durationMs: UNDO_WINDOW_MS,
+      action: { label: "Undo", onClick: () => undoDelete(transaction.id) }
     });
   }
+
+  async function addAgain(transaction: Transaction) {
+    try {
+      const result = await Api.createTransaction({
+        date: todayISO(),
+        accountId: transaction.accountId,
+        method: transaction.method,
+        merchant: transaction.merchant ?? undefined,
+        note: transaction.note ?? undefined,
+        typeId: transaction.typeId ?? undefined,
+        subcategoryId: transaction.subcategoryId ?? undefined,
+        amountPaise: transaction.amountPaise,
+        direction: transaction.direction,
+        kind: transaction.kind,
+        transferAccountId: transaction.transferAccountId ?? undefined,
+        loanId: transaction.loanId ?? undefined,
+        loanPaymentType: transaction.loanPaymentType ?? undefined,
+        subscriptionId: transaction.subscriptionId ?? undefined,
+        investmentId: transaction.investmentId ?? undefined,
+        vacationId: transaction.vacationId ?? undefined
+      });
+      await loadPage();
+      await refresh();
+      const newId = result.transaction.id;
+      showNotice(
+        `Added ${formatINR(transaction.amountPaise)} ${transaction.merchant || "transaction"} for today.`,
+        {
+          durationMs: UNDO_WINDOW_MS,
+          action: {
+            label: "Undo",
+            onClick: () => {
+              void Api.deleteTransaction(newId)
+                .then(() => loadPageRef.current())
+                .then(() => refresh())
+                .then(() => showNotice("Removed the copy."))
+                .catch((err) => showNotice(err instanceof Error ? err.message : "Could not undo."));
+            }
+          }
+        }
+      );
+    } catch (err) {
+      showNotice(err instanceof Error ? err.message : "Could not add it again.");
+    }
+  }
+
+  const hasActiveFilters = Boolean(search || typeId || subcategoryId || from || to);
+
+  function clearFilters() {
+    setSearch("");
+    setTypeId("");
+    setSubcategoryId("");
+    setFrom("");
+    setTo("");
+    if (window.location.search) window.history.replaceState({}, "", window.location.pathname);
+  }
+
+  // Rows waiting to be deleted are hidden immediately, and taken out of the totals too.
+  const visibleTransactions = transactions.filter((transaction) => !pendingDeleteIds.includes(transaction.id));
+  const hiddenRows = transactions.filter((transaction) => pendingDeleteIds.includes(transaction.id));
+  const shownTotals = transactionTotals
+    ? {
+        count: transactionTotals.count - hiddenRows.length,
+        outflowPaise:
+          transactionTotals.outflowPaise -
+          hiddenRows.filter((row) => row.direction === "outflow").reduce((sum, row) => sum + row.amountPaise, 0),
+        inflowPaise:
+          transactionTotals.inflowPaise -
+          hiddenRows.filter((row) => row.direction === "inflow").reduce((sum, row) => sum + row.amountPaise, 0)
+      }
+    : null;
+  const exportParams = new URLSearchParams(
+    Object.entries({
+      accountId: selectedAccountId,
+      search,
+      typeId,
+      subcategoryId,
+      from: rangeIsValid ? from : "",
+      to: rangeIsValid ? to : ""
+    }).filter(([, value]) => Boolean(value))
+  ).toString();
 
   async function saveEdit() {
     if (!editDraft) return;
@@ -1658,7 +1903,7 @@ function TransactionsPage({
           <label className="search-box">
             <Search size={17} />
             <input
-              placeholder="Search merchant or note"
+              placeholder="Search merchant, note, SubType or amount"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
@@ -1714,24 +1959,72 @@ function TransactionsPage({
           >
             Apply
           </button>
+          {hasActiveFilters && (
+            <button type="button" className="secondary-action" onClick={clearFilters}>
+              <RotateCcw size={16} />
+              Clear filters
+            </button>
+          )}
         </div>
       </div>
 
       <div className="ledger-result-summary">
         <span>
-          Showing {transactions.length} transaction{transactions.length === 1 ? "" : "s"}
+          Showing {visibleTransactions.length}
+          {shownTotals && shownTotals.count > visibleTransactions.length ? ` of ${shownTotals.count}` : ""}{" "}
+          transaction{(shownTotals?.count ?? visibleTransactions.length) === 1 ? "" : "s"}
           {selectedAccount ? ` for ${selectedAccount.name}` : ""}
         </span>
         {hasMoreTransactions && <small>More history available</small>}
       </div>
 
+      {shownTotals && shownTotals.count > 0 && (
+        <div className="ledger-totals" aria-live="polite">
+          <span className="ledger-totals-label">
+            {search.trim()
+              ? `Total for “${search.trim()}”`
+              : typeId || subcategoryId || from || to || selectedAccountId
+                ? "Total for these filters"
+                : "Total of all transactions"}
+          </span>
+          <span className="ledger-total">
+            Money out <strong className="amount-out">{formatINR(shownTotals.outflowPaise)}</strong>
+          </span>
+          {shownTotals.inflowPaise > 0 && (
+            <span className="ledger-total">
+              Money in <strong className="amount-in">{formatINR(shownTotals.inflowPaise)}</strong>
+            </span>
+          )}
+          {shownTotals.inflowPaise > 0 && shownTotals.outflowPaise > 0 && (
+            <span className="ledger-total">
+              Net{" "}
+              <strong
+                className={
+                  shownTotals.inflowPaise - shownTotals.outflowPaise >= 0 ? "amount-in" : "amount-out"
+                }
+              >
+                {signedImpact(shownTotals.inflowPaise - shownTotals.outflowPaise)}
+              </strong>
+            </span>
+          )}
+          <a
+            className="secondary-action ledger-export"
+            href={`/api/export/transactions.csv${exportParams ? `?${exportParams}` : ""}`}
+            download
+          >
+            <Download size={16} />
+            Export CSV
+          </a>
+        </div>
+      )}
+
       <div className="ledger-list">
-        {loadingTransactions && transactions.length === 0 ? (
+        {loadingTransactions && visibleTransactions.length === 0 ? (
           <PanelLoader label="Loading transactions" />
-        ) : transactions.length === 0 ? (
+        ) : visibleTransactions.length === 0 ? (
           <EmptyState text="No matching transactions." />
         ) : (
-          transactions.map((transaction) => {
+          visibleTransactions.map((transaction) => {
             const typeCategory = typeCategoryFromTransaction(transaction);
             const subTypeCategory = categoryFromTransaction(transaction);
             return (
@@ -1782,6 +2075,17 @@ function TransactionsPage({
                       {signedAmount(transaction.amountPaise, transaction.direction)}
                     </strong>
                     <div className="row-actions">
+                      {canAddAgain(transaction) && (
+                        <button
+                          type="button"
+                          className="secondary-action row-repeat-action"
+                          onClick={() => void addAgain(transaction)}
+                          title="Add this again with today's date"
+                        >
+                          <Plus size={16} />
+                          Add again
+                        </button>
+                      )}
                       <button
                         className="secondary-action row-edit-action"
                         onClick={() => setEditDraft(draftFromTransaction(transaction, categoryTypes, accounts))}
@@ -1797,12 +2101,12 @@ function TransactionsPage({
           })
         )}
       </div>
-      {transactions.length > 0 && (
+      {visibleTransactions.length > 0 && (
         <div className="ledger-pagination">
           <span>
             {hasMoreTransactions
-              ? `Showing latest ${transactions.length}. Use More to load older transactions.`
-              : `Showing all ${transactions.length} matching transactions.`}
+              ? `Showing latest ${visibleTransactions.length}. Use More to load older transactions.`
+              : `Showing all ${visibleTransactions.length} matching transaction${visibleTransactions.length === 1 ? "" : "s"}.`}
           </span>
           {hasMoreTransactions && (
             <button className="secondary-action" onClick={loadMore} disabled={loadingMoreTransactions}>
@@ -2234,11 +2538,13 @@ function ImportTransactionsModal({
 function ReportsPage({
   selectedAccountId,
   categoryTypes,
-  refreshKey
+  refreshKey,
+  onNavigate
 }: {
   selectedAccountId: string;
   categoryTypes: CategoryType[];
   refreshKey: number;
+  onNavigate: Navigate;
 }) {
   const initialMonth = currentMonth();
   const [from, setFrom] = useState(`${initialMonth}-01`);
@@ -2411,11 +2717,17 @@ function ReportsPage({
             </p>
             <CashflowSummary types={report.types} />
             <div className="report-chart-grid">
-              <OutflowMixChart types={report.types} />
+              <OutflowMixChart
+                types={report.types}
+                onTypeClick={(typeId) => onNavigate("transactions", { typeId, from: report.start, to: report.end })}
+              />
               <ReportTypeAnalytics
                 types={report.types}
                 selectedTypeId={selectedType?.typeId ?? ""}
                 onSelect={setSelectedTypeId}
+                onSubTypeClick={(typeId, subcategoryId) =>
+                  onNavigate("transactions", { typeId, subcategoryId, from: report.start, to: report.end })
+                }
               />
             </div>
           </>
@@ -4973,15 +5285,50 @@ function TransactionTable({
   );
 }
 
-function CategoryBars({ categories }: { categories: Array<{ name: string; icon: string; color: string; amountPaise: number; share: number }> }) {
+type BarCategory = {
+  name: string;
+  icon: string;
+  color: string;
+  amountPaise: number;
+  share: number;
+  subcategoryId?: string;
+  typeId?: string;
+};
+
+function CategoryBars({
+  categories,
+  onSelect
+}: {
+  categories: BarCategory[];
+  onSelect?: (category: BarCategory) => void;
+}) {
   if (categories.length === 0) {
     return <EmptyState text="No category spending for this period." />;
   }
 
   return (
     <div className="category-bars">
-      {categories.map((category) => (
-        <div className="bar-row" key={category.name}>
+      {categories.map((category) => {
+        const clickable = Boolean(onSelect && category.subcategoryId && isDrillableId(category.subcategoryId));
+        return (
+        <div
+          className={`bar-row${clickable ? " bar-row-link" : ""}`}
+          key={category.name}
+          {...(clickable
+            ? {
+                role: "button",
+                tabIndex: 0,
+                "aria-label": `Show ${category.name} transactions`,
+                onClick: () => onSelect?.(category),
+                onKeyDown: (event: React.KeyboardEvent) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelect?.(category);
+                  }
+                }
+              }
+            : {})}
+        >
           <div className="bar-label">
             <span className="category-icon" style={{ "--cat-color": category.color } as React.CSSProperties}>
               <IconGlyph name={category.icon} size={16} />
@@ -4993,9 +5340,15 @@ function CategoryBars({ categories }: { categories: Array<{ name: string; icon: 
           </div>
           <strong>{formatINR(category.amountPaise)}</strong>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
+}
+
+// Report buckets for "Other", uncategorised, or card lines don't map to one real filter.
+function isDrillableId(id: string | undefined) {
+  return Boolean(id) && !id!.includes(":") && id !== "uncategorized" && id !== "other-chart-segments";
 }
 
 function CashflowSummary({ types }: { types: MonthlyReport["types"] }) {
@@ -5077,7 +5430,13 @@ function CashflowEquation({
   );
 }
 
-function OutflowMixChart({ types }: { types: MonthlyReport["types"] }) {
+function OutflowMixChart({
+  types,
+  onTypeClick
+}: {
+  types: MonthlyReport["types"];
+  onTypeClick?: (typeId: string) => void;
+}) {
   const outflowTypes = [...types.filter((type) => !INFLOW_BEHAVIORS.has(type.behavior))].sort(
     (a, b) => b.amountPaise - a.amountPaise
   );
@@ -5108,6 +5467,7 @@ function OutflowMixChart({ types }: { types: MonthlyReport["types"] }) {
               segments={outflowSegments}
               totalPaise={outflowPaise}
               ariaLabel="Outflow mix by Type"
+              onSegmentClick={onTypeClick ? (segment) => onTypeClick(segment.id) : undefined}
               centerLabel="Outflow"
               centerValue={formatINR(outflowPaise)}
               className="report-donut-chart"
@@ -5122,11 +5482,13 @@ function OutflowMixChart({ types }: { types: MonthlyReport["types"] }) {
 function ReportTypeAnalytics({
   types,
   selectedTypeId,
-  onSelect
+  onSelect,
+  onSubTypeClick
 }: {
   types: MonthlyReport["types"];
   selectedTypeId: string;
   onSelect: (typeId: string) => void;
+  onSubTypeClick?: (typeId: string, subcategoryId: string) => void;
 }) {
   if (types.length === 0) {
     return <EmptyState text="No Type breakdown for this period." />;
@@ -5169,6 +5531,11 @@ function ReportTypeAnalytics({
             segments={chartSegments}
             totalPaise={selected.amountPaise}
             ariaLabel={`${selected.name} SubType percentage chart`}
+            onSegmentClick={
+              onSubTypeClick && isDrillableId(selected.typeId)
+                ? (segment) => onSubTypeClick(selected.typeId, segment.id)
+                : undefined
+            }
             centerLabel="Total"
             centerValue={formatINR(selected.amountPaise)}
             className="report-donut-chart"
@@ -5185,7 +5552,8 @@ function DonutChart({
   ariaLabel,
   centerLabel,
   centerValue,
-  className = ""
+  className = "",
+  onSegmentClick
 }: {
   segments: DonutSegment[];
   totalPaise: number;
@@ -5193,6 +5561,7 @@ function DonutChart({
   centerLabel: string;
   centerValue: string;
   className?: string;
+  onSegmentClick?: (segment: DonutSegment) => void;
 }) {
   const width = 520;
   const height = 360;
@@ -5259,7 +5628,24 @@ function DonutChart({
         const labelX = segment.side === "right" ? 455 : 65;
         const lineEndX = segment.side === "right" ? labelX - 8 : labelX + 8;
         return (
-          <g key={segment.id}>
+          <g
+            key={segment.id}
+            {...(onSegmentClick && isDrillableId(segment.id)
+              ? {
+                  className: "donut-slice-link",
+                  role: "button",
+                  tabIndex: 0,
+                  "aria-label": `Show ${segment.name} transactions`,
+                  onClick: () => onSegmentClick(segment),
+                  onKeyDown: (event: React.KeyboardEvent) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSegmentClick(segment);
+                    }
+                  }
+                }
+              : {})}
+          >
             <title>{`${segment.name}: ${formatShare(segment.labelShare)} (${formatINR(segment.amountPaise)})`}</title>
             <circle
               className="donut-segment"
@@ -5852,12 +6238,14 @@ function SummaryCard({
   label,
   value,
   icon,
-  tone = "neutral"
+  tone = "neutral",
+  note
 }: {
   label: string;
   value: string;
   icon: React.ReactNode;
   tone?: "neutral" | "warning" | "good";
+  note?: React.ReactNode;
 }) {
   return (
     <div className={`summary-card ${tone}`}>
@@ -5865,7 +6253,83 @@ function SummaryCard({
       <div>
         <p>{label}</p>
         <strong>{value}</strong>
+        {note}
       </div>
+    </div>
+  );
+}
+
+function ChangeVsLastMonth({
+  current,
+  previous,
+  comparison,
+  higherIsGood
+}: {
+  current: number;
+  previous: number;
+  comparison: Overview["comparison"];
+  higherIsGood: boolean;
+}) {
+  // Nothing to compare against — a percentage off zero would be meaningless.
+  if (previous <= 0) return null;
+  const [year, month] = comparison.month.split("-").map(Number);
+  const shortMonth = new Date(year, month - 1, 1).toLocaleDateString("en-IN", { month: "short" });
+  const period = comparison.partial ? `1–${comparison.throughDay} ${shortMonth}` : shortMonth;
+  const change = Math.round(((current - previous) / previous) * 100);
+  if (change === 0) {
+    return <small className="summary-change">Same as {period}</small>;
+  }
+  const up = change > 0;
+  const good = up === higherIsGood;
+  return (
+    <small className={`summary-change ${good ? "good" : "bad"}`} title={`${formatINR(previous)} over ${period}`}>
+      {up ? "↑" : "↓"} {Math.abs(change)}% vs {period}
+    </small>
+  );
+}
+
+function UpcomingPaymentsList({
+  upcoming,
+  availableCashPaise
+}: {
+  upcoming: UpcomingPayments | null;
+  availableCashPaise: number;
+}) {
+  if (!upcoming) {
+    return <PanelLoader label="Checking what's due" />;
+  }
+  if (upcoming.items.length === 0) {
+    return <EmptyState text="Nothing due soon. AutoPay renewals and loan EMIs appear here before they're charged." />;
+  }
+  const dueLabel = (daysAway: number, dueDate: string) =>
+    daysAway === 0
+      ? "Due today"
+      : daysAway === 1
+        ? "Due tomorrow"
+        : `In ${daysAway} days · ${formatDateWithYear(dueDate).replace(/ \d{4}$/, "")}`;
+  return (
+    <div className="upcoming-list">
+      {upcoming.items.map((item) => (
+        <div className={`upcoming-row${item.daysAway <= 2 ? " soon" : ""}`} key={`${item.kind}-${item.id}`}>
+          <span className="upcoming-icon">{item.kind === "loan" ? <Landmark size={16} /> : <CalendarClock size={16} />}</span>
+          <div className="upcoming-main">
+            <strong>{item.name}</strong>
+            <small>
+              {item.kind === "loan" ? "Loan EMI" : "AutoPay"} · {dueLabel(item.daysAway, item.dueDate)}
+            </small>
+          </div>
+          <strong className="amount-out">{formatINR(item.amountPaise)}</strong>
+        </div>
+      ))}
+      <div className="upcoming-total">
+        <span>Total due</span>
+        <strong>{formatINR(upcoming.totalPaise)}</strong>
+      </div>
+      {upcoming.totalPaise > availableCashPaise && (
+        <p className="upcoming-warning">
+          <CircleAlert size={14} /> That's more than your available cash of {formatINR(availableCashPaise)}.
+        </p>
+      )}
     </div>
   );
 }
@@ -5973,6 +6437,12 @@ function recentMonthOptions(fromMonth: string, count: number) {
     options.push({ value, label: formatMonth(value) });
   }
   return options;
+}
+
+// Splits and refunds depend on other records (split lines, the original purchase), so a
+// one-tap copy can't reproduce them faithfully — those are left to the normal form.
+function canAddAgain(transaction: Transaction) {
+  return transaction.status !== "split" && transaction.kind !== "refund" && transaction.kind !== "reversal";
 }
 
 function draftFromTransaction(

@@ -1306,7 +1306,8 @@ export function saveBatch(id: string) {
   return getBatch(id);
 }
 
-export function listTransactions(query: TransactionQuery = {}): TransactionSummary[] {
+// Shared by the ledger list and its totals, so a search always sums exactly the rows it lists.
+function buildTransactionFilters(query: TransactionQuery) {
   const filters: string[] = [];
   const params: SqlParam[] = [];
 
@@ -1355,11 +1356,57 @@ export function listTransactions(query: TransactionQuery = {}): TransactionSumma
     params.push(query.to);
   }
   if (query.search) {
-    filters.push("(t.merchant LIKE ? OR t.note LIKE ?)");
-    params.push(`%${query.search}%`, `%${query.search}%`);
+    const term = query.search.trim();
+    const like = `%${term}%`;
+    // Match the shop/note, the SubType or Type name ("groceries"), including split lines…
+    const clauses = [
+      "t.merchant LIKE ?",
+      "t.note LIKE ?",
+      "EXISTS (SELECT 1 FROM subcategories sx WHERE sx.id = t.subcategory_id AND sx.name LIKE ?)",
+      "EXISTS (SELECT 1 FROM category_types tx WHERE tx.id = t.type_id AND tx.name LIKE ?)",
+      `EXISTS (
+        SELECT 1 FROM transaction_splits sp
+        JOIN subcategories spx ON spx.id = sp.subcategory_id
+        WHERE sp.transaction_id = t.id AND spx.name LIKE ?
+      )`
+    ];
+    params.push(like, like, like, like, like);
+    // …and an exact amount ("420", "₹1,250.50") so a figure on a statement can be found.
+    const amountText = term.replace(/[₹,\s]/g, "");
+    if (/^\d+(\.\d{1,2})?$/.test(amountText)) {
+      clauses.push("t.amount_paise = ?");
+      params.push(Math.round(Number(amountText) * 100));
+    }
+    filters.push(`(${clauses.join(" OR ")})`);
   }
 
-  const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  return { where: filters.length ? `WHERE ${filters.join(" AND ")}` : "", params };
+}
+
+export type TransactionTotals = {
+  count: number;
+  outflowPaise: number;
+  inflowPaise: number;
+};
+
+export function summarizeTransactions(query: TransactionQuery = {}): TransactionTotals {
+  const { where, params } = buildTransactionFilters(query);
+  const row = asRecord<{ count: number; outflow: number | null; inflow: number | null }>(
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count,
+                SUM(CASE WHEN t.direction = 'outflow' THEN t.amount_paise ELSE 0 END) AS outflow,
+                SUM(CASE WHEN t.direction = 'inflow' THEN t.amount_paise ELSE 0 END) AS inflow
+         FROM transactions t
+         ${where}`
+      )
+      .get(...params)
+  );
+  return { count: row.count, outflowPaise: row.outflow ?? 0, inflowPaise: row.inflow ?? 0 };
+}
+
+export function listTransactions(query: TransactionQuery = {}): TransactionSummary[] {
+  const { where, params } = buildTransactionFilters(query);
   const requestedLimit = Number.isFinite(query.limit) ? Math.trunc(query.limit as number) : 200;
   const requestedOffset = Number.isFinite(query.offset) ? Math.trunc(query.offset as number) : 0;
   const limit = Math.min(Math.max(requestedLimit, 1), 500);
@@ -1644,6 +1691,22 @@ export function getOverview(accountId?: string, month = currentMonth()) {
     ? accounts.filter((account) => account.id === accountId)
     : accounts;
   const monthly = getMonthlyReport(accountId, month);
+
+  // Compare like with like: part-way through the current month, measure last month only up to
+  // the same day — otherwise 18 days would always look "down" against a full 31.
+  const previousMonth = addMonths(monthly.month, -1);
+  const previousMonthDays = Number(monthEndDate(previousMonth).slice(8, 10));
+  const isCurrentMonth = monthly.month === currentMonth();
+  const throughDay = isCurrentMonth
+    ? Math.min(Number(currentIsoDate().slice(8, 10)), previousMonthDays)
+    : previousMonthDays;
+  const previous = getMonthlyReport(
+    accountId,
+    previousMonth,
+    `${previousMonth}-01`,
+    `${previousMonth}-${String(throughDay).padStart(2, "0")}`
+  );
+
   const uncategorized = asRecord<{ count: number }>(
     db
       .prepare(
@@ -1666,8 +1729,16 @@ export function getOverview(accountId?: string, month = currentMonth()) {
         .reduce((sum, account) => sum + account.outstandingPaise, 0),
       totalSpendingPaise: monthly.totalSpendingPaise,
       totalOutflowPaise: monthly.totalOutflowPaise,
+      totalInflowPaise: monthly.totalInflowPaise,
       incomePaise: monthly.incomePaise,
       uncategorizedCount: uncategorized.count
+    },
+    comparison: {
+      month: previousMonth,
+      throughDay,
+      partial: isCurrentMonth && throughDay < previousMonthDays,
+      inflowPaise: previous.totalInflowPaise,
+      outflowPaise: previous.totalOutflowPaise
     },
     recentTransactions: listTransactions({ accountId, limit: 5 }),
     categoryReport: monthly.categories.slice(0, 6)
@@ -1694,7 +1765,7 @@ export type WealthSummary = {
     incomePaise: number;
     expensePaise: number;
     savedPaise: number;
-    savingsRatePercent: number;
+    savingsRatePercent: number | null;
   };
   runwayMonths: number | null;
 };
@@ -1756,10 +1827,10 @@ export function getWealthSummary(): WealthSummary {
 
   // Cashflow this month.
   const monthReport = getMonthlyReport(undefined, month);
-  const incomePaise = monthReport.incomePaise;
+  const incomePaise = monthReport.totalInflowPaise;
   const expensePaise = monthReport.totalOutflowPaise;
   const savedPaise = incomePaise - expensePaise;
-  const savingsRatePercent = incomePaise > 0 ? Math.round((savedPaise / incomePaise) * 100) : 0;
+  const savingsRatePercent = calculateSavingsRatePercent(incomePaise, expensePaise);
 
   // Emergency-fund runway = liquid cash ÷ average monthly outflow over the trailing 3 months.
   const trailingExpenses = [0, 1, 2].map(
@@ -1775,6 +1846,118 @@ export function getWealthSummary(): WealthSummary {
     cashflow: { incomePaise, expensePaise, savedPaise, savingsRatePercent },
     runwayMonths
   };
+}
+
+export type UpcomingPayment = {
+  id: string;
+  kind: "autopay" | "loan";
+  name: string;
+  dueDate: string;
+  daysAway: number;
+  amountPaise: number;
+};
+
+export type UpcomingPayments = {
+  windowDays: number;
+  totalPaise: number;
+  items: UpcomingPayment[];
+};
+
+function daysBetween(fromIso: string, toIso: string) {
+  const [fy, fm, fd] = fromIso.split("-").map(Number);
+  const [ty, tm, td] = toIso.split("-").map(Number);
+  return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000);
+}
+
+/** The next date on `billingDay` inside [today, today + windowDays] whose month isn't already paid. */
+function nextMonthlyDueDate(
+  billingDay: number,
+  today: string,
+  windowDays: number,
+  paidMonths: Set<string>,
+  isValid: (dueDate: string) => boolean
+) {
+  const [year, month] = today.split("-").map(Number);
+  for (let offset = 0; offset <= 1; offset += 1) {
+    const candidate = new Date(year, month - 1 + offset, 1);
+    const daysInMonth = new Date(candidate.getFullYear(), candidate.getMonth() + 1, 0).getDate();
+    candidate.setDate(Math.min(billingDay, daysInMonth));
+    const dueDate = localIsoDate(candidate);
+    const away = daysBetween(today, dueDate);
+    if (away < 0 || away > windowDays) continue;
+    if (paidMonths.has(dueDate.slice(0, 7)) || !isValid(dueDate)) continue;
+    return { dueDate, daysAway: away };
+  }
+  return null;
+}
+
+/**
+ * Payments expected to leave the user's accounts soon: AutoPay subscriptions (billed monthly on
+ * their start-date day until they expire) and loan EMIs (on the day of the most recent linked EMI).
+ * A month that already has a linked payment is treated as settled.
+ */
+export function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): UpcomingPayments {
+  const items: UpcomingPayment[] = [];
+
+  for (const subscription of listAutopaySubscriptions(false)) {
+    if (subscription.status !== "active") continue;
+    const paidMonths = new Set(
+      asRecords<{ month: string }>(
+        db
+          .prepare(
+            `SELECT DISTINCT substr(t.date, 1, 7) AS month
+             FROM autopay_payments ap JOIN transactions t ON t.id = ap.transaction_id
+             WHERE ap.subscription_id = ?`
+          )
+          .all(subscription.id)
+      ).map((row) => row.month)
+    );
+    const due = nextMonthlyDueDate(
+      Number(subscription.startDate.slice(8, 10)),
+      today,
+      windowDays,
+      paidMonths,
+      (dueDate) => dueDate >= subscription.startDate && dueDate < subscription.expiryDate
+    );
+    if (due) {
+      items.push({ id: subscription.id, kind: "autopay", name: subscription.name, amountPaise: subscription.amountPaise, ...due });
+    }
+  }
+
+  for (const loan of listLoans(false)) {
+    if (loan.outstandingPaise <= 0) continue;
+    const emiDates = asRecords<{ date: string }>(
+      db
+        .prepare(
+          `SELECT t.date AS date
+           FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id
+           WHERE lp.loan_id = ? AND lp.payment_type = 'emi'
+           ORDER BY t.date DESC`
+        )
+        .all(loan.id)
+    );
+    // Without a recorded EMI there is no reliable due day, so the loan is left out rather than guessed.
+    if (emiDates.length === 0) continue;
+    const due = nextMonthlyDueDate(
+      Number(emiDates[0].date.slice(8, 10)),
+      today,
+      windowDays,
+      new Set(emiDates.map((row) => row.date.slice(0, 7))),
+      () => true
+    );
+    if (due) {
+      items.push({
+        id: loan.id,
+        kind: "loan",
+        name: loan.name,
+        amountPaise: Math.min(loan.monthlyEmiPaise, loan.outstandingPaise),
+        ...due
+      });
+    }
+  }
+
+  items.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.name.localeCompare(b.name));
+  return { windowDays, totalPaise: items.reduce((sum, item) => sum + item.amountPaise, 0), items };
 }
 
 export function getBudgetPlan(month = currentMonth(), asOfDate = localIsoDate(new Date())): BudgetPlan {
@@ -2181,9 +2364,11 @@ export function getMonthlyReport(
       continue;
     }
 
-    // Self transfers only move money between the user's own accounts, so they are
-    // neither inflow nor outflow and stay out of every report figure.
-    if (bucket.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID) {
+    // Self transfers only move money between the user's own accounts, and a credit-card
+    // payment only settles a balance whose charges were already counted as spending when
+    // they were made. Counting either would double-count, so both stay out of every
+    // report figure.
+    if (bucket.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID || bucket.behavior === "card_payment") {
       continue;
     }
 
@@ -2301,6 +2486,12 @@ export function getMonthlyReport(
     (sum, type) => (INFLOW_BEHAVIORS.has(type.behavior) ? sum : sum + type.amountPaise),
     0
   );
+  // Inflow uses the same behaviour rule the Reports page applies (Income + Refund), so
+  // the Overview and Reports figures always agree.
+  const totalInflowPaise = reportTypes.reduce(
+    (sum, type) => (INFLOW_BEHAVIORS.has(type.behavior) ? sum + type.amountPaise : sum),
+    0
+  );
 
   return {
     month: range.month,
@@ -2308,6 +2499,7 @@ export function getMonthlyReport(
     end,
     totalSpendingPaise: Math.max(0, totalSpending),
     totalOutflowPaise: Math.max(0, totalOutflowPaise),
+    totalInflowPaise: Math.max(0, totalInflowPaise),
     incomePaise: totals.income ?? 0,
     emiPaise: totals.loan ?? 0,
     loanPaise: totals.loan ?? 0,
@@ -2543,8 +2735,13 @@ function budgetLineFromRow(
       ? actuals.typeActuals.get(row.scope_id) ?? 0
       : actuals.subcategoryActuals.get(row.scope_id) ?? 0;
   const usedPercent = percent(actualPaise, row.amount_paise);
+  // Extrapolating from the first day or two turns one ordinary purchase into a wild
+  // month-end figure and a false "Likely to exceed" alarm, so only project once enough
+  // of the month has passed for the pace to mean anything.
   const projectedPaise =
-    pace.elapsedPercent > 0 ? Math.max(actualPaise, Math.round(actualPaise / (pace.elapsedPercent / 100))) : actualPaise;
+    pace.elapsedPercent >= MIN_PROJECTION_ELAPSED_PERCENT
+      ? Math.max(actualPaise, Math.round(actualPaise / (pace.elapsedPercent / 100)))
+      : actualPaise;
   const remainingPaise = row.amount_paise - actualPaise;
   const status = budgetStatus(row.amount_paise, actualPaise, usedPercent, projectedPaise, pace.elapsedPercent);
 
@@ -2564,6 +2761,21 @@ function budgetLineFromRow(
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+// Roughly the first week of a month: before this, spending pace is too noisy to project.
+const MIN_PROJECTION_ELAPSED_PERCENT = 20;
+
+/**
+ * Share of inflow that was kept. With no inflow there is nothing to take a percentage of,
+ * so this returns null — reporting 0% would read as "broke even" next to a negative
+ * saved figure, which is the opposite of what happened.
+ */
+export function calculateSavingsRatePercent(inflowPaise: number, outflowPaise: number): number | null {
+  if (inflowPaise <= 0) {
+    return null;
+  }
+  return Math.round(((inflowPaise - outflowPaise) / inflowPaise) * 100);
 }
 
 function budgetStatus(
@@ -2766,10 +2978,11 @@ export function createBackup(mode: BackupMode = "manual") {
   return { path: target, mode, createdAt };
 }
 
-export function exportTransactionsCsv() {
+export function exportTransactionsCsv(query: Omit<TransactionQuery, "limit" | "offset"> = {}) {
   const rows: TransactionSummary[] = [];
   for (let offset = 0; ; offset += 500) {
-    const page = listTransactions({ limit: 500, offset });
+    // Same filters as the ledger, so the file holds exactly the rows the user is looking at.
+    const page = listTransactions({ ...query, limit: 500, offset });
     rows.push(...page);
     if (page.length < 500) break;
   }

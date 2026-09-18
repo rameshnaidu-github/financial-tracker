@@ -2857,6 +2857,35 @@ a {
   color: var(--accent);
 }
 
+.ledger-totals {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 22px;
+  margin: -2px 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2, rgba(148, 163, 184, 0.08));
+}
+
+.ledger-totals-label {
+  margin-right: auto;
+  color: var(--text);
+  font-weight: 850;
+}
+
+.ledger-total {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.ledger-total strong {
+  margin-left: 4px;
+  font-size: 1.02rem;
+}
+
 .ledger-pagination {
   margin: 14px 0 0;
   border-top: 1px solid var(--line);
@@ -3654,6 +3683,26 @@ a {
   padding: 13px 15px;
   box-shadow: var(--shadow);
   font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.toast-action {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #7dd3fc;
+  padding: 6px 12px;
+  font: inherit;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.toast-action:hover,
+.toast-action:focus-visible {
+  background: rgba(255, 255, 255, 0.26);
 }
 
 .modal-backdrop {
@@ -3811,7 +3860,7 @@ a {
   }
 
   .main-shell {
-    padding: 18px 16px 92px;
+    padding: 18px 16px 150px;
   }
 
   .summary-grid {
@@ -3835,6 +3884,13 @@ a {
   .topbar-actions {
     justify-content: flex-start;
     width: 100%;
+  }
+
+  .toast {
+    right: 12px;
+    bottom: 150px;
+    left: 12px;
+    max-width: none;
   }
 
   .mobile-nav {
@@ -3881,7 +3937,7 @@ a {
   }
 
   .main-shell {
-    padding: 14px 12px 92px;
+    padding: 14px 12px 150px;
   }
 
   .topbar-actions,
@@ -4120,4 +4176,144 @@ a {
   .payment-history-grid {
     grid-template-columns: repeat(3, 1fr);
   }
+}
+
+/* --- Month-over-month change on summary cards --- */
+.summary-change {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.summary-change.good {
+  color: var(--good, #15803d);
+}
+
+.summary-change.bad {
+  color: var(--danger, #dc2626);
+}
+
+/* --- Coming up (upcoming AutoPay / EMIs) --- */
+.overview-side-stack {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+}
+
+.upcoming-list {
+  display: grid;
+  gap: 8px;
+}
+
+.upcoming-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.upcoming-row.soon {
+  border-color: rgba(234, 88, 12, 0.45);
+  background: rgba(234, 88, 12, 0.06);
+}
+
+.upcoming-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(14, 165, 233, 0.12);
+  color: #0284c7;
+}
+
+.upcoming-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.upcoming-main strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upcoming-main small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.upcoming-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 6px 2px 0;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.upcoming-total strong {
+  color: var(--text);
+  font-size: 1.05rem;
+}
+
+.upcoming-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--danger, #dc2626);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+/* --- Drill-down affordances --- */
+.bar-row-link,
+.donut-slice-link {
+  cursor: pointer;
+}
+
+.bar-row-link {
+  border-radius: 8px;
+  transition: background 120ms ease;
+}
+
+.bar-row-link:hover,
+.bar-row-link:focus-visible {
+  background: rgba(148, 163, 184, 0.14);
+  outline: none;
+}
+
+.donut-slice-link:hover .donut-segment,
+.donut-slice-link:focus-visible .donut-segment {
+  opacity: 0.8;
+}
+
+.donut-slice-link:focus-visible {
+  outline: none;
+}
+
+.donut-slice-link:hover .donut-label,
+.donut-slice-link:focus-visible .donut-label {
+  text-decoration: underline;
+}
+
+/* --- Transactions: export + add again --- */
+.ledger-export {
+  padding: 6px 12px;
+  font-size: 0.82rem;
+}
+
+.row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }

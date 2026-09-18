@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
 import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
-import { SELF_TRANSFER_SUBCATEGORY_ID } from "../shared/finance.ts";
+import { INFLOW_BEHAVIORS, SELF_TRANSFER_SUBCATEGORY_ID } from "../shared/finance.ts";
 import type { ReportType } from "../src/types.ts";
 
 const testDbPath = path.join(tmpdir(), `finance-tracker-qa-${Date.now()}.db`);
@@ -837,11 +837,22 @@ test("tracks loan statement values, linked transactions, unlink, and archive", a
   assert(updatedLoan?.trackedInterestPaidPaise === 612_617, "Linked EMI should track interest on opening balance.");
   assert(updatedLoan?.outstandingPaise === 67_011_017, "Linked EMI principal should reduce current outstanding.");
   assert(updatedLoan?.principalPaidPaise === 10_161_683, "Principal paid should combine history and tracked payments.");
+  // The estimated-history part grows with the wall clock (more installments are assumed
+  // paid as time passes), so assert the invariant rather than a frozen total.
   assert(
-    updatedLoan?.interestPaidPaise === 6_540_317,
+    updatedLoan?.interestPaidPaise ===
+      (updatedLoan?.estimatedHistoricalInterestPaidPaise ?? 0) + (updatedLoan?.trackedInterestPaidPaise ?? 0),
     "Interest paid should combine estimated history and tracked actual interest."
   );
-  assert(updatedLoan?.monthsLeft === 50, "Months left should be recalculated from current outstanding.");
+  assert(
+    (updatedLoan?.estimatedHistoricalInterestPaidPaise ?? 0) > 0,
+    "A loan that started before tracking should estimate some historical interest."
+  );
+  assert(
+    updatedLoan !== undefined && updatedLoan.monthsLeft !== null && updatedLoan.monthsLeft > 0 &&
+      updatedLoan.monthsLeft <= updatedLoan.tenureMonths,
+    "Months left should be recalculated from current outstanding and stay within the tenure."
+  );
   assert(linkedTransaction?.loanName === "QA HDFC Personal Loan", "Transaction should expose linked loan name.");
   await assertRejectsWithMessage(
     "loan subtype in use",
@@ -1851,7 +1862,12 @@ test("computes net worth, asset allocation, cashflow and runway", async () => {
     "The latest history point should equal the live net worth."
   );
 
-  assert(typeof before.cashflow.savingsRatePercent === "number", "Savings rate should be a number.");
+  assert(
+    before.cashflow.incomePaise > 0
+      ? typeof before.cashflow.savingsRatePercent === "number"
+      : before.cashflow.savingsRatePercent === null,
+    "Savings rate should be a number when there is inflow, and undefined when there is none."
+  );
   assert(before.runwayMonths === null || before.runwayMonths >= 0, "Runway should be null or non-negative.");
 });
 
@@ -1950,6 +1966,358 @@ test("self transfers move money between accounts without counting as outflow", a
   );
 });
 
+test("credit-card payments settle a balance and never count as outflow", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Card Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 1_00_000_00
+  });
+  const card = services.createAccount({
+    name: `QA Card ${suffix}`,
+    type: "credit_card",
+    startingBalancePaise: 0,
+    creditLimitPaise: 1_00_000_00
+  });
+
+  // Charge the card — this is the real spending and must be counted once.
+  services.createTransaction({
+    date: "2026-09-12",
+    accountId: card.id,
+    method: "credit_card",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Groceries"),
+    amountPaise: 5_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  const beforePayment = services.getMonthlyReport(undefined, "2026-09");
+
+  // Paying the card bill only moves money to settle that charge.
+  services.createTransaction({
+    date: "2026-09-13",
+    accountId: bank.id,
+    method: "bank_transfer",
+    typeId: typeId("Credit Card Payment"),
+    amountPaise: 5_000_00,
+    direction: "outflow",
+    kind: "card_payment",
+    transferAccountId: card.id
+  });
+
+  const afterPayment = services.getMonthlyReport(undefined, "2026-09");
+  assert(
+    afterPayment.totalOutflowPaise === beforePayment.totalOutflowPaise,
+    "A card payment must not add to outflow — the charge was already counted."
+  );
+  assert(
+    !afterPayment.types.some((type) => type.behavior === "card_payment"),
+    "Card payments must not appear as a report line."
+  );
+
+  // Balances still move: the bank pays out and the card balance clears.
+  const accounts = services.listAccounts();
+  assert(
+    accounts.find((account) => account.id === bank.id)?.balancePaise === 95_000_00,
+    "The paying bank account should drop by the payment."
+  );
+  assert(
+    accounts.find((account) => account.id === card.id)?.outstandingPaise === 0,
+    "The card outstanding should be cleared by the payment."
+  );
+});
+
+test("overview cashflow inflow matches the reports inflow rule (income + refund)", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Inflow Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 10_000_00
+  });
+  const refundType = services.createCategoryType({
+    name: `QA Cashback ${suffix}`,
+    behavior: "refund",
+    icon: "rotate-ccw",
+    color: "#059669"
+  });
+  const refundSub = services.createSubcategory({
+    typeId: refundType.id,
+    name: `QA Cashback Sub ${suffix}`,
+    icon: "rotate-ccw",
+    color: "#059669"
+  });
+
+  // A standalone refund (not linked to an original expense) is money coming in.
+  services.createTransaction({
+    date: "2026-09-14",
+    accountId: bank.id,
+    method: "bank_transfer",
+    typeId: refundType.id,
+    subcategoryId: refundSub.id,
+    amountPaise: 2_000_00,
+    direction: "inflow",
+    kind: "refund"
+  });
+
+  const report = services.getMonthlyReport(undefined, "2026-09");
+  const reportsInflow = report.types
+    .filter((type) => INFLOW_BEHAVIORS.has(type.behavior))
+    .reduce((sum, type) => sum + type.amountPaise, 0);
+
+  assert(
+    report.totalInflowPaise === reportsInflow,
+    "The report's inflow total must equal the sum of its inflow-behaviour types."
+  );
+  assert(
+    report.totalInflowPaise >= 2_000_00,
+    "A standalone refund must count towards inflow."
+  );
+  assert(
+    report.totalInflowPaise !== report.incomePaise,
+    "Inflow includes refunds, so it should differ from the income-only figure here."
+  );
+});
+
+test("search totals sum every matching transaction, not just the loaded page", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Totals Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 1_00_000_00
+  });
+  const keyword = `Bakery${suffix}`;
+  for (const amount of [120_00, 245_50, 80_00]) {
+    services.createTransaction({
+      date: "2026-09-15",
+      accountId: bank.id,
+      method: "upi",
+      merchant: `${keyword} Brown`,
+      typeId: typeId("Expense"),
+      subcategoryId: subcategoryId("Expense", "Groceries"),
+      amountPaise: amount,
+      direction: "outflow",
+      kind: "expense"
+    });
+  }
+  // A refund from the same shop is money coming back, not spending.
+  const refundType = services.createCategoryType({
+    name: `QA Totals Refund ${suffix}`,
+    behavior: "refund",
+    icon: "rotate-ccw",
+    color: "#059669"
+  });
+  const refundSub = services.createSubcategory({
+    typeId: refundType.id,
+    name: `QA Totals Refund Sub ${suffix}`,
+    icon: "rotate-ccw",
+    color: "#059669"
+  });
+  services.createTransaction({
+    date: "2026-09-16",
+    accountId: bank.id,
+    method: "upi",
+    merchant: `${keyword} refund`,
+    typeId: refundType.id,
+    subcategoryId: refundSub.id,
+    amountPaise: 50_00,
+    direction: "inflow",
+    kind: "refund"
+  });
+  // Unrelated noise that must not be counted.
+  services.createTransaction({
+    date: "2026-09-16",
+    accountId: bank.id,
+    method: "upi",
+    merchant: `Chemist ${suffix}`,
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Health"),
+    amountPaise: 999_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  const totals = services.summarizeTransactions({ search: keyword });
+  assert(totals.count === 4, "All four bakery rows should match the search.");
+  assert(totals.outflowPaise === 445_50, "Money out should sum the three purchases (120 + 245.50 + 80).");
+  assert(totals.inflowPaise === 50_00, "Money in should hold the refund.");
+
+  // Totals must not depend on paging: a one-row page still reports the full sum.
+  const onePage = services.listTransactions({ search: keyword, limit: 1 });
+  assert(onePage.length === 1, "The list itself is paged.");
+  assert(services.summarizeTransactions({ search: keyword }).count === 4, "Totals ignore paging.");
+});
+
+test("search matches SubType names and amounts, and export honours the same filters", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Smart Search ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 1_00_000_00
+  });
+  const merchant = `Corner${suffix}`;
+  services.createTransaction({
+    date: "2025-03-04",
+    accountId: bank.id,
+    method: "upi",
+    merchant,
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Movies"),
+    amountPaise: 12_345_67,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  // A figure copied off a statement, with the rupee sign and grouping commas, still matches.
+  const byAmount = services.listTransactions({ search: "₹12,345.67", from: "2025-03-01", to: "2025-03-31" });
+  assert(byAmount.some((row) => row.merchant === merchant), "Searching an exact amount should find the transaction.");
+
+  // The SubType name matches even though it isn't in the merchant or note.
+  const bySubType = services.listTransactions({ search: "movies", from: "2025-03-01", to: "2025-03-31" });
+  assert(bySubType.some((row) => row.merchant === merchant), "Searching a SubType name should find the transaction.");
+
+  const csv = services.exportTransactionsCsv({ search: merchant });
+  const dataRows = csv.trim().split("\n").slice(1);
+  assert(dataRows.length === 1, "A filtered export should hold only the matching rows.");
+  assert(dataRows[0].includes(merchant), "The exported row should be the one that matched.");
+});
+
+test("upcoming payments list AutoPay and EMIs due soon, skipping months already paid", async () => {
+  assert(state.bankId, "Bank should exist.");
+  const suffix = Date.now().toString().slice(-5);
+  const subscription = services.createAutopaySubscription({
+    name: `QA Upcoming Stream ${suffix}`,
+    amountPaise: 649_00,
+    startDate: "2027-01-15",
+    durationMonths: 12
+  });
+  const loan = services.createLoan({
+    name: `QA Upcoming Loan ${suffix}`,
+    subcategoryId: subcategoryId("Loan", "Vehicle"),
+    principalAmountPaise: 5_00_000_00,
+    startingOutstandingPaise: 5_00_000_00,
+    startMonth: "2027-01",
+    annualInterestRateBps: 900,
+    tenureMonths: 60,
+    monthlyEmiPaise: 11_000_00
+  });
+  services.createTransaction({
+    date: "2027-02-20",
+    accountId: state.bankId,
+    method: "bank_transfer",
+    typeId: typeId("Loan"),
+    subcategoryId: subcategoryId("Loan", "Vehicle"),
+    amountPaise: 11_000_00,
+    direction: "outflow",
+    kind: "emi",
+    loanId: loan.id,
+    loanPaymentType: "emi"
+  });
+
+  const upcoming = services.getUpcomingPayments(14, "2027-03-10");
+  const stream = upcoming.items.find((item) => item.id === subscription.id);
+  const emi = upcoming.items.find((item) => item.id === loan.id);
+  assert(stream?.dueDate === "2027-03-15" && stream.daysAway === 5, "AutoPay should be due on its billing day.");
+  assert(emi?.dueDate === "2027-03-20" && emi.daysAway === 10, "The EMI should follow the last EMI's day.");
+  assert(
+    upcoming.totalPaise === upcoming.items.reduce((sum, item) => sum + item.amountPaise, 0),
+    "The total should add up the listed payments."
+  );
+
+  // Paying this month's AutoPay settles it; next month's charge is outside the 14-day window.
+  services.createTransaction({
+    date: "2027-03-05",
+    accountId: state.bankId,
+    method: "upi",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "AutoPay"),
+    amountPaise: 649_00,
+    direction: "outflow",
+    kind: "expense",
+    subscriptionId: subscription.id
+  });
+  const afterPaying = services.getUpcomingPayments(14, "2027-03-10");
+  assert(
+    !afterPaying.items.some((item) => item.id === subscription.id),
+    "A month that already has its AutoPay payment must not show it as due."
+  );
+});
+
+test("the overview compares a past month against the whole previous month", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Compare Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 1_00_000_00
+  });
+  for (const [date, amount] of [
+    ["2025-05-28", 3_000_00],
+    ["2025-06-10", 4_500_00]
+  ] as const) {
+    services.createTransaction({
+      date,
+      accountId: bank.id,
+      method: "upi",
+      typeId: typeId("Expense"),
+      subcategoryId: subcategoryId("Expense", "Groceries"),
+      amountPaise: amount,
+      direction: "outflow",
+      kind: "expense"
+    });
+  }
+  const june = services.getOverview(bank.id, "2025-06");
+  assert(june.comparison.month === "2025-05", "June should compare against May.");
+  assert(!june.comparison.partial && june.comparison.throughDay === 31, "A finished month compares with all of May.");
+  assert(june.comparison.outflowPaise === 3_000_00, "May's outflow for this account should be the 28 May purchase.");
+});
+
+test("a budget only projects once enough of the month has passed", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Projection Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 1_00_000_00
+  });
+  services.createBudgetLine({
+    month: "2026-12",
+    scopeType: "subcategory",
+    scopeId: subcategoryId("Expense", "Movies"),
+    amountPaise: 15_000_00
+  });
+  services.createTransaction({
+    date: "2026-12-01",
+    accountId: bank.id,
+    method: "upi",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Movies"),
+    amountPaise: 1_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  // Day 1: one ordinary purchase must not extrapolate to a month-end blow-out.
+  const dayOne = services.getBudgetPlan("2026-12", "2026-12-01").lines[0];
+  assert(dayOne.projectedPaise === 1_000_00, "Too early in the month to project — show what was actually spent.");
+  assert(dayOne.status !== "critical", "A single day-one purchase must not raise a 'likely to exceed' alarm.");
+
+  // Mid-month the pace is meaningful again, so the projection kicks back in.
+  const midMonth = services.getBudgetPlan("2026-12", "2026-12-16").lines[0];
+  assert(midMonth.projectedPaise > 1_000_00, "Once the month is underway the budget should project forward.");
+});
+
+test("savings rate is undefined when there is no inflow to measure against", async () => {
+  assert(
+    services.calculateSavingsRatePercent(0, 5_000_00) === null,
+    "A 0% savings rate would read as breaking even next to a negative saved figure."
+  );
+  assert(services.calculateSavingsRatePercent(0, 0) === null, "No inflow and no outflow still has no rate.");
+  assert(services.calculateSavingsRatePercent(1_00_000_00, 25_000_00) === 75, "Kept 75,000 of 1,00,000 is 75%.");
+  assert(
+    services.calculateSavingsRatePercent(1_00_000_00, 1_50_000_00) === -50,
+    "Outspending inflow should report a negative rate, not zero."
+  );
+});
+
 test("report outflow covers every non-inflow type and matches the overview", async () => {
   const suffix = Date.now().toString().slice(-5);
   const bank = services.createAccount({
@@ -2011,8 +2379,13 @@ test("report outflow covers every non-inflow type and matches the overview", asy
     0
   );
 
-  // 4,000 expense + 3,000 transfer + 2,000 card expense + 2,000 card payment.
-  assert(report.totalOutflowPaise === 11_000_00, "Outflow should add up every non-inflow type.");
+  // 4,000 expense + 3,000 transfer + 2,000 card expense. The 2,000 card payment only
+  // settles the card expense already counted above, so it must not be added again.
+  assert(report.totalOutflowPaise === 9_000_00, "Outflow should add up every non-inflow type once.");
+  assert(
+    !report.types.some((type) => type.behavior === "card_payment"),
+    "A card payment must not appear as its own outflow line."
+  );
   assert(
     report.totalOutflowPaise === outflowFromTypes,
     "The outflow total must equal the Reports outflow breakdown."
