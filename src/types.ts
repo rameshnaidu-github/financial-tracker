@@ -217,6 +217,7 @@ export type Overview = {
     creditOutstandingPaise: number;
     totalSpendingPaise: number;
     totalOutflowPaise: number;
+    totalInflowPaise: number;
     incomePaise: number;
     uncategorizedCount: number;
   };
@@ -281,7 +282,7 @@ export type WealthSummary = {
     incomePaise: number;
     expensePaise: number;
     savedPaise: number;
-    savingsRatePercent: number;
+    savingsRatePercent: number | null;
   };
   runwayMonths: number | null;
 };

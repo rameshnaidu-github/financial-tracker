@@ -1862,7 +1862,12 @@ test("computes net worth, asset allocation, cashflow and runway", async () => {
     "The latest history point should equal the live net worth."
   );
 
-  assert(typeof before.cashflow.savingsRatePercent === "number", "Savings rate should be a number.");
+  assert(
+    before.cashflow.incomePaise > 0
+      ? typeof before.cashflow.savingsRatePercent === "number"
+      : before.cashflow.savingsRatePercent === null,
+    "Savings rate should be a number when there is inflow, and undefined when there is none."
+  );
   assert(before.runwayMonths === null || before.runwayMonths >= 0, "Runway should be null or non-negative.");
 });
 
@@ -2071,6 +2076,53 @@ test("overview cashflow inflow matches the reports inflow rule (income + refund)
   assert(
     report.totalInflowPaise !== report.incomePaise,
     "Inflow includes refunds, so it should differ from the income-only figure here."
+  );
+});
+
+test("a budget only projects once enough of the month has passed", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Projection Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 1_00_000_00
+  });
+  services.createBudgetLine({
+    month: "2026-12",
+    scopeType: "subcategory",
+    scopeId: subcategoryId("Expense", "Movies"),
+    amountPaise: 15_000_00
+  });
+  services.createTransaction({
+    date: "2026-12-01",
+    accountId: bank.id,
+    method: "upi",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Movies"),
+    amountPaise: 1_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  // Day 1: one ordinary purchase must not extrapolate to a month-end blow-out.
+  const dayOne = services.getBudgetPlan("2026-12", "2026-12-01").lines[0];
+  assert(dayOne.projectedPaise === 1_000_00, "Too early in the month to project — show what was actually spent.");
+  assert(dayOne.status !== "critical", "A single day-one purchase must not raise a 'likely to exceed' alarm.");
+
+  // Mid-month the pace is meaningful again, so the projection kicks back in.
+  const midMonth = services.getBudgetPlan("2026-12", "2026-12-16").lines[0];
+  assert(midMonth.projectedPaise > 1_000_00, "Once the month is underway the budget should project forward.");
+});
+
+test("savings rate is undefined when there is no inflow to measure against", async () => {
+  assert(
+    services.calculateSavingsRatePercent(0, 5_000_00) === null,
+    "A 0% savings rate would read as breaking even next to a negative saved figure."
+  );
+  assert(services.calculateSavingsRatePercent(0, 0) === null, "No inflow and no outflow still has no rate.");
+  assert(services.calculateSavingsRatePercent(1_00_000_00, 25_000_00) === 75, "Kept 75,000 of 1,00,000 is 75%.");
+  assert(
+    services.calculateSavingsRatePercent(1_00_000_00, 1_50_000_00) === -50,
+    "Outspending inflow should report a negative rate, not zero."
   );
 });
 

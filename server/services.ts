@@ -1666,6 +1666,7 @@ export function getOverview(accountId?: string, month = currentMonth()) {
         .reduce((sum, account) => sum + account.outstandingPaise, 0),
       totalSpendingPaise: monthly.totalSpendingPaise,
       totalOutflowPaise: monthly.totalOutflowPaise,
+      totalInflowPaise: monthly.totalInflowPaise,
       incomePaise: monthly.incomePaise,
       uncategorizedCount: uncategorized.count
     },
@@ -1694,7 +1695,7 @@ export type WealthSummary = {
     incomePaise: number;
     expensePaise: number;
     savedPaise: number;
-    savingsRatePercent: number;
+    savingsRatePercent: number | null;
   };
   runwayMonths: number | null;
 };
@@ -1759,7 +1760,7 @@ export function getWealthSummary(): WealthSummary {
   const incomePaise = monthReport.totalInflowPaise;
   const expensePaise = monthReport.totalOutflowPaise;
   const savedPaise = incomePaise - expensePaise;
-  const savingsRatePercent = incomePaise > 0 ? Math.round((savedPaise / incomePaise) * 100) : 0;
+  const savingsRatePercent = calculateSavingsRatePercent(incomePaise, expensePaise);
 
   // Emergency-fund runway = liquid cash ÷ average monthly outflow over the trailing 3 months.
   const trailingExpenses = [0, 1, 2].map(
@@ -2552,8 +2553,13 @@ function budgetLineFromRow(
       ? actuals.typeActuals.get(row.scope_id) ?? 0
       : actuals.subcategoryActuals.get(row.scope_id) ?? 0;
   const usedPercent = percent(actualPaise, row.amount_paise);
+  // Extrapolating from the first day or two turns one ordinary purchase into a wild
+  // month-end figure and a false "Likely to exceed" alarm, so only project once enough
+  // of the month has passed for the pace to mean anything.
   const projectedPaise =
-    pace.elapsedPercent > 0 ? Math.max(actualPaise, Math.round(actualPaise / (pace.elapsedPercent / 100))) : actualPaise;
+    pace.elapsedPercent >= MIN_PROJECTION_ELAPSED_PERCENT
+      ? Math.max(actualPaise, Math.round(actualPaise / (pace.elapsedPercent / 100)))
+      : actualPaise;
   const remainingPaise = row.amount_paise - actualPaise;
   const status = budgetStatus(row.amount_paise, actualPaise, usedPercent, projectedPaise, pace.elapsedPercent);
 
@@ -2573,6 +2579,21 @@ function budgetLineFromRow(
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+// Roughly the first week of a month: before this, spending pace is too noisy to project.
+const MIN_PROJECTION_ELAPSED_PERCENT = 20;
+
+/**
+ * Share of inflow that was kept. With no inflow there is nothing to take a percentage of,
+ * so this returns null — reporting 0% would read as "broke even" next to a negative
+ * saved figure, which is the opposite of what happened.
+ */
+export function calculateSavingsRatePercent(inflowPaise: number, outflowPaise: number): number | null {
+  if (inflowPaise <= 0) {
+    return null;
+  }
+  return Math.round(((inflowPaise - outflowPaise) / inflowPaise) * 100);
 }
 
 function budgetStatus(

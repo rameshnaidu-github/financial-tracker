@@ -739,8 +739,8 @@ function OverviewPage({
           icon={<BarChart3 />}
         />
         <SummaryCard
-          label="This month income"
-          value={formatINR(overview.summary.incomePaise)}
+          label="Inflow"
+          value={formatINR(overview.summary.totalInflowPaise)}
           icon={<TrendingUp />}
         />
       </section>
@@ -887,8 +887,16 @@ function CashflowPanel({ wealth }: { wealth: WealthSummary }) {
         </div>
         <div>
           <span>Savings rate</span>
-          <strong className={cashflow.savingsRatePercent >= 0 ? "amount-in" : "amount-out"}>
-            {cashflow.savingsRatePercent}%
+          <strong
+            className={
+              cashflow.savingsRatePercent === null
+                ? ""
+                : cashflow.savingsRatePercent >= 0
+                  ? "amount-in"
+                  : "amount-out"
+            }
+          >
+            {cashflow.savingsRatePercent === null ? "—" : `${cashflow.savingsRatePercent}%`}
           </strong>
         </div>
       </div>
