@@ -1356,8 +1356,28 @@ function buildTransactionFilters(query: TransactionQuery) {
     params.push(query.to);
   }
   if (query.search) {
-    filters.push("(t.merchant LIKE ? OR t.note LIKE ?)");
-    params.push(`%${query.search}%`, `%${query.search}%`);
+    const term = query.search.trim();
+    const like = `%${term}%`;
+    // Match the shop/note, the SubType or Type name ("groceries"), including split lines…
+    const clauses = [
+      "t.merchant LIKE ?",
+      "t.note LIKE ?",
+      "EXISTS (SELECT 1 FROM subcategories sx WHERE sx.id = t.subcategory_id AND sx.name LIKE ?)",
+      "EXISTS (SELECT 1 FROM category_types tx WHERE tx.id = t.type_id AND tx.name LIKE ?)",
+      `EXISTS (
+        SELECT 1 FROM transaction_splits sp
+        JOIN subcategories spx ON spx.id = sp.subcategory_id
+        WHERE sp.transaction_id = t.id AND spx.name LIKE ?
+      )`
+    ];
+    params.push(like, like, like, like, like);
+    // …and an exact amount ("420", "₹1,250.50") so a figure on a statement can be found.
+    const amountText = term.replace(/[₹,\s]/g, "");
+    if (/^\d+(\.\d{1,2})?$/.test(amountText)) {
+      clauses.push("t.amount_paise = ?");
+      params.push(Math.round(Number(amountText) * 100));
+    }
+    filters.push(`(${clauses.join(" OR ")})`);
   }
 
   return { where: filters.length ? `WHERE ${filters.join(" AND ")}` : "", params };
@@ -1671,6 +1691,22 @@ export function getOverview(accountId?: string, month = currentMonth()) {
     ? accounts.filter((account) => account.id === accountId)
     : accounts;
   const monthly = getMonthlyReport(accountId, month);
+
+  // Compare like with like: part-way through the current month, measure last month only up to
+  // the same day — otherwise 18 days would always look "down" against a full 31.
+  const previousMonth = addMonths(monthly.month, -1);
+  const previousMonthDays = Number(monthEndDate(previousMonth).slice(8, 10));
+  const isCurrentMonth = monthly.month === currentMonth();
+  const throughDay = isCurrentMonth
+    ? Math.min(Number(currentIsoDate().slice(8, 10)), previousMonthDays)
+    : previousMonthDays;
+  const previous = getMonthlyReport(
+    accountId,
+    previousMonth,
+    `${previousMonth}-01`,
+    `${previousMonth}-${String(throughDay).padStart(2, "0")}`
+  );
+
   const uncategorized = asRecord<{ count: number }>(
     db
       .prepare(
@@ -1696,6 +1732,13 @@ export function getOverview(accountId?: string, month = currentMonth()) {
       totalInflowPaise: monthly.totalInflowPaise,
       incomePaise: monthly.incomePaise,
       uncategorizedCount: uncategorized.count
+    },
+    comparison: {
+      month: previousMonth,
+      throughDay,
+      partial: isCurrentMonth && throughDay < previousMonthDays,
+      inflowPaise: previous.totalInflowPaise,
+      outflowPaise: previous.totalOutflowPaise
     },
     recentTransactions: listTransactions({ accountId, limit: 5 }),
     categoryReport: monthly.categories.slice(0, 6)
@@ -1803,6 +1846,118 @@ export function getWealthSummary(): WealthSummary {
     cashflow: { incomePaise, expensePaise, savedPaise, savingsRatePercent },
     runwayMonths
   };
+}
+
+export type UpcomingPayment = {
+  id: string;
+  kind: "autopay" | "loan";
+  name: string;
+  dueDate: string;
+  daysAway: number;
+  amountPaise: number;
+};
+
+export type UpcomingPayments = {
+  windowDays: number;
+  totalPaise: number;
+  items: UpcomingPayment[];
+};
+
+function daysBetween(fromIso: string, toIso: string) {
+  const [fy, fm, fd] = fromIso.split("-").map(Number);
+  const [ty, tm, td] = toIso.split("-").map(Number);
+  return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000);
+}
+
+/** The next date on `billingDay` inside [today, today + windowDays] whose month isn't already paid. */
+function nextMonthlyDueDate(
+  billingDay: number,
+  today: string,
+  windowDays: number,
+  paidMonths: Set<string>,
+  isValid: (dueDate: string) => boolean
+) {
+  const [year, month] = today.split("-").map(Number);
+  for (let offset = 0; offset <= 1; offset += 1) {
+    const candidate = new Date(year, month - 1 + offset, 1);
+    const daysInMonth = new Date(candidate.getFullYear(), candidate.getMonth() + 1, 0).getDate();
+    candidate.setDate(Math.min(billingDay, daysInMonth));
+    const dueDate = localIsoDate(candidate);
+    const away = daysBetween(today, dueDate);
+    if (away < 0 || away > windowDays) continue;
+    if (paidMonths.has(dueDate.slice(0, 7)) || !isValid(dueDate)) continue;
+    return { dueDate, daysAway: away };
+  }
+  return null;
+}
+
+/**
+ * Payments expected to leave the user's accounts soon: AutoPay subscriptions (billed monthly on
+ * their start-date day until they expire) and loan EMIs (on the day of the most recent linked EMI).
+ * A month that already has a linked payment is treated as settled.
+ */
+export function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): UpcomingPayments {
+  const items: UpcomingPayment[] = [];
+
+  for (const subscription of listAutopaySubscriptions(false)) {
+    if (subscription.status !== "active") continue;
+    const paidMonths = new Set(
+      asRecords<{ month: string }>(
+        db
+          .prepare(
+            `SELECT DISTINCT substr(t.date, 1, 7) AS month
+             FROM autopay_payments ap JOIN transactions t ON t.id = ap.transaction_id
+             WHERE ap.subscription_id = ?`
+          )
+          .all(subscription.id)
+      ).map((row) => row.month)
+    );
+    const due = nextMonthlyDueDate(
+      Number(subscription.startDate.slice(8, 10)),
+      today,
+      windowDays,
+      paidMonths,
+      (dueDate) => dueDate >= subscription.startDate && dueDate < subscription.expiryDate
+    );
+    if (due) {
+      items.push({ id: subscription.id, kind: "autopay", name: subscription.name, amountPaise: subscription.amountPaise, ...due });
+    }
+  }
+
+  for (const loan of listLoans(false)) {
+    if (loan.outstandingPaise <= 0) continue;
+    const emiDates = asRecords<{ date: string }>(
+      db
+        .prepare(
+          `SELECT t.date AS date
+           FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id
+           WHERE lp.loan_id = ? AND lp.payment_type = 'emi'
+           ORDER BY t.date DESC`
+        )
+        .all(loan.id)
+    );
+    // Without a recorded EMI there is no reliable due day, so the loan is left out rather than guessed.
+    if (emiDates.length === 0) continue;
+    const due = nextMonthlyDueDate(
+      Number(emiDates[0].date.slice(8, 10)),
+      today,
+      windowDays,
+      new Set(emiDates.map((row) => row.date.slice(0, 7))),
+      () => true
+    );
+    if (due) {
+      items.push({
+        id: loan.id,
+        kind: "loan",
+        name: loan.name,
+        amountPaise: Math.min(loan.monthlyEmiPaise, loan.outstandingPaise),
+        ...due
+      });
+    }
+  }
+
+  items.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.name.localeCompare(b.name));
+  return { windowDays, totalPaise: items.reduce((sum, item) => sum + item.amountPaise, 0), items };
 }
 
 export function getBudgetPlan(month = currentMonth(), asOfDate = localIsoDate(new Date())): BudgetPlan {
@@ -2823,10 +2978,11 @@ export function createBackup(mode: BackupMode = "manual") {
   return { path: target, mode, createdAt };
 }
 
-export function exportTransactionsCsv() {
+export function exportTransactionsCsv(query: Omit<TransactionQuery, "limit" | "offset"> = {}) {
   const rows: TransactionSummary[] = [];
   for (let offset = 0; ; offset += 500) {
-    const page = listTransactions({ limit: 500, offset });
+    // Same filters as the ledger, so the file holds exactly the rows the user is looking at.
+    const page = listTransactions({ ...query, limit: 500, offset });
     rows.push(...page);
     if (page.length < 500) break;
   }

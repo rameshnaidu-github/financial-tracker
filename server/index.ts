@@ -39,6 +39,7 @@ import {
   getTrendReport,
   getBudgetTrendReport,
   getWealthSummary,
+  getUpcomingPayments,
   getProfile,
   getSettings,
   importTransactionsWorkbook,
@@ -316,6 +317,8 @@ app.get("/api/reports/monthly", async (request) => {
 
 app.get("/api/wealth", async () => getWealthSummary());
 
+app.get("/api/upcoming", async () => getUpcomingPayments());
+
 app.get("/api/reports/trends", async (request) => {
   const query = request.query as { accountId?: string; typeId?: string; mode?: string; month?: string };
   const mode = query.mode === "year" ? "year" : query.mode === "week" ? "week" : "month";
@@ -423,11 +426,21 @@ app.post("/api/import/transactions", expensiveRouteLimit, async (request, reply)
   return importTransactionsWorkbook(buffer, blankToUndefined(query.batchId));
 });
 
-app.get("/api/export/transactions.csv", expensiveRouteLimit, async (_request, reply) => {
+app.get("/api/export/transactions.csv", expensiveRouteLimit, async (request, reply) => {
+  const query = request.query as Record<string, string | undefined>;
   return reply
     .header("content-type", "text/csv; charset=utf-8")
     .header("content-disposition", "attachment; filename=\"transactions.csv\"")
-    .send(exportTransactionsCsv());
+    .send(
+      exportTransactionsCsv({
+        accountId: blankToUndefined(query.accountId),
+        typeId: blankToUndefined(query.typeId),
+        subcategoryId: blankToUndefined(query.subcategoryId),
+        search: blankToUndefined(query.search),
+        from: blankToUndefined(query.from),
+        to: blankToUndefined(query.to)
+      })
+    );
 });
 
 if (existsSync(distDir)) {

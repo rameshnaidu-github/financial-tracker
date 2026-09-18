@@ -2148,6 +2148,129 @@ test("search totals sum every matching transaction, not just the loaded page", a
   assert(services.summarizeTransactions({ search: keyword }).count === 4, "Totals ignore paging.");
 });
 
+test("search matches SubType names and amounts, and export honours the same filters", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Smart Search ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 1_00_000_00
+  });
+  const merchant = `Corner${suffix}`;
+  services.createTransaction({
+    date: "2025-03-04",
+    accountId: bank.id,
+    method: "upi",
+    merchant,
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Movies"),
+    amountPaise: 12_345_67,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  // A figure copied off a statement, with the rupee sign and grouping commas, still matches.
+  const byAmount = services.listTransactions({ search: "₹12,345.67", from: "2025-03-01", to: "2025-03-31" });
+  assert(byAmount.some((row) => row.merchant === merchant), "Searching an exact amount should find the transaction.");
+
+  // The SubType name matches even though it isn't in the merchant or note.
+  const bySubType = services.listTransactions({ search: "movies", from: "2025-03-01", to: "2025-03-31" });
+  assert(bySubType.some((row) => row.merchant === merchant), "Searching a SubType name should find the transaction.");
+
+  const csv = services.exportTransactionsCsv({ search: merchant });
+  const dataRows = csv.trim().split("\n").slice(1);
+  assert(dataRows.length === 1, "A filtered export should hold only the matching rows.");
+  assert(dataRows[0].includes(merchant), "The exported row should be the one that matched.");
+});
+
+test("upcoming payments list AutoPay and EMIs due soon, skipping months already paid", async () => {
+  assert(state.bankId, "Bank should exist.");
+  const suffix = Date.now().toString().slice(-5);
+  const subscription = services.createAutopaySubscription({
+    name: `QA Upcoming Stream ${suffix}`,
+    amountPaise: 649_00,
+    startDate: "2027-01-15",
+    durationMonths: 12
+  });
+  const loan = services.createLoan({
+    name: `QA Upcoming Loan ${suffix}`,
+    subcategoryId: subcategoryId("Loan", "Vehicle"),
+    principalAmountPaise: 5_00_000_00,
+    startingOutstandingPaise: 5_00_000_00,
+    startMonth: "2027-01",
+    annualInterestRateBps: 900,
+    tenureMonths: 60,
+    monthlyEmiPaise: 11_000_00
+  });
+  services.createTransaction({
+    date: "2027-02-20",
+    accountId: state.bankId,
+    method: "bank_transfer",
+    typeId: typeId("Loan"),
+    subcategoryId: subcategoryId("Loan", "Vehicle"),
+    amountPaise: 11_000_00,
+    direction: "outflow",
+    kind: "emi",
+    loanId: loan.id,
+    loanPaymentType: "emi"
+  });
+
+  const upcoming = services.getUpcomingPayments(14, "2027-03-10");
+  const stream = upcoming.items.find((item) => item.id === subscription.id);
+  const emi = upcoming.items.find((item) => item.id === loan.id);
+  assert(stream?.dueDate === "2027-03-15" && stream.daysAway === 5, "AutoPay should be due on its billing day.");
+  assert(emi?.dueDate === "2027-03-20" && emi.daysAway === 10, "The EMI should follow the last EMI's day.");
+  assert(
+    upcoming.totalPaise === upcoming.items.reduce((sum, item) => sum + item.amountPaise, 0),
+    "The total should add up the listed payments."
+  );
+
+  // Paying this month's AutoPay settles it; next month's charge is outside the 14-day window.
+  services.createTransaction({
+    date: "2027-03-05",
+    accountId: state.bankId,
+    method: "upi",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "AutoPay"),
+    amountPaise: 649_00,
+    direction: "outflow",
+    kind: "expense",
+    subscriptionId: subscription.id
+  });
+  const afterPaying = services.getUpcomingPayments(14, "2027-03-10");
+  assert(
+    !afterPaying.items.some((item) => item.id === subscription.id),
+    "A month that already has its AutoPay payment must not show it as due."
+  );
+});
+
+test("the overview compares a past month against the whole previous month", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Compare Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 1_00_000_00
+  });
+  for (const [date, amount] of [
+    ["2025-05-28", 3_000_00],
+    ["2025-06-10", 4_500_00]
+  ] as const) {
+    services.createTransaction({
+      date,
+      accountId: bank.id,
+      method: "upi",
+      typeId: typeId("Expense"),
+      subcategoryId: subcategoryId("Expense", "Groceries"),
+      amountPaise: amount,
+      direction: "outflow",
+      kind: "expense"
+    });
+  }
+  const june = services.getOverview(bank.id, "2025-06");
+  assert(june.comparison.month === "2025-05", "June should compare against May.");
+  assert(!june.comparison.partial && june.comparison.throughDay === 31, "A finished month compares with all of May.");
+  assert(june.comparison.outflowPaise === 3_000_00, "May's outflow for this account should be the 28 May purchase.");
+});
+
 test("a budget only projects once enough of the month has passed", async () => {
   const suffix = Date.now().toString().slice(-5);
   const bank = services.createAccount({

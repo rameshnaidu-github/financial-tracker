@@ -20,7 +20,8 @@ import type {
   TrendReport,
   BudgetTrendReport,
   UserProfile,
-  WealthSummary
+  WealthSummary,
+  UpcomingPayments
 } from "./types";
 
 type ApiOptions = Omit<RequestInit, "body"> & {
@@ -62,6 +63,7 @@ export const Api = {
   updateSettings: (body: { cardUtilizationAlertPercent: number }) =>
     api<Record<string, string>>("/api/settings", { method: "PATCH", body }),
   wealth: () => api<WealthSummary>("/api/wealth"),
+  upcoming: () => api<UpcomingPayments>("/api/upcoming"),
   overview: (accountId?: string, month?: string) => {
     const params = new URLSearchParams();
     if (accountId) params.set("accountId", accountId);

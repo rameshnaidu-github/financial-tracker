@@ -221,8 +221,30 @@ export type Overview = {
     incomePaise: number;
     uncategorizedCount: number;
   };
+  comparison: {
+    month: string;
+    throughDay: number;
+    partial: boolean;
+    inflowPaise: number;
+    outflowPaise: number;
+  };
   recentTransactions: Transaction[];
   categoryReport: ReportCategory[];
+};
+
+export type UpcomingPayment = {
+  id: string;
+  kind: "autopay" | "loan";
+  name: string;
+  dueDate: string;
+  daysAway: number;
+  amountPaise: number;
+};
+
+export type UpcomingPayments = {
+  windowDays: number;
+  totalPaise: number;
+  items: UpcomingPayment[];
 };
 
 export type ReportCategory = {
