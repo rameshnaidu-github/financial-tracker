@@ -2857,6 +2857,35 @@ a {
   color: var(--accent);
 }
 
+.ledger-totals {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 22px;
+  margin: -2px 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2, rgba(148, 163, 184, 0.08));
+}
+
+.ledger-totals-label {
+  margin-right: auto;
+  color: var(--text);
+  font-weight: 850;
+}
+
+.ledger-total {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.ledger-total strong {
+  margin-left: 4px;
+  font-size: 1.02rem;
+}
+
 .ledger-pagination {
   margin: 14px 0 0;
   border-top: 1px solid var(--line);

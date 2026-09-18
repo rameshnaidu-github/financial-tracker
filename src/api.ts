@@ -188,6 +188,13 @@ export const Api = {
     });
     return api<Transaction[]>(`/api/transactions?${params}`);
   },
+  transactionTotals: (query: Record<string, string | number | undefined> = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") params.set(key, String(value));
+    });
+    return api<{ count: number; outflowPaise: number; inflowPaise: number }>(`/api/transactions/totals?${params}`);
+  },
   createTransaction: (body: CreateTransactionPayload) =>
     api<{ transaction: Transaction; duplicateCandidates: Transaction[] }>("/api/transactions", {
       method: "POST",

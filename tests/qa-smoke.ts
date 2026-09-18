@@ -2079,6 +2079,75 @@ test("overview cashflow inflow matches the reports inflow rule (income + refund)
   );
 });
 
+test("search totals sum every matching transaction, not just the loaded page", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({
+    name: `QA Totals Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 1_00_000_00
+  });
+  const keyword = `Bakery${suffix}`;
+  for (const amount of [120_00, 245_50, 80_00]) {
+    services.createTransaction({
+      date: "2026-09-15",
+      accountId: bank.id,
+      method: "upi",
+      merchant: `${keyword} Brown`,
+      typeId: typeId("Expense"),
+      subcategoryId: subcategoryId("Expense", "Groceries"),
+      amountPaise: amount,
+      direction: "outflow",
+      kind: "expense"
+    });
+  }
+  // A refund from the same shop is money coming back, not spending.
+  const refundType = services.createCategoryType({
+    name: `QA Totals Refund ${suffix}`,
+    behavior: "refund",
+    icon: "rotate-ccw",
+    color: "#059669"
+  });
+  const refundSub = services.createSubcategory({
+    typeId: refundType.id,
+    name: `QA Totals Refund Sub ${suffix}`,
+    icon: "rotate-ccw",
+    color: "#059669"
+  });
+  services.createTransaction({
+    date: "2026-09-16",
+    accountId: bank.id,
+    method: "upi",
+    merchant: `${keyword} refund`,
+    typeId: refundType.id,
+    subcategoryId: refundSub.id,
+    amountPaise: 50_00,
+    direction: "inflow",
+    kind: "refund"
+  });
+  // Unrelated noise that must not be counted.
+  services.createTransaction({
+    date: "2026-09-16",
+    accountId: bank.id,
+    method: "upi",
+    merchant: `Chemist ${suffix}`,
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Health"),
+    amountPaise: 999_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  const totals = services.summarizeTransactions({ search: keyword });
+  assert(totals.count === 4, "All four bakery rows should match the search.");
+  assert(totals.outflowPaise === 445_50, "Money out should sum the three purchases (120 + 245.50 + 80).");
+  assert(totals.inflowPaise === 50_00, "Money in should hold the refund.");
+
+  // Totals must not depend on paging: a one-row page still reports the full sum.
+  const onePage = services.listTransactions({ search: keyword, limit: 1 });
+  assert(onePage.length === 1, "The list itself is paged.");
+  assert(services.summarizeTransactions({ search: keyword }).count === 4, "Totals ignore paging.");
+});
+
 test("a budget only projects once enough of the month has passed", async () => {
   const suffix = Date.now().toString().slice(-5);
   const bank = services.createAccount({

@@ -1546,6 +1546,12 @@ function TransactionsPage({
   const selectedFilterType = categoryTypes.find((type) => type.id === typeId);
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
 
+  const [transactionTotals, setTransactionTotals] = useState<{
+    count: number;
+    outflowPaise: number;
+    inflowPaise: number;
+  } | null>(null);
+
   const loadPage = useCallback(async (offset = 0, append = false) => {
     const pageSize = offset === 0 ? INITIAL_TRANSACTION_LIMIT : TRANSACTION_PAGE_SIZE;
     if (offset === 0) {
@@ -1555,16 +1561,20 @@ function TransactionsPage({
     }
 
     try {
-      const rows = await Api.transactions({
+      const filters = {
         accountId: selectedAccountId || undefined,
         search: search || undefined,
         typeId: typeId || undefined,
         subcategoryId: subcategoryId || undefined,
         from: rangeIsValid ? from || undefined : undefined,
-        to: rangeIsValid ? to || undefined : undefined,
-        limit: pageSize + 1,
-        offset
-      });
+        to: rangeIsValid ? to || undefined : undefined
+      };
+      // Totals cover every match, not just the rows loaded so far, so "More" never changes them.
+      const [rows, totals] = await Promise.all([
+        Api.transactions({ ...filters, limit: pageSize + 1, offset }),
+        offset === 0 ? Api.transactionTotals(filters) : Promise.resolve(null)
+      ]);
+      if (totals) setTransactionTotals(totals);
       setHasMoreTransactions(rows.length > pageSize);
       setTransactions((current) => (append ? [...current, ...rows.slice(0, pageSize)] : rows.slice(0, pageSize)));
     } catch (err) {
@@ -1727,11 +1737,45 @@ function TransactionsPage({
 
       <div className="ledger-result-summary">
         <span>
-          Showing {transactions.length} transaction{transactions.length === 1 ? "" : "s"}
+          Showing {transactions.length}
+          {transactionTotals && transactionTotals.count > transactions.length ? ` of ${transactionTotals.count}` : ""}{" "}
+          transaction{(transactionTotals?.count ?? transactions.length) === 1 ? "" : "s"}
           {selectedAccount ? ` for ${selectedAccount.name}` : ""}
         </span>
         {hasMoreTransactions && <small>More history available</small>}
       </div>
+
+      {transactionTotals && transactionTotals.count > 0 && (
+        <div className="ledger-totals" aria-live="polite">
+          <span className="ledger-totals-label">
+            {search.trim()
+              ? `Total for “${search.trim()}”`
+              : typeId || subcategoryId || from || to || selectedAccountId
+                ? "Total for these filters"
+                : "Total of all transactions"}
+          </span>
+          <span className="ledger-total">
+            Money out <strong className="amount-out">{formatINR(transactionTotals.outflowPaise)}</strong>
+          </span>
+          {transactionTotals.inflowPaise > 0 && (
+            <span className="ledger-total">
+              Money in <strong className="amount-in">{formatINR(transactionTotals.inflowPaise)}</strong>
+            </span>
+          )}
+          {transactionTotals.inflowPaise > 0 && transactionTotals.outflowPaise > 0 && (
+            <span className="ledger-total">
+              Net{" "}
+              <strong
+                className={
+                  transactionTotals.inflowPaise - transactionTotals.outflowPaise >= 0 ? "amount-in" : "amount-out"
+                }
+              >
+                {signedImpact(transactionTotals.inflowPaise - transactionTotals.outflowPaise)}
+              </strong>
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="ledger-list">
         {loadingTransactions && transactions.length === 0 ? (

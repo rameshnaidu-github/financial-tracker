@@ -1306,7 +1306,8 @@ export function saveBatch(id: string) {
   return getBatch(id);
 }
 
-export function listTransactions(query: TransactionQuery = {}): TransactionSummary[] {
+// Shared by the ledger list and its totals, so a search always sums exactly the rows it lists.
+function buildTransactionFilters(query: TransactionQuery) {
   const filters: string[] = [];
   const params: SqlParam[] = [];
 
@@ -1359,7 +1360,33 @@ export function listTransactions(query: TransactionQuery = {}): TransactionSumma
     params.push(`%${query.search}%`, `%${query.search}%`);
   }
 
-  const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  return { where: filters.length ? `WHERE ${filters.join(" AND ")}` : "", params };
+}
+
+export type TransactionTotals = {
+  count: number;
+  outflowPaise: number;
+  inflowPaise: number;
+};
+
+export function summarizeTransactions(query: TransactionQuery = {}): TransactionTotals {
+  const { where, params } = buildTransactionFilters(query);
+  const row = asRecord<{ count: number; outflow: number | null; inflow: number | null }>(
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count,
+                SUM(CASE WHEN t.direction = 'outflow' THEN t.amount_paise ELSE 0 END) AS outflow,
+                SUM(CASE WHEN t.direction = 'inflow' THEN t.amount_paise ELSE 0 END) AS inflow
+         FROM transactions t
+         ${where}`
+      )
+      .get(...params)
+  );
+  return { count: row.count, outflowPaise: row.outflow ?? 0, inflowPaise: row.inflow ?? 0 };
+}
+
+export function listTransactions(query: TransactionQuery = {}): TransactionSummary[] {
+  const { where, params } = buildTransactionFilters(query);
   const requestedLimit = Number.isFinite(query.limit) ? Math.trunc(query.limit as number) : 200;
   const requestedOffset = Number.isFinite(query.offset) ? Math.trunc(query.offset as number) : 0;
   const limit = Math.min(Math.max(requestedLimit, 1), 500);
