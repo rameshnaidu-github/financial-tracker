@@ -607,6 +607,8 @@ type InvestmentRow = {
   note: string | null;
   created_at: string;
   updated_at: string;
+  invested_as_of: string | null;
+  value_as_of: string | null;
 };
 
 export type InvestmentSummary = {
@@ -620,6 +622,14 @@ export type InvestmentSummary = {
   currentValuePaise: number;
   gainPaise: number;
   gainPercent: number;
+  /** The figures as last typed in, before any SIPs logged since. */
+  enteredInvestedPaise: number;
+  enteredCurrentValuePaise: number;
+  investedAsOf: string;
+  valueAsOf: string;
+  /** Linked SIPs dated after the entered Invested figure, already included in investedPaise. */
+  sipsSinceCount: number;
+  sipsSincePaise: number;
   shares: number | null;
   purchaseDate: string | null;
   note: string | null;
@@ -627,11 +637,14 @@ export type InvestmentSummary = {
   updatedAt: string;
 };
 
+const INVESTMENT_COLUMNS =
+  "id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at, invested_as_of, value_as_of";
+
 export function listInvestments(): InvestmentSummary[] {
   const rows = asRecords<InvestmentRow>(
     db
       .prepare(
-        `SELECT id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at
+        `SELECT ${INVESTMENT_COLUMNS}
          FROM investments
          ORDER BY created_at, id`
       )
@@ -644,8 +657,9 @@ export function createInvestment(input: CreateInvestmentInput): InvestmentSummar
   const parsed = createInvestmentSchema.parse(input);
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO investments (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO investments
+       (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, invested_as_of, value_as_of)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     parsed.type,
@@ -654,19 +668,29 @@ export function createInvestment(input: CreateInvestmentInput): InvestmentSummar
     parsed.currentValuePaise,
     parsed.shares ?? null,
     parsed.purchaseDate ?? null,
-    parsed.note ?? null
+    parsed.note ?? null,
+    currentIsoDate(),
+    currentIsoDate()
   );
   return requireInvestmentSummary(id);
 }
 
 export function updateInvestment(id: string, input: UpdateInvestmentInput): InvestmentSummary {
   const existing = requireInvestmentRow(id);
+  const current = mapInvestment(existing);
   const patch = updateInvestmentSchema.parse(input);
+  // The edit form shows figures that already include SIPs logged since they were entered. A
+  // changed figure becomes the new base as of today; an unchanged one keeps its base and SIPs.
+  const investedChanged = patch.investedPaise !== undefined && patch.investedPaise !== current.investedPaise;
+  const valueChanged = patch.currentValuePaise !== undefined && patch.currentValuePaise !== current.currentValuePaise;
+  const today = currentIsoDate();
   const merged = {
     type: patch.type ?? existing.type,
     name: patch.name ?? existing.name,
-    investedPaise: patch.investedPaise ?? existing.invested_paise,
-    currentValuePaise: patch.currentValuePaise ?? existing.current_value_paise,
+    investedPaise: investedChanged ? (patch.investedPaise as number) : existing.invested_paise,
+    currentValuePaise: valueChanged ? (patch.currentValuePaise as number) : existing.current_value_paise,
+    investedAsOf: investedChanged ? today : existing.invested_as_of,
+    valueAsOf: valueChanged ? today : existing.value_as_of,
     shares: Object.prototype.hasOwnProperty.call(patch, "shares") ? patch.shares ?? null : existing.shares,
     purchaseDate: Object.prototype.hasOwnProperty.call(patch, "purchaseDate")
       ? patch.purchaseDate ?? null
@@ -676,7 +700,7 @@ export function updateInvestment(id: string, input: UpdateInvestmentInput): Inve
   db.prepare(
     `UPDATE investments
      SET type = ?, name = ?, invested_paise = ?, current_value_paise = ?, shares = ?, purchase_date = ?, note = ?,
-         updated_at = CURRENT_TIMESTAMP
+         invested_as_of = ?, value_as_of = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`
   ).run(
     merged.type,
@@ -686,6 +710,8 @@ export function updateInvestment(id: string, input: UpdateInvestmentInput): Inve
     merged.shares,
     merged.purchaseDate,
     merged.note,
+    merged.investedAsOf,
+    merged.valueAsOf,
     id
   );
   return requireInvestmentSummary(id);
@@ -703,7 +729,7 @@ function requireInvestmentRow(id: string) {
   const row = asRecord<InvestmentRow | undefined>(
     db
       .prepare(
-        `SELECT id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at
+        `SELECT ${INVESTMENT_COLUMNS}
          FROM investments
          WHERE id = ?`
       )
@@ -719,10 +745,35 @@ function requireInvestmentSummary(id: string) {
   return mapInvestment(requireInvestmentRow(id));
 }
 
+function linkedSipsAfter(investmentId: string, afterDate: string) {
+  return asRecord<{ count: number; total: number }>(
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count, COALESCE(SUM(t.amount_paise), 0) AS total
+         FROM investment_payments ip JOIN transactions t ON t.id = ip.transaction_id
+         WHERE ip.investment_id = ? AND t.direction = 'outflow' AND t.date > ?`
+      )
+      .get(investmentId, afterDate)
+  );
+}
+
+/**
+ * Invested and Current value as the user entered them, plus every linked SIP dated after the
+ * day each figure was entered. A SIP on or before that day is assumed to be in the entered
+ * figure already, so backfilling old SIPs never double-counts. (A SIP buys units worth what
+ * was paid, so it lifts the current value by the same amount until the next value update.)
+ */
 function mapInvestment(row: InvestmentRow): InvestmentSummary {
   const meta = INVESTMENT_TYPES.find((type) => type.id === row.type) ?? INVESTMENT_TYPES[INVESTMENT_TYPES.length - 1];
-  const gainPaise = row.current_value_paise - row.invested_paise;
-  const gainPercent = row.invested_paise > 0 ? Math.round((gainPaise / row.invested_paise) * 100) : 0;
+  const addedOn = localIsoDateFromSqliteTimestamp(row.created_at);
+  const investedAsOf = row.invested_as_of ?? addedOn;
+  const valueAsOf = row.value_as_of ?? addedOn;
+  const sipsForInvested = linkedSipsAfter(row.id, investedAsOf);
+  const sipsForValue = valueAsOf === investedAsOf ? sipsForInvested : linkedSipsAfter(row.id, valueAsOf);
+  const investedPaise = row.invested_paise + sipsForInvested.total;
+  const currentValuePaise = row.current_value_paise + sipsForValue.total;
+  const gainPaise = currentValuePaise - investedPaise;
+  const gainPercent = investedPaise > 0 ? Math.round((gainPaise / investedPaise) * 100) : 0;
   return {
     id: row.id,
     type: row.type,
@@ -730,10 +781,16 @@ function mapInvestment(row: InvestmentRow): InvestmentSummary {
     icon: meta.icon,
     color: meta.color,
     name: row.name,
-    investedPaise: row.invested_paise,
-    currentValuePaise: row.current_value_paise,
+    investedPaise,
+    currentValuePaise,
     gainPaise,
     gainPercent,
+    enteredInvestedPaise: row.invested_paise,
+    enteredCurrentValuePaise: row.current_value_paise,
+    investedAsOf,
+    valueAsOf,
+    sipsSinceCount: sipsForInvested.count,
+    sipsSincePaise: sipsForInvested.total,
     shares: row.shares,
     purchaseDate: row.purchase_date,
     note: row.note,
@@ -5045,6 +5102,11 @@ function isIsoDate(value: string) {
 function currentMonth() {
   const today = new Date();
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function localIsoDateFromSqliteTimestamp(timestamp: string) {
+  const parsed = new Date(`${timestamp.replace(" ", "T")}Z`);
+  return Number.isNaN(parsed.getTime()) ? currentIsoDate() : localIsoDate(parsed);
 }
 
 function localMonthFromSqliteTimestamp(timestamp: string) {

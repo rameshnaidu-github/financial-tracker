@@ -2764,6 +2764,126 @@ test("the transaction list filters to uncategorized rows", () => {
   assert(csv.includes("QA mystery UPI") && !csv.includes("QA known shop"), "Export should use the same filter.");
 });
 
+// ---- Linked SIPs grow a mutual fund's Invested and Current value ----
+
+function isoDaysFromToday(days: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function logSip(investmentId: string, date: string, amountPaise: number) {
+  assert(state.bankId, "Bank should exist.");
+  const created = services.createTransaction({
+    date,
+    accountId: state.bankId,
+    method: "bank_transfer",
+    merchant: "QA SIP",
+    typeId: typeId("Investment"),
+    subcategoryId: subcategoryId("Investment", "Mutual Funds"),
+    amountPaise,
+    direction: "outflow",
+    kind: "investment",
+    investmentId
+  }).transaction;
+  assert(created, "SIP should be created.");
+  return created.id;
+}
+
+function holding(id: string) {
+  const item = services.listInvestments().find((investment) => investment.id === id);
+  assert(item, "Holding should be listed.");
+  return item;
+}
+
+test("linked SIPs after the entered figures grow invested and current value once", () => {
+  const fund = services.createInvestment({
+    type: "mutual_funds",
+    name: "QA Flexi Cap SIP",
+    investedPaise: 1_20_000_00,
+    currentValuePaise: 1_38_500_00
+  });
+  // Already in the entered figures: a backfilled SIP from last month and one from today.
+  logSip(fund.id, isoDaysFromToday(-30), 10_000_00);
+  logSip(fund.id, isoDaysFromToday(0), 10_000_00);
+  let item = holding(fund.id);
+  assert(item.investedPaise === 1_20_000_00 && item.currentValuePaise === 1_38_500_00, "SIPs up to today are already in the entered figures.");
+  assert(item.sipsSinceCount === 0, "Nothing should be counted as added yet.");
+
+  logSip(fund.id, isoDaysFromToday(1), 10_000_00);
+  logSip(fund.id, isoDaysFromToday(32), 5_000_00);
+  item = holding(fund.id);
+  assert(item.investedPaise === 1_35_000_00, `Invested should grow by 15,000, got ${item.investedPaise}.`);
+  assert(item.currentValuePaise === 1_53_500_00, `Current value should grow by 15,000, got ${item.currentValuePaise}.`);
+  assert(item.gainPaise === 18_500_00, "A SIP buys units worth what was paid, so the gain is unchanged.");
+  assert(item.sipsSinceCount === 2 && item.sipsSincePaise === 15_000_00, "The card should know 2 SIPs worth 15,000 were added.");
+  assert(item.enteredInvestedPaise === 1_20_000_00, "The entered figure is kept separately.");
+});
+
+test("editing a holding resets only the figure that changed", () => {
+  const fund = services.createInvestment({
+    type: "mutual_funds",
+    name: "QA Index SIP",
+    investedPaise: 50_000_00,
+    currentValuePaise: 55_000_00
+  });
+  // Entered 60 days ago; one SIP has run since.
+  const enteredOn = isoDaysFromToday(-60);
+  dbModule.db
+    .prepare("UPDATE investments SET invested_as_of = ?, value_as_of = ? WHERE id = ?")
+    .run(enteredOn, enteredOn, fund.id);
+  logSip(fund.id, isoDaysFromToday(-30), 5_000_00);
+  const before = holding(fund.id);
+  assert(before.investedPaise === 55_000_00 && before.currentValuePaise === 60_000_00, "SIP counted before editing.");
+
+  // Saving the form unchanged (it shows the grown figures) must not change anything.
+  services.updateInvestment(fund.id, {
+    name: "QA Index SIP (renamed)",
+    investedPaise: before.investedPaise,
+    currentValuePaise: before.currentValuePaise
+  });
+  const unchanged = holding(fund.id);
+  assert(unchanged.investedPaise === 55_000_00 && unchanged.currentValuePaise === 60_000_00, "An unchanged save keeps the SIP.");
+  assert(unchanged.sipsSinceCount === 1 && unchanged.investedAsOf === enteredOn, "An unchanged save keeps the SIP baseline.");
+
+  // Today's statement value already includes last month's SIP; Invested is left alone.
+  services.updateInvestment(fund.id, { currentValuePaise: 62_000_00 });
+  const revalued = holding(fund.id);
+  assert(revalued.currentValuePaise === 62_000_00, `The typed value should stand as is, got ${revalued.currentValuePaise}.`);
+  assert(revalued.valueAsOf === isoDaysFromToday(0), "The value baseline moves to today.");
+  assert(revalued.investedPaise === 55_000_00 && revalued.investedAsOf === enteredOn, "Invested still counts the SIP.");
+
+  logSip(fund.id, isoDaysFromToday(1), 5_000_00);
+  const later = holding(fund.id);
+  assert(later.currentValuePaise === 67_000_00 && later.investedPaise === 60_000_00, "A later SIP lifts both figures again.");
+});
+
+test("SIP growth follows deletes, feeds net worth and works for older holdings", () => {
+  const fund = services.createInvestment({
+    type: "mutual_funds",
+    name: "QA Older Fund",
+    investedPaise: 10_000_00,
+    currentValuePaise: 11_000_00
+  });
+  // A holding from before this change has no as-of dates and was added some time ago.
+  dbModule.db
+    .prepare("UPDATE investments SET invested_as_of = NULL, value_as_of = NULL, created_at = '2026-01-10 06:00:00' WHERE id = ?")
+    .run(fund.id);
+  const worthBefore = services.getWealthSummary().netWorth.investmentsPaise;
+  logSip(fund.id, "2026-01-05", 1_000_00);
+  const sipId = logSip(fund.id, "2026-02-05", 2_000_00);
+  const item = holding(fund.id);
+  assert(item.investedAsOf === "2026-01-10", `An older holding counts from the day it was added, got ${item.investedAsOf}.`);
+  assert(item.investedPaise === 12_000_00 && item.currentValuePaise === 13_000_00, "Only the SIP after it was added counts.");
+  assert(
+    services.getWealthSummary().netWorth.investmentsPaise === worthBefore + 2_000_00,
+    "Net worth should use the grown current value."
+  );
+  services.deleteTransaction(sipId);
+  const after = holding(fund.id);
+  assert(after.investedPaise === 10_000_00 && after.currentValuePaise === 11_000_00, "Deleting the SIP takes it back out.");
+});
+
 let failed = 0;
 
 for (const item of tests) {

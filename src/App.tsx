@@ -4362,7 +4362,8 @@ function InvestmentsPage({
         <p className="helper-text investments-asof">
           <Info size={14} />
           Values are entered manually — figures reflect what you last saved on{" "}
-          {formatDateWithYear(lastUpdated.slice(0, 10))}.
+          {formatDateWithYear(lastUpdated.slice(0, 10))}. SIPs you log against a mutual fund are added to it
+          automatically.
         </p>
       )}
 
@@ -4449,6 +4450,13 @@ function InvestmentCard({
           <strong className={positive ? "amount-in" : "amount-out"}>{signedImpact(investment.gainPaise)}</strong>
         </div>
       </div>
+
+      {investment.sipsSinceCount > 0 && (
+        <p className="investment-sip-note">
+          Includes {formatINR(investment.sipsSincePaise)} from {investment.sipsSinceCount} SIP
+          {investment.sipsSinceCount === 1 ? "" : "s"} logged since {formatDateWithYear(investment.investedAsOf)}.
+        </p>
+      )}
 
       {investment.purchaseDate && (
         <p className="investment-note">Invested on {formatDateWithYear(investment.purchaseDate)}</p>
@@ -4621,6 +4629,13 @@ function InvestmentForm({
         Current value
         <input value={currentValue} onChange={(event) => setCurrentValue(event.target.value)} placeholder="₹0" inputMode="decimal" required />
       </label>
+      {type === "mutual_funds" && (
+        <p className="field-hint investment-form-hint">
+          {investment
+            ? "These include SIPs you've logged. Change a figure only to match your statement; SIPs logged after today are added on top."
+            : "SIPs you log against this fund after today are added to both figures automatically."}
+        </p>
+      )}
       {type === "stocks" && (
         <label>
           Number of shares (optional)
@@ -6191,7 +6206,7 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "Are my investment values updated automatically?",
     answer:
-      "No. Stocks, mutual funds, gold, land, property, PF and fixed-deposit (FD) values are entered by you and stay fixed until you edit them. The Investments page shows the date you last saved a change so you know how current the figures are. Each investment type is a dropdown showing its total invested, current value and net gain — click it to reveal every holding of that type."
+      "Market prices aren't fetched — stocks, mutual funds, gold, land, property, PF and fixed-deposit (FD) values are entered by you. One exception: a SIP you log against a mutual fund (Type Investment, SubType Mutual Funds, linked to the fund) is added to that fund's Invested and Current value automatically, if it's dated after you last typed those figures. SIPs from before then are assumed to be included already, so nothing is counted twice. When you enter a new value from your statement, that becomes the new starting point. The Investments page shows the date you last saved a change so you know how current the figures are. Each investment type is a dropdown showing its total invested, current value and net gain — click it to reveal every holding of that type."
   },
   {
     question: "How do vacations work, and do trip expenses still count as normal expenses?",

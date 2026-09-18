@@ -267,6 +267,10 @@ function ensureInvestmentIndexes() {
 function ensureInvestmentColumns() {
   addColumnIfMissing("investments", "shares", "REAL");
   addColumnIfMissing("investments", "purchase_date", "TEXT");
+  // The day the user last entered each figure; linked SIPs dated after it are added on top.
+  // NULL (holdings from before this) means "the day the holding was added".
+  addColumnIfMissing("investments", "invested_as_of", "TEXT");
+  addColumnIfMissing("investments", "value_as_of", "TEXT");
 }
 
 function migrateInvestmentTypes() {
@@ -293,12 +297,16 @@ function migrateInvestmentTypes() {
         purchase_date TEXT,
         note TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        invested_as_of TEXT,
+        value_as_of TEXT
       );
 
       INSERT INTO investments_new
-        (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at)
-      SELECT id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at
+        (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at,
+         invested_as_of, value_as_of)
+      SELECT id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at,
+             invested_as_of, value_as_of
       FROM investments;
 
       DROP TABLE investments;
