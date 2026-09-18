@@ -6787,9 +6787,12 @@ function EmptyState({ text }: { text: string }) {
 
 function PanelLoader({ label }: { label: string }) {
   return (
-    <div className="panel-loader">
-      <Loader2 className="spin" size={20} />
-      {label}
+    <div className="skeleton-block" role="status" aria-busy="true">
+      <span className="visually-hidden">{label}</span>
+      <span className="skeleton-line" />
+      <span className="skeleton-line" />
+      <span className="skeleton-line" />
+      <span className="skeleton-line" />
     </div>
   );
 }

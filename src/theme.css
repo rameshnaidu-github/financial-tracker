@@ -1,0 +1,885 @@
+/*
+ * Design layer (loaded after styles.css).
+ * Direction: "soft structuralism" for a personal-finance dashboard — one cool grey family, a single
+ * desaturated ink-blue accent, machined double-bezel surfaces, Geist with tabular figures, and
+ * spring-eased motion. Money colours stay semantic (green in, red out) but toned down.
+ */
+
+/* ---------- Tokens ---------- */
+:root {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --bg: #f3f4f7;
+  --bg-deep: #e9ebf0;
+  --panel: #ffffff;
+  --panel-soft: #f7f8fa;
+  --text: #121826;
+  --muted: #5f6878;
+  --line: #e3e6ec;
+  --line-strong: #cdd2db;
+  --accent: #3a55b4;
+  --accent-strong: #2c4494;
+  --accent-soft: #eaeefa;
+  --accent-blue: #3a55b4;
+  --good: #1f8a5b;
+  --good-soft: #e6f4ec;
+  --danger: #c2413a;
+  --danger-soft: #fbeceb;
+  --warning: #b7791f;
+  --warning-soft: #fbf3e4;
+
+  /* Shadows carry the ink hue instead of flat black, from one light source above. */
+  --shadow-soft: 0 1px 2px rgba(18, 24, 38, 0.04), 0 8px 24px -14px rgba(34, 48, 92, 0.18);
+  --shadow: 0 1px 2px rgba(18, 24, 38, 0.05), 0 22px 48px -24px rgba(34, 48, 92, 0.28);
+
+  /* Double bezel: a translucent tray (shell) holding an inner core with its own highlight. */
+  --bezel-width: 5px;
+  --bezel-shell: rgba(18, 24, 38, 0.035);
+  --bezel-ring: rgba(18, 24, 38, 0.07);
+  --bezel-core-ring: rgba(18, 24, 38, 0.06);
+  --bezel-highlight: rgba(255, 255, 255, 0.95);
+  --radius-shell: 22px;
+  --radius-card: 16px;
+  --radius-control: 12px;
+
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 180ms;
+  --dur: 320ms;
+  --dur-slow: 720ms;
+
+  --z-sticky: 20;
+  --z-nav: 30;
+  --z-overlay: 40;
+  --z-toast: 50;
+  --z-grain: 60;
+
+  color: var(--text);
+  background: var(--bg);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0b0e14;
+  --bg-deep: #080a0f;
+  --panel: #131823;
+  --panel-soft: #0f131c;
+  --text: #e8ecf4;
+  --muted: #98a2b4;
+  --line: #222938;
+  --line-strong: #323b4d;
+  --accent: #8fa3ea;
+  --accent-strong: #b4c2f3;
+  --accent-soft: #1b2341;
+  --accent-blue: #8fa3ea;
+  --good: #4cc38a;
+  --good-soft: #10271d;
+  --danger: #f0837b;
+  --danger-soft: #2c1513;
+  --warning: #e3b25a;
+  --warning-soft: #2a2011;
+
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 26px -16px rgba(0, 0, 0, 0.6);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 26px 52px -26px rgba(0, 0, 0, 0.75);
+  --bezel-shell: rgba(255, 255, 255, 0.035);
+  --bezel-ring: rgba(255, 255, 255, 0.07);
+  --bezel-core-ring: rgba(255, 255, 255, 0.05);
+  --bezel-highlight: rgba(255, 255, 255, 0.06);
+
+  color: var(--text);
+  background: var(--bg);
+}
+
+/* ---------- Base ---------- */
+html {
+  scroll-behavior: smooth;
+}
+
+body,
+button,
+input,
+select,
+textarea {
+  font-family: var(--font-sans);
+}
+
+body {
+  min-height: 100dvh;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  background:
+    radial-gradient(1200px 520px at 12% -10%, rgba(58, 85, 180, 0.07), transparent 60%),
+    radial-gradient(900px 480px at 110% 8%, rgba(31, 138, 91, 0.045), transparent 60%),
+    var(--bg);
+}
+
+:root[data-theme="dark"] body {
+  background:
+    radial-gradient(1200px 520px at 12% -10%, rgba(143, 163, 234, 0.08), transparent 60%),
+    radial-gradient(900px 480px at 110% 8%, rgba(76, 195, 138, 0.04), transparent 60%),
+    var(--bg);
+}
+
+/* Fine film grain over everything, fixed so it never repaints on scroll. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-grain);
+  pointer-events: none;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+:root[data-theme="dark"] body::after {
+  opacity: 0.045;
+}
+
+.lucide {
+  stroke-width: 1.6;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+/* Money colours always win over generic "strong" text colours (as the base stylesheet intends). */
+.amount-in {
+  color: var(--good) !important;
+}
+
+.amount-out {
+  color: var(--danger) !important;
+}
+
+/* ---------- Shell ---------- */
+/* Desktop only: below 1121px the base layout's single column (and the bottom bar) takes over. */
+@media (min-width: 1121px) {
+  .app-shell {
+    grid-template-columns: 252px minmax(0, 1fr);
+    gap: 8px;
+  }
+}
+
+/* A floating island rather than a panel glued to the window edge. */
+.sidebar {
+  top: 12px;
+  height: calc(100dvh - 24px);
+  margin: 12px 0 12px 12px;
+  border: var(--bezel-width) solid var(--bezel-shell);
+  border-radius: var(--radius-shell);
+  outline: 1px solid var(--bezel-ring);
+  background: rgba(255, 255, 255, 0.78);
+  background-clip: padding-box;
+  box-shadow: inset 0 1px 0 var(--bezel-highlight), var(--shadow-soft);
+  padding: 18px 12px;
+}
+
+:root[data-theme="dark"] .sidebar {
+  background: rgba(19, 24, 35, 0.82);
+}
+
+.brand {
+  padding: 2px 6px 6px;
+}
+
+.brand strong {
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.brand-mark {
+  border-radius: 12px;
+  background: var(--text);
+  color: var(--panel);
+  font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 6px 16px -8px rgba(18, 24, 38, 0.5);
+}
+
+.nav-list {
+  min-height: calc(100dvh - 128px);
+  gap: 2px;
+}
+
+.nav-item {
+  position: relative;
+  border-radius: var(--radius-control);
+  padding: 10px 12px;
+  font-weight: 520;
+  transition:
+    background-color var(--dur) var(--ease-spring),
+    color var(--dur) var(--ease-spring),
+    transform var(--dur) var(--ease-spring);
+}
+
+.nav-item:hover {
+  background: var(--bezel-shell);
+  color: var(--text);
+}
+
+.nav-item.active {
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 620;
+  box-shadow: 0 0 0 1px var(--bezel-core-ring), 0 6px 14px -10px rgba(34, 48, 92, 0.45);
+}
+
+:root[data-theme="dark"] .nav-item.active {
+  background: #1a2130;
+}
+
+.nav-item.active .lucide {
+  color: var(--accent);
+}
+
+/* Current page marker. */
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -7px;
+  width: 3px;
+  height: 18px;
+  border-radius: 0 4px 4px 0;
+  background: var(--accent);
+  transform: translateY(-50%);
+}
+
+.profile-nav-item {
+  border: 0;
+  background: var(--bezel-shell);
+}
+
+.main-shell {
+  width: 100%;
+  max-width: 1440px;
+  padding: 30px 32px 56px;
+}
+
+.topbar {
+  align-items: flex-end;
+  margin-bottom: 26px;
+}
+
+.topbar h1 {
+  font-size: clamp(1.9rem, 3vw, 2.6rem);
+  font-weight: 650;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+}
+
+/* Eyebrow: a small tag above the heading, not a shouted all-caps line. */
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 3px 10px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* ---------- Surfaces: double bezel ---------- */
+.panel,
+.summary-card {
+  border: var(--bezel-width) solid var(--bezel-shell);
+  border-radius: var(--radius-shell);
+  outline: 1px solid var(--bezel-ring);
+  background: var(--panel);
+  background-clip: padding-box;
+  box-shadow:
+    inset 0 0 0 1px var(--bezel-core-ring),
+    inset 0 1px 0 var(--bezel-highlight),
+    var(--shadow-soft);
+}
+
+:root[data-theme="dark"] .summary-card,
+:root[data-theme="dark"] .panel {
+  background: var(--panel);
+  background-clip: padding-box;
+}
+
+.panel {
+  padding: 20px 22px 22px;
+}
+
+.panel-header {
+  margin-bottom: 16px;
+}
+
+.panel-header h2,
+.panel h2 {
+  font-size: 1.02rem;
+  font-weight: 640;
+  letter-spacing: -0.015em;
+}
+
+/* Neutral cards; the icon carries the accent instead of a pastel wash per card. */
+.summary-grid .summary-card:nth-child(n),
+:root[data-theme="dark"] .summary-grid .summary-card:nth-child(n) {
+  background: var(--panel);
+  background-clip: padding-box;
+}
+
+.summary-card {
+  gap: 14px;
+  padding: 18px 18px 20px;
+}
+
+.summary-card > span {
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(58, 85, 180, 0.1);
+}
+
+:root[data-theme="dark"] .summary-card > span {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px rgba(143, 163, 234, 0.14);
+}
+
+.summary-card strong {
+  font-weight: 640;
+  letter-spacing: -0.025em;
+}
+
+.summary-grid {
+  gap: 14px;
+}
+
+.page-grid,
+.two-column {
+  gap: 18px;
+}
+
+/* Inner cards (accounts, loans, AutoPay, investments) sit one level down: lighter, no bezel. */
+.loan-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--panel-soft);
+  box-shadow: inset 0 1px 0 var(--bezel-highlight);
+  transition:
+    transform var(--dur) var(--ease-spring),
+    box-shadow var(--dur) var(--ease-spring),
+    border-color var(--dur) var(--ease-spring);
+}
+
+.loan-card:hover {
+  border-color: var(--line-strong);
+  box-shadow: inset 0 1px 0 var(--bezel-highlight), var(--shadow-soft);
+}
+
+.ledger-row,
+.table-row {
+  border-radius: 14px;
+  transition:
+    background-color var(--dur) var(--ease-spring),
+    transform var(--dur) var(--ease-spring),
+    box-shadow var(--dur) var(--ease-spring);
+}
+
+.ledger-row:hover {
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+
+.table-head {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.ledger-totals {
+  border-radius: var(--radius-card);
+  background: var(--panel-soft);
+  box-shadow: inset 0 1px 0 var(--bezel-highlight);
+}
+
+/* ---------- Controls ---------- */
+button,
+.primary-action,
+.secondary-action,
+.icon-button,
+.filter-chip,
+a.secondary-action {
+  transition:
+    transform var(--dur) var(--ease-spring),
+    background-color var(--dur) var(--ease-spring),
+    color var(--dur) var(--ease-spring),
+    box-shadow var(--dur) var(--ease-spring),
+    border-color var(--dur) var(--ease-spring);
+}
+
+button:not(:disabled):active,
+a.secondary-action:active {
+  transform: scale(0.98);
+}
+
+.primary-action,
+.secondary-action {
+  min-height: 42px;
+  border-radius: 999px;
+  padding: 0 18px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.primary-action {
+  background: var(--text);
+  color: var(--panel);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 8px 18px -10px rgba(18, 24, 38, 0.55);
+  padding-left: 6px;
+}
+
+:root[data-theme="dark"] .primary-action {
+  background: var(--accent);
+  color: #0b0e14;
+}
+
+.primary-action:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 14px 26px -12px rgba(18, 24, 38, 0.6);
+}
+
+/* Button-in-button: the leading icon sits in its own island and nudges on hover. */
+.primary-action > .lucide {
+  box-sizing: content-box;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  padding: 7px;
+  transition: transform var(--dur) var(--ease-spring);
+}
+
+:root[data-theme="dark"] .primary-action > .lucide {
+  background: rgba(11, 14, 20, 0.14);
+}
+
+.primary-action:not(:disabled):hover > .lucide {
+  transform: translate(1px, -1px) scale(1.05);
+}
+
+.primary-action:not(:has(> .lucide)) {
+  padding-left: 18px;
+}
+
+.secondary-action {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.secondary-action:not(:disabled):hover {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
+}
+
+.secondary-action .lucide {
+  color: var(--accent);
+}
+
+.danger-action,
+.danger-action .lucide {
+  color: var(--danger);
+}
+
+.icon-button {
+  border-radius: var(--radius-control);
+  background: var(--panel);
+}
+
+.icon-button:not(:disabled):hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+:root[data-theme="dark"] .icon-button {
+  background: var(--panel);
+}
+
+input,
+select,
+textarea {
+  border-radius: var(--radius-control);
+  border-color: var(--line);
+  background: var(--panel);
+  transition:
+    border-color var(--dur-fast) var(--ease-spring),
+    box-shadow var(--dur-fast) var(--ease-spring);
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--line-strong);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+  outline: none;
+}
+
+.control-field {
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: inset 0 1px 0 var(--bezel-highlight), var(--shadow-soft);
+}
+
+:root[data-theme="dark"] .control-field {
+  background: var(--panel);
+}
+
+.control-label {
+  font-weight: 560;
+  letter-spacing: 0.01em;
+}
+
+.filter-chip {
+  border-radius: 999px;
+}
+
+/* Keyboard focus is always visible. */
+:where(button, a, input, select, textarea, summary, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A field wrapper (label + select) lights up as one control when anything inside has focus. */
+.control-field:focus-within,
+.search-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.control-field select:focus-visible,
+.search-box input:focus-visible {
+  outline: none;
+}
+
+/* ---------- Feedback ---------- */
+.toast {
+  z-index: var(--z-toast);
+  border-radius: 16px;
+  background: rgba(18, 24, 38, 0.92);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), var(--shadow);
+  backdrop-filter: blur(12px);
+  animation: toast-in var(--dur-slow) var(--ease-spring) both;
+}
+
+.attention-banner {
+  border-radius: var(--radius-card);
+  border-color: color-mix(in srgb, var(--warning) 30%, transparent);
+  background: var(--warning-soft);
+}
+
+.attention-banner > svg {
+  color: var(--warning);
+}
+
+/* Skeleton loading: the shape of content, not a spinner. */
+.skeleton-block {
+  display: grid;
+  gap: 12px;
+  padding: 6px 2px;
+}
+
+.skeleton-line {
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--line) 0%, var(--panel-soft) 45%, var(--line) 90%);
+  background-size: 220% 100%;
+  animation: shimmer 1.4s var(--ease-spring) infinite;
+}
+
+.skeleton-line:nth-child(1) {
+  width: 42%;
+  height: 16px;
+}
+
+.skeleton-line:nth-child(2) {
+  width: 88%;
+}
+
+.skeleton-line:nth-child(3) {
+  width: 72%;
+}
+
+.skeleton-line:nth-child(4) {
+  width: 56%;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---------- Motion ---------- */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* Content cascades in when a page opens: header first, then sections in order. */
+.topbar {
+  animation: rise var(--dur-slow) var(--ease-out) both;
+}
+
+.content-area > *,
+.content-area > .page-grid > *,
+.content-area > .two-column > *,
+.summary-grid > * {
+  animation: rise var(--dur-slow) var(--ease-out) both;
+}
+
+.content-area > .page-grid > *:nth-child(2),
+.content-area > .two-column > *:nth-child(2),
+.summary-grid > *:nth-child(2) {
+  animation-delay: 60ms;
+}
+
+.content-area > .page-grid > *:nth-child(3),
+.summary-grid > *:nth-child(3) {
+  animation-delay: 120ms;
+}
+
+.content-area > .page-grid > *:nth-child(4),
+.summary-grid > *:nth-child(4) {
+  animation-delay: 180ms;
+}
+
+.content-area > .page-grid > *:nth-child(n + 5) {
+  animation-delay: 240ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+/* ---------- Mobile ---------- */
+@media (max-width: 1120px) {
+  .main-shell {
+    padding: 20px 16px 104px;
+  }
+
+  .mobile-nav {
+    z-index: var(--z-nav);
+    border: 4px solid var(--bezel-shell);
+    border-radius: 24px;
+    outline: 1px solid var(--bezel-ring);
+    background: rgba(255, 255, 255, 0.86);
+    background-clip: padding-box;
+    box-shadow: inset 0 1px 0 var(--bezel-highlight), var(--shadow);
+    backdrop-filter: blur(18px);
+    padding: 4px;
+  }
+
+  :root[data-theme="dark"] .mobile-nav {
+    background: rgba(19, 24, 35, 0.86);
+  }
+
+  .mobile-nav button {
+    border-radius: 16px;
+    font-weight: 560;
+  }
+
+  .mobile-nav button.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .mobile-more-sheet {
+    z-index: var(--z-overlay);
+    border: 4px solid var(--bezel-shell);
+    border-radius: 24px;
+    outline: 1px solid var(--bezel-ring);
+    background-clip: padding-box;
+    animation: rise var(--dur) var(--ease-spring) both;
+  }
+
+  .mobile-more-sheet button {
+    border-radius: 14px;
+  }
+}
+
+@media (max-width: 720px) {
+  :root {
+    --bezel-width: 4px;
+    --radius-shell: 20px;
+  }
+
+  .panel {
+    padding: 16px;
+  }
+
+  .topbar h1 {
+    font-size: 1.9rem;
+  }
+}
+
+/* ---------- Fit fixes for the roomier bezel surfaces ---------- */
+/* The tag strip already clips gracefully, so it can give up width before the row overflows. */
+.ledger-row {
+  grid-template-columns: minmax(150px, 1.1fr) minmax(0, 2fr) minmax(104px, auto) auto;
+}
+
+/* Three figures side by side need room; wrap to two columns in a narrow card instead of spilling. */
+.net-worth-breakdown {
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+}
+
+.net-worth-breakdown strong {
+  font-size: clamp(0.92rem, 1.2vw, 1.05rem);
+  letter-spacing: -0.015em;
+}
+
+/* Tone variants keep the icon island tinted, in their own semantic colour. */
+.summary-card.warning > span,
+:root[data-theme="dark"] .summary-card.warning > span {
+  background: var(--warning-soft);
+  color: var(--warning);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 18%, transparent);
+}
+
+.summary-card.good > span,
+:root[data-theme="dark"] .summary-card.good > span {
+  background: var(--good-soft);
+  color: var(--good);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--good) 18%, transparent);
+}
+
+@media (max-width: 1120px) {
+  /* Stacked header: keep the title on the reading edge. */
+  .topbar {
+    align-items: flex-start;
+  }
+}
+
+/* The entry form reflows by the width of its own panel, not the window, so it never clips. */
+.weekly-grid > * {
+  container-type: inline-size;
+}
+
+@container (max-width: 620px) {
+  .entry-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (max-width: 340px) {
+  .entry-form {
+    grid-template-columns: 1fr;
+  }
+
+  .entry-form .wide {
+    grid-column: auto;
+  }
+}
+
+.primary-action,
+.secondary-action {
+  white-space: nowrap;
+}
+
+.impact-values strong {
+  white-space: nowrap;
+}
+
+.impact-card {
+  border-radius: 14px;
+}
+
+.account-line {
+  border-color: var(--line);
+  border-radius: 14px;
+}
+
+.attention-banner > button {
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--warning);
+  padding: 5px 14px;
+  font-weight: 600;
+}
+
+.attention-banner > button:hover {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+
+/* Icon-only row actions keep a square hit area; the pill padding above must not squeeze the icon. */
+.secondary-action.row-icon-action {
+  width: 38px;
+  min-width: 38px;
+  padding: 0;
+}
+
+.search-box {
+  border-radius: var(--radius-control);
+  background: var(--panel);
+}
+
+/* Tags wrap onto a second line instead of being clipped mid-word. */
+.transaction-tag-strip {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
