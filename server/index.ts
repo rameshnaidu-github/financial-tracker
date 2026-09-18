@@ -447,16 +447,16 @@ if (existsSync(distDir)) {
   await app.register(fastifyStatic, {
     root: distDir,
     cacheControl: false,
-    setHeaders(res, filePath) {
+    setHeaders(reply, filePath) {
       // Content-hashed assets are immutable and safe to cache forever.
       // index.html must never be cached, so a full reload always loads the
       // newest build (and the fresh asset hashes it references).
       if (filePath.endsWith(`${path.sep}index.html`) || filePath.endsWith("/index.html")) {
-        res.setHeader("cache-control", "no-store");
+        reply.header("cache-control", "no-store");
       } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
-        res.setHeader("cache-control", "public, max-age=31536000, immutable");
+        reply.header("cache-control", "public, max-age=31536000, immutable");
       } else {
-        res.setHeader("cache-control", "no-cache");
+        reply.header("cache-control", "no-cache");
       }
     }
   });
