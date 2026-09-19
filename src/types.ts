@@ -314,7 +314,7 @@ export type WealthSummary = {
   runwayMonths: number | null;
 };
 
-export type InvestmentType = "stocks" | "mutual_funds" | "gold" | "land" | "property" | "pf" | "other";
+export type InvestmentType = "stocks" | "mutual_funds" | "gold" | "land" | "property" | "pf" | "fd" | "bonds" | "other";
 
 export type Investment = {
   id: string;

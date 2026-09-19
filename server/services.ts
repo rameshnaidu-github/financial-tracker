@@ -6,6 +6,7 @@ import {
   AUTOPAY_SUBCATEGORY_ID,
   INFLOW_BEHAVIORS,
   MUTUAL_FUNDS_SUBCATEGORY_ID,
+  monthlyInterestPaise,
   SELF_TRANSFER_SUBCATEGORY_ID,
   createAccountSchema,
   createAutopaySubscriptionSchema,
@@ -408,8 +409,32 @@ export function listLoans(includeArchived = false): LoanSummary[] {
   return rows.map(mapLoan);
 }
 
+/**
+ * An EMI that doesn't cover one month's interest never pays the loan down; catch it when the
+ * loan is saved rather than when the first EMI is refused.
+ */
+function validateLoanTerms(loan: {
+  startingOutstandingPaise: number;
+  annualInterestRateBps: number;
+  monthlyEmiPaise: number;
+}) {
+  const interest = monthlyInterestPaise(loan.startingOutstandingPaise, loan.annualInterestRateBps);
+  if (loan.startingOutstandingPaise > 0 && loan.monthlyEmiPaise <= interest) {
+    throw badRequest(
+      `An EMI of ${rupees(loan.monthlyEmiPaise)} doesn't cover the ${rupees(interest)} monthly interest on ` +
+        `${rupees(loan.startingOutstandingPaise)} at ${(loan.annualInterestRateBps / 100).toFixed(2)}%. ` +
+        "Check the EMI and the interest rate."
+    );
+  }
+}
+
+function rupees(paise: number) {
+  return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+}
+
 export function createLoan(input: CreateLoanInput): LoanSummary {
   const parsed = createLoanSchema.parse(input);
+  validateLoanTerms(parsed);
   const subcategory = requireLoanSubcategory(parsed.subcategoryId);
   const id = randomUUID();
 
@@ -458,6 +483,7 @@ export function updateLoan(id: string, input: UpdateLoanInput): LoanSummary {
     tenureMonths: merged.tenureMonths,
     monthlyEmiPaise: merged.monthlyEmiPaise
   });
+  validateLoanTerms(parsed);
   requireLoanSubcategory(parsed.subcategoryId);
 
   transaction(() => {
@@ -1917,7 +1943,8 @@ function computeNetWorthNow() {
     .filter((account) => account.type === "credit_card")
     .reduce((sum, account) => sum + account.outstandingPaise, 0);
   const investmentsPaise = listInvestments().reduce((sum, item) => sum + item.currentValuePaise, 0);
-  const loanPaise = listLoans(false).reduce((sum, loan) => sum + loan.outstandingPaise, 0);
+  // Archiving hides a loan from the tracker; money still owed on it is still owed.
+  const loanPaise = listLoans(true).reduce((sum, loan) => sum + loan.outstandingPaise, 0);
   const liabilitiesPaise = creditPaise + loanPaise;
   return {
     liquidPaise,
@@ -1960,6 +1987,7 @@ export function getWealthSummary(): WealthSummary {
     { key: "realestate", label: "Real estate", color: "#0f766e", valuePaise: byType(["land", "property"]) },
     { key: "pf", label: "PF", color: "#059669", valuePaise: byType(["pf"]) },
     { key: "fd", label: "Fixed deposit", color: "#0891b2", valuePaise: byType(["fd"]) },
+    { key: "bonds", label: "Bonds", color: "#6d5bd0", valuePaise: byType(["bonds"]) },
     { key: "other", label: "Other", color: "#64748b", valuePaise: byType(["other"]) }
   ].filter((segment) => segment.valuePaise > 0);
 
@@ -3678,11 +3706,22 @@ function mapLoan(row: LoanRow): LoanSummary {
     row.annual_interest_rate_bps,
     row.monthly_emi_paise
   );
-  const monthsLeft =
-    amortizedMonthsLeft === null
-      ? contractualMonthsLeft
-      : Math.min(amortizedMonthsLeft, contractualMonthsLeft);
+  // The balance decides how many EMIs remain; the contract count is only a fallback when the EMI
+  // can't be amortised. (Taking the smaller of the two said "Closing now" on loans still owed.)
+  const monthsLeft = outstandingPaise <= 0 ? 0 : amortizedMonthsLeft ?? contractualMonthsLeft;
   const monthsElapsed = historicalInstallments + trackedEmiCount;
+  // The remaining EMIs start this month unless this month's EMI is already recorded.
+  const paidThisMonth = asRecord<{ count: number }>(
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id
+         WHERE lp.loan_id = ? AND lp.payment_type = 'emi' AND substr(t.date, 1, 7) = ?`
+      )
+      .get(row.id, currentMonth())
+  ).count > 0;
+  const closureMonth =
+    monthsLeft > 0 ? addMonths(currentMonth(), (paidThisMonth ? 1 : 0) + monthsLeft - 1) : null;
 
   return {
     id: row.id,
@@ -3707,7 +3746,7 @@ function mapLoan(row: LoanRow): LoanSummary {
     monthlyEmiPaise: row.monthly_emi_paise,
     monthsElapsed,
     monthsLeft,
-    closureMonth: addMonths(currentMonth(), monthsLeft),
+    closureMonth,
     isArchived: Boolean(row.is_archived),
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -3744,7 +3783,8 @@ function calculateLoanPaymentSplitFromOutstanding(
   outstandingBeforePaise: number,
   annualInterestRateBps: number,
   amountPaise: number,
-  paymentType: LoanPaymentType
+  paymentType: LoanPaymentType,
+  monthlyEmiPaise: number
 ) {
   if (outstandingBeforePaise <= 0) {
     throw badRequest("This loan is already fully paid.");
@@ -3767,8 +3807,22 @@ function calculateLoanPaymentSplitFromOutstanding(
     Math.round((outstandingBeforePaise * annualInterestRateBps) / 10_000 / 12),
     amountPaise
   );
-  if (amountPaise > outstandingBeforePaise + estimatedMonthlyInterest) {
-    throw badRequest("Payment cannot be greater than the current payoff amount.");
+  const payoffPaise = outstandingBeforePaise + estimatedMonthlyInterest;
+  if (amountPaise > payoffPaise) {
+    // A regular EMI can always be the last one: banks work interest out daily, so the tracked
+    // payoff drifts a little from theirs. It closes the loan; the difference counts as interest.
+    if (amountPaise <= monthlyEmiPaise) {
+      return {
+        principalPaise: outstandingBeforePaise,
+        interestPaise: amountPaise - outstandingBeforePaise,
+        outstandingBeforePaise,
+        outstandingAfterPaise: 0
+      };
+    }
+    throw badRequest(
+      `The payoff on this loan is about ${rupees(payoffPaise)} (${rupees(outstandingBeforePaise)} outstanding + ` +
+        `${rupees(estimatedMonthlyInterest)} interest). Record that amount, or add the extra as a separate payment.`
+    );
   }
   const principalCandidate = amountPaise - estimatedMonthlyInterest;
   if (principalCandidate <= 0) {
@@ -3807,7 +3861,8 @@ function refreshLoanPayments(loanId: string) {
       outstandingPaise,
       loan.annual_interest_rate_bps,
       payment.amount_paise,
-      payment.payment_type
+      payment.payment_type,
+      loan.monthly_emi_paise
     );
     db.prepare(
       `UPDATE loan_payments

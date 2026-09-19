@@ -21,13 +21,15 @@ database both live on your computer, with no external hosting and no cloud accou
   trends, and a budget-vs-actual chart per expense SubType
 - Budget Planner for monthly expense-SubType budgets, usage percentage, projected spend, and early warning states;
   a new month can copy last month's budget in one tap
-- Investment holdings — stocks, mutual funds, gold, land, property, PF and fixed deposits — grouped by type with
+- Investment holdings — stocks, mutual funds, gold, land, property, PF, fixed deposits and bonds — grouped by type with
   invested/current/net-gain, feeding the Overview's asset-allocation donut, plus per-holding SIP payment history.
   SIPs logged against a mutual fund after you last entered its figures are added to its Invested and Current value
   automatically (earlier SIPs are assumed to be included, so nothing is counted twice)
 - Vacations — tag any expense to a trip and it still counts as a normal expense while also rolling up under the
   trip, with a per-SubType breakdown and an optional trip budget
-- Loan, AutoPay subscription, account, credit-card, and food-card tracking; an account's name, opening balance and
+- Loans with a suggested EMI, reducing-balance interest/principal split, months left and closure month worked out
+  from the outstanding balance (a regular final EMI closes the loan)
+- AutoPay subscription, account, credit-card, and food-card tracking; an account's name, opening balance and
   card limit can be corrected later to match your bank statement
 - Custom Types and SubTypes
 - Built-in FAQ explaining how each figure is calculated

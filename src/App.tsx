@@ -90,7 +90,8 @@ import {
   AUTOPAY_SUBCATEGORY_ID,
   MUTUAL_FUNDS_SUBCATEGORY_ID,
   SELF_TRANSFER_SUBCATEGORY_ID,
-  INVESTMENT_TYPES
+  INVESTMENT_TYPES,
+  calculateEmiPaise
 } from "../shared/finance";
 
 // System Type that ties a refund to the purchase it came from (see shared/finance.ts).
@@ -430,27 +431,38 @@ export default function App() {
           </div>
         </div>
 
-        <nav className="nav-list">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.page}
-                className={`nav-item ${item.page === "profile" ? "profile-nav-item" : ""} ${activePage === item.page ? "active" : ""}`}
-                onClick={() => navigate(item.page)}
-              >
-                <Icon size={18} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
+        <nav className="nav-list" aria-label="Main">
+          {navItems
+            .filter((item) => item.page !== "profile")
+            .map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.page}
+                  className={`nav-item ${activePage === item.page ? "active" : ""}`}
+                  aria-current={activePage === item.page ? "page" : undefined}
+                  onClick={() => navigate(item.page)}
+                >
+                  <Icon size={18} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
         </nav>
+        {/* Profile sits below the list so it stays visible even when a short window scrolls the list. */}
+        <button
+          className={`nav-item profile-nav-item ${activePage === "profile" ? "active" : ""}`}
+          aria-current={activePage === "profile" ? "page" : undefined}
+          onClick={() => navigate("profile")}
+        >
+          <UserCircle size={18} />
+          <span>Profile</span>
+        </button>
       </aside>
 
       <main className="main-shell">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Financial Tracker</p>
             <h1>{navItems.find((item) => item.page === activePage)?.label}</h1>
           </div>
           <div className="topbar-actions">
@@ -1334,7 +1346,7 @@ function WeeklyEntryPage({
       <section className="panel entry-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Weekly Entry</p>
+            <p className="eyebrow">This week</p>
             <h2>{week.label}</h2>
           </div>
           <button className="secondary-action" onClick={() => setImportOpen(true)}>
@@ -2047,8 +2059,7 @@ function TransactionsPage({
     <div className="panel">
       <div className="panel-header toolbar-header">
         <div>
-          <p className="eyebrow">Ledger</p>
-          <h2>Transactions</h2>
+          <h2>All transactions</h2>
         </div>
         <div className="toolbar filter-toolbar">
           <label className="search-box">
@@ -3938,7 +3949,10 @@ function LoansPage({
   function archive(loan: Loan) {
     requestConfirm({
       message: "Are you sure you want to archive this loan?",
-      detail: `${loan.name} will move out of active tracking. Existing transactions and reports stay preserved.`,
+      detail:
+        loan.outstandingPaise > 0
+          ? `${loan.name} will move out of active tracking. It still has ${formatINR(loan.outstandingPaise)} outstanding, which keeps counting in your net worth until it's paid.`
+          : `${loan.name} will move out of active tracking. Existing transactions and reports stay preserved.`,
       confirmLabel: "Archive",
       tone: "danger",
       onConfirm: async () => {
@@ -3969,7 +3983,16 @@ function LoansPage({
       <section className="summary-grid mini loan-summary-grid">
         <SummaryCard label="Active outstanding" value={formatINR(activeOutstanding)} icon={<Landmark />} tone="warning" />
         <SummaryCard label="Monthly EMI total" value={formatINR(monthlyEmiTotal)} icon={<CalendarDays />} />
-        <SummaryCard label="Interest paid" value={formatINR(paidInterest)} icon={<BarChart3 />} />
+        <SummaryCard
+          label="Interest paid"
+          value={formatINR(paidInterest)}
+          icon={<BarChart3 />}
+          note={
+            activeLoans.some((loan) => loan.estimatedHistoricalInterestPaidPaise > 0) ? (
+              <span className="summary-hint">Includes an estimate for months before you started tracking</span>
+            ) : undefined
+          }
+        />
       </section>
 
       <div className="two-column loans-layout">
@@ -4051,6 +4074,18 @@ function LoanForm({
   const [monthlyEmi, setMonthlyEmi] = useState(loan ? amountInputFromPaise(loan.monthlyEmiPaise) : "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Your bank's EMI is the source of truth; this is the textbook figure for the terms entered.
+  const suggestedEmiPaise = (() => {
+    try {
+      return calculateEmiPaise(
+        parseAmountToPaise(principal || "0"),
+        interestRate.trim() ? parseRateToBps(interestRate) : -1,
+        Number.parseInt(tenureMonths, 10)
+      );
+    } catch {
+      return 0;
+    }
+  })();
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -4158,6 +4193,19 @@ function LoanForm({
       <label>
         Monthly EMI
         <input value={monthlyEmi} onChange={(event) => setMonthlyEmi(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+        {suggestedEmiPaise > 0 && (
+          <span className="field-suggestion">
+            <span>
+              A {tenureMonths}-month loan of {formatINR(parseAmountToPaise(principal))} at {interestRate.replace("%", "")}% works out
+              to <strong>{formatINR(suggestedEmiPaise)}</strong> a month.
+            </span>
+            {parseAmountToPaise(monthlyEmi || "0") !== suggestedEmiPaise && (
+              <button type="button" className="text-action" onClick={() => setMonthlyEmi(amountInputFromPaise(suggestedEmiPaise))}>
+                Use this
+              </button>
+            )}
+          </span>
+        )}
       </label>
       {error && <p className="form-error">{error}</p>}
       <div className="loan-form-actions">
@@ -4190,7 +4238,7 @@ function LoanCard({
   const progress = loanProgressPercent(loan);
   const closed = loan.outstandingPaise <= 0;
   const monthsLeftLabel =
-    loan.monthsLeft === null ? "Not enough EMI data" : loan.monthsLeft === 0 ? "Closing now" : `${loan.monthsLeft} months left`;
+    closed ? "Paid off" : loan.monthsLeft === null ? "Not enough EMI data" : `${loan.monthsLeft} month${loan.monthsLeft === 1 ? "" : "s"} left`;
 
   return (
     <article className={`loan-card ${loan.isArchived ? "archived" : ""}`}>
@@ -4206,7 +4254,7 @@ function LoanCard({
         </div>
         <div className="loan-header-actions">
           <span className={`loan-status ${closed ? "closed" : loan.isArchived ? "archived" : ""}`}>
-            {loan.isArchived ? "Archived" : closed ? "Closed" : "Active"}
+            {loan.isArchived ? "Archived" : closed ? "Paid off" : "Active"}
           </span>
           <button
             type="button"
@@ -4238,9 +4286,11 @@ function LoanCard({
       </div>
 
       <div className="loan-metrics">
-        <Metric label="Current outstanding" value={formatINR(loanOutstandingValue(loan))} warning={loanOutstandingValue(loan) > 0} />
         <Metric label="Principal amount paid" value={formatINR(loanPrincipalPaidValue(loan))} />
-        <Metric label="Interest paid" value={formatINR(loanInterestPaidValue(loan))} />
+        <Metric
+          label={loan.estimatedHistoricalInterestPaidPaise > 0 ? "Interest paid (incl. estimate)" : "Interest paid"}
+          value={formatINR(loanInterestPaidValue(loan))}
+        />
         <Metric label="Months left" value={monthsLeftLabel} warning={!closed && loan.monthsLeft !== null && loan.monthsLeft <= 6} />
       </div>
 
@@ -4267,7 +4317,7 @@ function LoanCard({
         </div>
         <div>
           <span>Est. closure</span>
-          <strong>{loan.closureMonth ? formatMonth(loan.closureMonth) : "Review EMI"}</strong>
+          <strong>{closed ? "Paid off" : loan.closureMonth ? formatMonth(loan.closureMonth) : "Review EMI"}</strong>
         </div>
       </div>
 
@@ -4929,7 +4979,7 @@ function VacationForm({
         Trip name
         <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Goa trip, Europe 2026..." required />
       </label>
-      <div className="loan-detail-grid">
+      <div className="form-pair">
         <label>
           Start date (optional)
           <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
@@ -6222,6 +6272,11 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
     question: "How do I move money between my own bank accounts?",
     answer:
       "Add a transaction on the account the money leaves, choose Type = Transfer and SubType = Self transfer, then pick the receiving bank account in the 'Account' dropdown that appears. Saving it lowers the source account's balance and raises the receiving account's balance by the same amount. Because the money never left you, a self transfer is not counted as Outflow or spending anywhere in Reports or the Overview."
+  },
+  {
+    question: "How are loan interest, months left and the closure month worked out?",
+    answer:
+      "Each EMI you link to a loan is split the way banks do on a reducing balance: this month's interest is the outstanding × annual rate ÷ 12, and the rest of the EMI repays principal, which lowers next month's interest. Prepayments go fully to principal. 'Months left' is how many EMIs it takes to clear today's outstanding at your EMI and rate, and the closure month counts those forward from this month (or next month, if this month's EMI is already recorded). 'Interest paid' adds the interest in the EMIs you've linked to an estimate for the months before you started tracking, worked out from how much principal had already been repaid. Your final EMI can be a normal EMI even if it's a little more than the payoff shown; it closes the loan. Archiving a loan hides it from the tracker, but anything still owed keeps counting in your net worth."
   },
   {
     question: "How are backups made?",

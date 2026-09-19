@@ -16,6 +16,7 @@ export const INVESTMENT_TYPES = [
   { id: "property", label: "Property", icon: "home", color: "#7c3aed" },
   { id: "pf", label: "PF", icon: "landmark", color: "#059669" },
   { id: "fd", label: "Fixed Deposit", icon: "banknote", color: "#0891b2" },
+  { id: "bonds", label: "Bonds", icon: "landmark", color: "#6d5bd0" },
   { id: "other", label: "Other", icon: "wallet", color: "#64748b" }
 ] as const;
 
@@ -191,6 +192,27 @@ export const DEFAULTS_ADDED_AFTER_LEDGER = new Set<string>([
   "sub_personal_care",
   "type_refund"
 ]);
+
+/**
+ * Standard reducing-balance EMI for a loan, rounded to the rupee like banks quote it:
+ * P·r·(1+r)^n / ((1+r)^n − 1) with r the monthly rate; a zero-rate loan is P / n.
+ */
+export function calculateEmiPaise(principalPaise: number, annualInterestRateBps: number, tenureMonths: number) {
+  if (!(principalPaise > 0) || !(tenureMonths > 0)) {
+    return 0;
+  }
+  const monthlyRate = annualInterestRateBps / 10_000 / 12;
+  const emi =
+    monthlyRate === 0
+      ? principalPaise / tenureMonths
+      : (principalPaise * monthlyRate * (1 + monthlyRate) ** tenureMonths) / ((1 + monthlyRate) ** tenureMonths - 1);
+  return Math.ceil(Math.round(emi) / 100) * 100;
+}
+
+/** One month's interest on a balance at an annual rate, in paise. */
+export function monthlyInterestPaise(balancePaise: number, annualInterestRateBps: number) {
+  return Math.round((balancePaise * annualInterestRateBps) / 10_000 / 12);
+}
 
 export const accountTypeSchema = z.enum(["bank", "credit_card", "food_card"]);
 export const paymentMethodSchema = z.enum([

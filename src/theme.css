@@ -883,3 +883,344 @@ textarea:focus {
   flex-wrap: wrap;
   row-gap: 6px;
 }
+
+/* ---------- Form controls: one height, one look ---------- */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+select {
+  min-height: 44px;
+  font-size: 0.94rem;
+  font-weight: 500;
+}
+
+/* Dropdowns are drawn by the app, not the OS: same box as a text input, with a quiet chevron. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 0 40px 0 14px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235f6878' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 16px;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+:root[data-theme="dark"] select {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2398a2b4' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
+}
+
+/* Labelled filter fields already draw their own chevron icon. */
+.control-field select {
+  min-height: 0;
+  padding: 0;
+  background-image: none;
+}
+
+:root[data-theme="dark"] .control-field select {
+  background-image: none;
+}
+
+select option {
+  background: var(--panel);
+  color: var(--text);
+}
+
+/* Form labels: quiet, sentence case, aligned above their field. */
+.stack-form label,
+.entry-form label,
+.budget-add-form label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 560;
+}
+
+.stack-form label > input,
+.stack-form label > select,
+.entry-form label > input,
+.entry-form label > select,
+.budget-add-form label > input,
+.budget-add-form label > select {
+  margin-top: 6px;
+  color: var(--text);
+}
+
+/* ---------- Sidebar: Profile always stays inside the island ---------- */
+/* Desktop only: below 1121px the sidebar is hidden and the bottom bar takes over. */
+@media (min-width: 1121px) {
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+}
+
+.nav-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 26px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.nav-list::-webkit-scrollbar {
+  display: none;
+}
+
+.profile-nav-item {
+  flex: none;
+  margin-top: 10px;
+}
+
+/* ---------- Small shared pieces ---------- */
+.text-action {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.text-action:hover {
+  color: var(--accent-strong);
+}
+
+.field-suggestion {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.field-suggestion strong {
+  color: var(--text);
+}
+
+.summary-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.control-field input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+  min-height: 24px;
+}
+
+/* ---------- Polish pass ---------- */
+/* Dropdown chevron survives page-level "background:" shorthands (budget form, editors...). */
+select:not([multiple]):not([size]) {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235f6878' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 16px;
+  padding-right: 40px;
+}
+
+:root[data-theme="dark"] select:not([multiple]):not([size]) {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2398a2b4' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
+}
+
+.control-field select:not([multiple]):not([size]),
+:root[data-theme="dark"] .control-field select:not([multiple]):not([size]) {
+  background-image: none;
+  padding-right: 0;
+}
+
+/* Two related fields side by side that wrap instead of colliding in a narrow form. */
+.form-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+/* A card inside a panel is one level down: no second bezel, just a quiet tile. */
+.panel .summary-card,
+:root[data-theme="dark"] .panel .summary-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  outline: none;
+  background: var(--panel-soft);
+  box-shadow: inset 0 1px 0 var(--bezel-highlight);
+}
+
+/* Reports equation: soft tiles instead of boxed-in grey rectangles. */
+.cashflow-summary-line,
+.cashflow-equation-part,
+.cashflow-equation-total-card {
+  border-color: transparent;
+  border-radius: 14px;
+  background: var(--panel-soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.cashflow-summary-line.savings,
+.cashflow-equation-total-card {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* Progress and budget bars: solid semantic colour on a quiet track. */
+.loan-progress-bar,
+.budget-progress-track,
+.vacation-budget-track {
+  border-radius: 999px;
+}
+
+/* Profile header: neutral, no colour wash. */
+.profile-card-header {
+  border-radius: var(--radius-card);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+/* Profile card joins the same bezel family as every other panel. */
+.profile-menu.profile-page-card {
+  border: var(--bezel-width) solid var(--bezel-shell);
+  border-radius: var(--radius-shell);
+  outline: 1px solid var(--bezel-ring);
+  background: var(--panel);
+  background-clip: padding-box;
+  box-shadow:
+    inset 0 0 0 1px var(--bezel-core-ring),
+    inset 0 1px 0 var(--bezel-highlight),
+    var(--shadow-soft);
+  padding: 18px 20px 20px;
+}
+
+.profile-avatar {
+  border-radius: 12px;
+  background: var(--text);
+  color: var(--panel);
+}
+
+/* A disabled primary button reads as "nothing to save yet", not as a faded brand colour. */
+.profile-save-button:disabled,
+.primary-action:disabled {
+  background: var(--line);
+  color: var(--muted);
+  box-shadow: none;
+  opacity: 1;
+}
+
+.profile-save-button {
+  border-radius: 999px;
+}
+
+/* Investment groups: the holding count is a readable chip in both themes (it used to take its
+   own text colour as background — white on white in light mode, a white dot in dark). */
+.investment-group-count {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 650;
+}
+
+/* The group row reflows by the width of its panel, so the Net gain column is never clipped. */
+.investment-groups {
+  container-type: inline-size;
+}
+
+@container (max-width: 600px) {
+  .investment-group-head {
+    display: flex;
+    flex-wrap: wrap;
+    position: relative;
+  }
+
+  .investment-group-name {
+    flex: 1 1 auto;
+    padding-right: 28px;
+  }
+
+  .investment-group-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0 10px;
+    width: 100%;
+    order: 3;
+    margin-top: 8px;
+  }
+
+  .investment-group-metrics > div {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .investment-group-chevron {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+  }
+}
+
+.investment-group {
+  border-radius: var(--radius-card);
+}
+
+.investment-group-metrics span {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* Card lists size to their container, never to their widest figure. */
+.loan-card-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Invested / Current / Gain wrap to two lines in a narrow card instead of spilling. */
+.investment-values {
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+}
+
+/* Grid items may shrink below their content's natural width, so figures wrap instead of spilling. */
+.loan-card-grid > * {
+  min-width: 0;
+}
+
+@container (max-width: 600px) {
+  .investment-group-metrics strong {
+    white-space: normal;
+  }
+}
+
+/* ...and a card's own inner column fits the card rather than its widest line. */
+.loan-card {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 720px) {
+  /* Headline figures sit two per row on every page, as on the Overview. */
+  .summary-grid,
+  .summary-grid.mini,
+  .summary-grid.report-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .summary-grid .summary-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    min-height: 0;
+    padding: 12px;
+  }
+
+  .summary-grid .summary-card strong {
+    font-size: 1.1rem;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 720px) {
+  /* An odd last card spans the row rather than leaving a hole. */
+  .summary-grid > .summary-card:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+}

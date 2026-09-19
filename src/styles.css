@@ -261,12 +261,12 @@ a {
   align-items: center;
   gap: 12px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #ecfeff 0%, #eef2ff 55%, #fff7ed 100%);
+  background: var(--panel-soft);
   padding: 12px;
 }
 
 :root[data-theme="dark"] .profile-card-header {
-  background: linear-gradient(135deg, #172554 0%, #1e293b 58%, #18212d 100%);
+  background: var(--panel-soft);
 }
 
 .profile-avatar {
@@ -408,12 +408,12 @@ a {
 
 .theme-row {
   grid-template-columns: minmax(0, 1fr) auto auto;
-  background: linear-gradient(135deg, var(--accent-soft), #eff6ff);
+  background: var(--accent-soft);
   color: var(--text);
 }
 
 :root[data-theme="dark"] .theme-row {
-  background: linear-gradient(135deg, #172554, #182335);
+  background: var(--accent-soft);
 }
 
 .profile-menu button:hover {
@@ -1844,7 +1844,7 @@ a {
   gap: 9px;
   min-width: min(330px, 100%);
   border-radius: 8px;
-  background: linear-gradient(135deg, #eff6ff, #ecfeff);
+  background: var(--accent-soft);
   padding: 10px;
 }
 
@@ -1880,11 +1880,11 @@ a {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #14b8a6, #059669);
+  background: var(--good);
 }
 
 .card-limit-meter span.danger {
-  background: linear-gradient(90deg, #fb7185, #dc2626);
+  background: var(--danger);
 }
 
 .card-limit-grid {
@@ -1902,7 +1902,7 @@ a {
 }
 
 :root[data-theme="dark"] .card-limit-summary {
-  background: linear-gradient(135deg, #172554, #143c38);
+  background: var(--accent-soft);
 }
 
 :root[data-theme="dark"] .card-limit-grid div {
@@ -1994,15 +1994,15 @@ a {
 }
 
 .budget-pace-track .safe {
-  background: linear-gradient(90deg, #10b981, #059669);
+  background: var(--good);
 }
 
 .budget-pace-track .watch {
-  background: linear-gradient(90deg, #fbbf24, #ea580c);
+  background: var(--warning);
 }
 
 .budget-pace-track .over {
-  background: linear-gradient(90deg, #fb7185, #dc2626);
+  background: var(--danger);
 }
 
 .budget-pace-track .expected {
@@ -2273,12 +2273,12 @@ a {
 
 .impact-card.positive {
   border-color: rgba(5, 150, 105, 0.32);
-  background: linear-gradient(135deg, rgba(5, 150, 105, 0.12), var(--panel-soft));
+  background: var(--good-soft);
 }
 
 .impact-card.negative {
   border-color: rgba(220, 38, 38, 0.26);
-  background: linear-gradient(135deg, rgba(220, 38, 38, 0.1), var(--panel-soft));
+  background: var(--danger-soft);
 }
 
 .impact-main {
@@ -2542,7 +2542,7 @@ a {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #14b8a6, #2563eb);
+  background: var(--accent);
 }
 
 .budget-page {
@@ -2599,7 +2599,7 @@ a {
   gap: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: linear-gradient(135deg, var(--panel) 0%, var(--panel-soft) 100%);
+  background: var(--panel-soft);
   padding: 15px;
   box-shadow: var(--shadow-soft);
 }
@@ -2683,16 +2683,16 @@ a {
 }
 
 .budget-progress-bar span.safe {
-  background: linear-gradient(90deg, #16a34a, #14b8a6);
+  background: var(--good);
 }
 
 .budget-progress-bar span.watch {
-  background: linear-gradient(90deg, #f59e0b, #f97316);
+  background: var(--warning);
 }
 
 .budget-progress-bar span.critical,
 .budget-progress-bar span.over {
-  background: linear-gradient(90deg, #dc2626, #f97316);
+  background: var(--danger);
 }
 
 .budget-line-metrics {
@@ -3295,7 +3295,7 @@ a {
 .taxonomy-group {
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: linear-gradient(180deg, var(--panel) 0%, var(--panel-soft) 100%);
+  background: var(--panel-soft);
   overflow: hidden;
 }
 

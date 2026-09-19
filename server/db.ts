@@ -144,7 +144,7 @@ export function initDatabase() {
 
     CREATE TABLE IF NOT EXISTS investments (
       id TEXT PRIMARY KEY,
-      type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'other')),
+      type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'other')),
       name TEXT NOT NULL,
       invested_paise INTEGER NOT NULL CHECK (invested_paise >= 0),
       current_value_paise INTEGER NOT NULL CHECK (current_value_paise >= 0),
@@ -278,18 +278,19 @@ function migrateInvestmentTypes() {
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'investments'")
     .get() as { sql?: string } | undefined;
 
-  // Only rebuild older tables whose CHECK constraint predates the 'fd' type.
-  if (!row?.sql || row.sql.includes("'fd'")) {
+  // Only rebuild older tables whose CHECK constraint predates the newest type ('bonds').
+  if (!row?.sql || row.sql.includes("'bonds'")) {
     return;
   }
 
+  createMigrationBackup("investment-types");
   db.exec("PRAGMA foreign_keys = OFF;");
   db.exec("BEGIN;");
   try {
     db.exec(`
       CREATE TABLE investments_new (
         id TEXT PRIMARY KEY,
-        type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'other')),
+        type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'other')),
         name TEXT NOT NULL,
         invested_paise INTEGER NOT NULL CHECK (invested_paise >= 0),
         current_value_paise INTEGER NOT NULL CHECK (current_value_paise >= 0),
@@ -623,7 +624,8 @@ function seedTaxonomy() {
         type.behavior,
         type.icon,
         type.color,
-        type.name === "Credit Card Payment" ? 1 : 0,
+        // Card payments and refunds are wired into the app's logic, so their Types can't be deleted.
+        type.id === "type_card_payment" || type.id === "type_refund" ? 1 : 0,
         typeIndex + 1
       );
       seeded.add(type.id);
