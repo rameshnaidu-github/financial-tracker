@@ -1,6 +1,6 @@
 /*
  * Design layer (loaded after styles.css).
- * Direction: "soft structuralism" for a personal-finance dashboard — one cool grey family, a single
+ * Direction: "soft structuralism" for a personal-finance dashboard: one cool grey family, a single
  * desaturated ink-blue accent, machined double-bezel surfaces, Geist with tabular figures, and
  * spring-eased motion. Money colours stay semantic (green in, red out) but toned down.
  */
@@ -1119,7 +1119,7 @@ select:not([multiple]):not([size]) {
 }
 
 /* Investment groups: the holding count is a readable chip in both themes (it used to take its
-   own text colour as background — white on white in light mode, a white dot in dark). */
+   own text colour as background: white on white in light mode, a white dot in dark). */
 .investment-group-count {
   background: var(--accent-soft);
   color: var(--accent);

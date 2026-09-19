@@ -6739,7 +6739,7 @@ function ChangeVsLastMonth({
   comparison: Overview["comparison"];
   higherIsGood: boolean;
 }) {
-  // Nothing to compare against — a percentage off zero would be meaningless.
+  // Nothing to compare against; a percentage off zero would be meaningless.
   if (previous <= 0) return null;
   const [year, month] = comparison.month.split("-").map(Number);
   const shortMonth = new Date(year, month - 1, 1).toLocaleDateString("en-IN", { month: "short" });
@@ -6912,7 +6912,7 @@ function recentMonthOptions(fromMonth: string, count: number) {
 }
 
 // Splits and refunds depend on other records (split lines, the original purchase), so a
-// one-tap copy can't reproduce them faithfully — those are left to the normal form.
+// one-tap copy can't reproduce them faithfully, so those are left to the normal form.
 // Money back only makes sense for something that was paid out: not transfers or card bills.
 function shiftMonth(month: string, count: number) {
   const [year, monthIndex] = month.split("-").map(Number);
