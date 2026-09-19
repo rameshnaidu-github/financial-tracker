@@ -138,8 +138,9 @@ body::after {
   opacity: 0.045;
 }
 
-.lucide {
-  stroke-width: 1.6;
+/* Phosphor icons inherit the text colour; one weight (regular) across the app. */
+.ui-icon {
+  flex: none;
 }
 
 h1,
@@ -237,7 +238,7 @@ p {
   background: #1a2130;
 }
 
-.nav-item.active .lucide {
+.nav-item.active .ui-icon {
   color: var(--accent);
 }
 
@@ -455,7 +456,7 @@ a.secondary-action:active {
 }
 
 /* Button-in-button: the leading icon sits in its own island and nudges on hover. */
-.primary-action > .lucide {
+.primary-action > .ui-icon {
   box-sizing: content-box;
   flex: none;
   width: 16px;
@@ -466,15 +467,15 @@ a.secondary-action:active {
   transition: transform var(--dur) var(--ease-spring);
 }
 
-:root[data-theme="dark"] .primary-action > .lucide {
+:root[data-theme="dark"] .primary-action > .ui-icon {
   background: rgba(11, 14, 20, 0.14);
 }
 
-.primary-action:not(:disabled):hover > .lucide {
+.primary-action:not(:disabled):hover > .ui-icon {
   transform: translate(1px, -1px) scale(1.05);
 }
 
-.primary-action:not(:has(> .lucide)) {
+.primary-action:not(:has(> .ui-icon)) {
   padding-left: 18px;
 }
 
@@ -490,12 +491,12 @@ a.secondary-action:active {
   box-shadow: var(--shadow-soft);
 }
 
-.secondary-action .lucide {
+.secondary-action .ui-icon {
   color: var(--accent);
 }
 
 .danger-action,
-.danger-action .lucide {
+.danger-action .ui-icon {
   color: var(--danger);
 }
 
@@ -1388,17 +1389,13 @@ select:not([multiple]):not([size]) {
   animation-delay: 120ms;
 }
 
-/* Proportion: donut slices sweep into their final angle; labels follow. */
+/* Proportion: donut slices sweep into their final angle. */
 .donut-chart .donut-segment {
   transform-box: fill-box;
   transform-origin: center;
-  animation: donut-in 900ms var(--ease-out) both;
-}
-
-.donut-chart .donut-leader,
-.donut-chart .donut-label {
-  animation: fade-in 500ms var(--ease-out) both;
-  animation-delay: 450ms;
+  /* Slices start at twelve o'clock; the resting angle lives here so the sweep can end on it. */
+  transform: rotate(-90deg);
+  animation: donut-in 900ms var(--ease-out) backwards;
 }
 
 /* Trend: columns rise from the baseline. */
@@ -1556,4 +1553,467 @@ select:not([multiple]):not([size]) {
 ::placeholder {
   color: var(--muted);
   opacity: 1;
+}
+
+/* ========== tasteskill v2 pass (Overhaul mode) ========== */
+/*
+ * Two neutrals (page and surface), one accent, one raised level. Ordinary panels are flat: a
+ * hairline and spacing do the grouping. Only the Overview lead, dialogs, sheets and inline
+ * editors lift off the page. Radius system: raised 22px, flat surfaces 16px, controls 12px,
+ * chips and pills fully round.
+ */
+
+/* ---------- A. Shell ---------- */
+/* Before the app script sets data-theme, the page colour already follows the system. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg: #0b0e14;
+    color-scheme: dark;
+  }
+}
+
+body,
+:root[data-theme="dark"] body {
+  background: var(--bg);
+}
+
+body::after {
+  display: none;
+}
+
+@media (min-width: 1121px) {
+  .app-shell {
+    grid-template-columns: 248px minmax(0, 1fr);
+    gap: 0;
+  }
+}
+
+/* The sidebar sits on the page colour, divided from content by one hairline. */
+.sidebar {
+  top: 0;
+  height: 100dvh;
+  margin: 0;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  outline: none;
+  background: var(--bg);
+  box-shadow: none;
+  backdrop-filter: none;
+  padding: 22px 14px 16px;
+}
+
+:root[data-theme="dark"] .sidebar {
+  background: var(--bg);
+}
+
+.nav-group {
+  display: grid;
+  gap: 2px;
+}
+
+.nav-group + .nav-group {
+  margin-top: 18px;
+}
+
+/* Group headings are quiet signposts in sentence case, not shouted eyebrows. */
+.nav-group-label {
+  padding: 0 12px 6px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.nav-item {
+  padding: 8px 12px;
+}
+
+.nav-item:hover {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.profile-nav-item {
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+/* ---------- B. Surfaces and type ---------- */
+.panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  outline: none;
+  background: var(--panel);
+  box-shadow: none;
+  padding: var(--space-5) 22px var(--space-6);
+}
+
+.summary-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  outline: none;
+  box-shadow: none;
+}
+
+.profile-menu.profile-page-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  outline: none;
+  box-shadow: none;
+}
+
+@media (max-width: 720px) {
+  .panel {
+    padding: var(--space-4);
+  }
+}
+
+/* Floating layers keep their lift, with a hairline instead of the old tray. */
+@media (max-width: 1120px) {
+  .mobile-nav,
+  .mobile-more-sheet {
+    border: 1px solid var(--line);
+    outline: none;
+  }
+}
+
+/* A tighter display scale: page titles lead, figures follow, body stays calm. */
+.topbar h1 {
+  font-size: clamp(1.7rem, 1.2rem + 1.3vw, 2.2rem);
+  letter-spacing: -0.03em;
+}
+
+.summary-card strong {
+  font-size: clamp(1.25rem, 1.05rem + 0.5vw, 1.55rem);
+}
+
+/* The Overview lead: the one raised surface, its figures divided by hairlines, not boxes. */
+.overview-lead {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-shell);
+  background: var(--line);
+  box-shadow: var(--shadow);
+}
+
+.overview-lead .summary-grid.overview-summary {
+  gap: 1px;
+}
+
+.overview-lead .summary-grid .summary-card:nth-child(n),
+:root[data-theme="dark"] .overview-lead .summary-grid .summary-card:nth-child(n) {
+  border: 0;
+  border-radius: 0;
+  background: var(--panel);
+  box-shadow: none;
+  padding: 20px 22px;
+}
+
+@media (max-width: 720px) {
+  .overview-lead .summary-grid.overview-summary {
+    gap: 1px;
+  }
+
+  .overview-lead .summary-grid .summary-card:nth-child(n),
+  :root[data-theme="dark"] .overview-lead .summary-grid .summary-card:nth-child(n) {
+    padding: 14px;
+  }
+}
+
+@media (min-width: 1121px) {
+  .overview-lead .overview-summary .summary-card:first-child strong {
+    font-size: clamp(1.9rem, 1.3rem + 1.2vw, 2.5rem);
+  }
+}
+
+/* ---------- C. Overview bands and rows ---------- */
+.content-area > .overview-page {
+  gap: var(--space-8);
+}
+
+.overview-band {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.overview-band-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 2px;
+}
+
+.overview-band-head h2 {
+  margin: 0;
+  font-size: 1.12rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.overview-band-head span {
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.overview-band-body {
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+@media (min-width: 1121px) {
+  .overview-band-pair {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Row actions wait until the row is pointed at or focused; touch screens always show them. */
+@media (hover: hover) and (pointer: fine) {
+  .ledger-row .row-actions {
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+
+  .ledger-row:hover .row-actions,
+  .ledger-row:focus-within .row-actions {
+    opacity: 1;
+  }
+}
+
+/* A long wall of category chips folds behind one line until it is wanted. */
+.category-cloud-disclosure {
+  display: grid;
+  gap: 12px;
+}
+
+.category-cloud-disclosure > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 6px 16px;
+  font-size: 0.9rem;
+  font-weight: 560;
+  list-style: none;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.category-cloud-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.category-cloud-disclosure > summary::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform var(--dur) var(--ease-spring);
+}
+
+.category-cloud-disclosure[open] > summary::after {
+  transform: translateY(1px) rotate(-135deg);
+}
+
+.category-cloud-disclosure > summary:hover {
+  border-color: var(--line-strong);
+}
+
+.category-cloud-disclosure[open] > :not(summary) {
+  animation: reveal 360ms var(--ease-out) both;
+}
+
+.category-cloud-active {
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 1px 9px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* ---------- D. Data viz and page motion ---------- */
+/* Donut: a thick ring beside a legend list; the legend carries names, shares and amounts. */
+.donut-figure,
+.donut-figure.overview-donut-chart,
+.donut-figure.report-donut-chart {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 20px 28px;
+  width: 100%;
+  height: auto;
+  margin: 0;
+}
+
+.pie-chart {
+  aspect-ratio: auto;
+}
+
+.donut-figure .donut-chart {
+  flex: 0 0 auto;
+  width: 188px;
+  height: 188px;
+  overflow: visible;
+}
+
+.donut-figure .donut-segment,
+.donut-figure .donut-track,
+.donut-figure .donut-empty {
+  stroke-width: 26;
+}
+
+.donut-figure .donut-segment {
+  transition: opacity var(--dur) var(--ease-out);
+}
+
+.donut-figure .donut-segment-link {
+  cursor: pointer;
+}
+
+.donut-figure .donut-center-label {
+  fill: var(--muted);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.donut-figure .donut-center-value {
+  fill: var(--text);
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.donut-legend {
+  display: grid;
+  flex: 1 1 240px;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.donut-legend-row {
+  min-width: 0;
+  transition: opacity var(--dur) var(--ease-out);
+  /* Backwards fill only: a held end state would pin opacity and block the hover dimming. */
+  animation: reveal 420ms var(--ease-out) backwards;
+}
+
+.donut-legend-row:nth-child(2) { animation-delay: 40ms; }
+.donut-legend-row:nth-child(3) { animation-delay: 80ms; }
+.donut-legend-row:nth-child(4) { animation-delay: 120ms; }
+.donut-legend-row:nth-child(5) { animation-delay: 160ms; }
+.donut-legend-row:nth-child(n + 6) { animation-delay: 200ms; }
+
+/* Pointing at a slice or a legend line quiets everything else. */
+.donut-figure .donut-segment.is-dim,
+.donut-legend-row.is-dim {
+  opacity: 0.32;
+}
+
+.donut-legend-item {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  padding: 6px 8px;
+  font: inherit;
+  text-align: left;
+}
+
+button.donut-legend-item {
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+button.donut-legend-item:hover {
+  background: var(--panel-soft);
+}
+
+.donut-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.donut-legend-name {
+  overflow: hidden;
+  font-size: 0.9rem;
+  font-weight: 540;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.donut-legend-share {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.donut-legend-amount {
+  font-size: 0.9rem;
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+/*
+ * Page change: the content area cross-fades through the View Transitions API. The window
+ * itself (root) does not animate, so the sidebar never flickers.
+ */
+@keyframes page-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.content-area {
+  view-transition-name: page;
+}
+
+::view-transition-old(root),
+::view-transition-new(root),
+::view-transition-group(page) {
+  animation: none;
+}
+
+::view-transition-old(page) {
+  animation: page-out 140ms var(--ease-out) both;
+}
+
+::view-transition-new(page) {
+  animation: page-in 280ms var(--ease-out) 40ms both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+
+  .ledger-row .row-actions {
+    transition: none;
+  }
 }
