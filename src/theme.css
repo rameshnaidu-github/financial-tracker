@@ -22,11 +22,11 @@
   --accent-strong: #2c4494;
   --accent-soft: #eaeefa;
   --accent-blue: #3a55b4;
-  --good: #1f8a5b;
+  --good: #18774e;
   --good-soft: #e6f4ec;
   --danger: #c2413a;
   --danger-soft: #fbeceb;
-  --warning: #b7791f;
+  --warning: #8a5a12;
   --warning-soft: #fbf3e4;
 
   /* Shadows carry the ink hue instead of flat black, from one light source above. */
@@ -778,8 +778,11 @@ textarea:focus {
 
 /* ---------- Fit fixes for the roomier bezel surfaces ---------- */
 /* The tag strip already clips gracefully, so it can give up width before the row overflows. */
-.ledger-row {
-  grid-template-columns: minmax(150px, 1.1fr) minmax(0, 2fr) minmax(104px, auto) auto;
+/* Wider screens only: on phones the base stylesheet stacks the row in one column. */
+@media (min-width: 721px) {
+  .ledger-row {
+    grid-template-columns: minmax(150px, 1.1fr) minmax(0, 2fr) minmax(104px, auto) auto;
+  }
 }
 
 /* Three figures side by side need room; wrap to two columns in a narrow card instead of spilling. */
@@ -1104,7 +1107,7 @@ select:not([multiple]):not([size]) {
 /* A disabled primary button reads as "nothing to save yet", not as a faded brand colour. */
 .profile-save-button:disabled,
 .primary-action:disabled {
-  background: var(--line);
+  background: var(--panel-soft);
   color: var(--muted);
   box-shadow: none;
   opacity: 1;
@@ -1223,4 +1226,334 @@ select:not([multiple]):not([size]) {
   .summary-grid > .summary-card:last-child:nth-child(odd) {
     grid-column: 1 / -1;
   }
+}
+
+/* ========== tasteskill v2 pass (Preserve mode) ========== */
+
+/* ---------- A. Type and copy ---------- */
+/* Section and card labels read in sentence case; only true table column heads stay small caps. */
+.section-subtitle,
+.payment-history-title,
+.payment-history-header,
+.report-chart-header span,
+.cashflow-summary-head,
+.cashflow-summary-head span,
+.cashflow-equation-part,
+.cashflow-equation-part span,
+.cashflow-equation-total-card span,
+.cashflow-summary-line span,
+.vacation-budget-head,
+.vacation-budget-head span,
+.danger-action {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.cashflow-equation-part span,
+.cashflow-equation-total-card span,
+.cashflow-summary-line span,
+.vacation-budget-head span,
+.payment-history-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* Headline figures: one clear scale step above body numbers, tight tracking. */
+.summary-card strong {
+  font-size: clamp(1.35rem, 1.1rem + 0.6vw, 1.7rem);
+  font-weight: 640;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+
+.summary-card p,
+.summary-card > div > span:first-child {
+  font-weight: 560;
+}
+
+/* Explanatory copy keeps a comfortable reading measure. */
+.helper-text,
+.field-hint,
+.investments-asof,
+.cashflow-invested,
+.faq-answer {
+  max-width: 65ch;
+}
+
+.heading-sub {
+  margin-left: 6px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* ---------- B. Motion layer ---------- */
+/* Every animation below answers "what changed?". All of them use transform/opacity only and
+   collapse to instant under prefers-reduced-motion (see the guard earlier in this file). */
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes grow-x {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes grow-y {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes donut-in {
+  from {
+    opacity: 0;
+    transform: rotate(-120deg);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(-90deg);
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* State change: a panel, card or inline form that opens slides its content in. */
+.collapsible-content,
+.refund-form,
+.account-edit-form,
+.transaction-edit-row,
+.field-suggestion,
+.loan-card > .loan-progress,
+.loan-card > .loan-metrics,
+.filter-chips,
+.attention-banner {
+  animation: reveal 420ms var(--ease-out) both;
+}
+
+/* Reading order: ledger rows arrive top to bottom (only on first appearance). */
+.ledger-list > .ledger-item {
+  animation: reveal 460ms var(--ease-out) both;
+}
+
+.ledger-list > .ledger-item:nth-child(2) { animation-delay: 30ms; }
+.ledger-list > .ledger-item:nth-child(3) { animation-delay: 60ms; }
+.ledger-list > .ledger-item:nth-child(4) { animation-delay: 90ms; }
+.ledger-list > .ledger-item:nth-child(5) { animation-delay: 120ms; }
+.ledger-list > .ledger-item:nth-child(6) { animation-delay: 150ms; }
+.ledger-list > .ledger-item:nth-child(n + 7) { animation-delay: 180ms; }
+
+/* Proportion: bars grow from zero to their share. */
+.bar-track > div,
+.budget-pace-track > span:not(.expected),
+.budget-progress-bar > span,
+.loan-progress-bar > span,
+.vacation-breakdown-bar > span,
+.vacation-budget-bar > span {
+  transform-origin: left center;
+  animation: grow-x 900ms var(--ease-out) both;
+  animation-delay: 120ms;
+}
+
+/* Proportion: donut slices sweep into their final angle; labels follow. */
+.donut-chart .donut-segment {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: donut-in 900ms var(--ease-out) both;
+}
+
+.donut-chart .donut-leader,
+.donut-chart .donut-label {
+  animation: fade-in 500ms var(--ease-out) both;
+  animation-delay: 450ms;
+}
+
+/* Trend: columns rise from the baseline. */
+.trend-chart rect {
+  transform-box: fill-box;
+  transform-origin: bottom center;
+  animation: grow-y 700ms var(--ease-out) both;
+}
+
+/* Temporary layers: sheets, dialogs and toasts arrive from below. */
+.mobile-more-sheet,
+.confirm-modal,
+.import-modal,
+.toast {
+  animation: sheet-in 380ms var(--ease-spring) both;
+}
+
+.modal-backdrop,
+.mobile-more-backdrop {
+  animation: fade-in 240ms var(--ease-out) both;
+}
+
+/* Reading order on long pages: panels below the fold wait, then rise as they scroll in. */
+.panel.reveal-pending {
+  opacity: 0;
+  transform: translateY(22px);
+  animation: none;
+}
+
+.panel.revealed {
+  animation: rise 720ms var(--ease-out) both;
+}
+
+.count-up {
+  display: inline-block;
+  min-width: 1ch;
+}
+
+/* ---------- C. Surfaces, rhythm, Overview lead ---------- */
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+}
+
+/* One rhythm: 20px between blocks, panels a touch heavier at the bottom than the top. */
+.page-grid,
+.two-column {
+  gap: var(--space-5);
+}
+
+.panel {
+  padding: var(--space-5) 22px var(--space-6);
+}
+
+.panel-header {
+  margin-bottom: var(--space-4);
+}
+
+/* Overview: Available cash leads; the other three headline figures form a quieter group. */
+@media (min-width: 1121px) {
+  .summary-grid.overview-summary {
+    grid-template-columns: minmax(0, 1.45fr) repeat(3, minmax(0, 1fr));
+  }
+
+  .overview-summary .summary-card:first-child strong {
+    font-size: clamp(1.75rem, 1.25rem + 1vw, 2.25rem);
+  }
+
+  .overview-summary .summary-card:first-child > span {
+    width: 48px;
+    height: 48px;
+  }
+}
+
+/* Settings rows: quiet fills instead of boxed outlines. */
+.settings-row {
+  border: 0;
+  border-radius: 14px;
+  background: var(--panel-soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+  padding: var(--space-3) 14px;
+}
+
+/* Payment history: an unpaid month is a soft well, a paid month a solid mark. */
+.payment-history-circle {
+  border: 0;
+  background: var(--panel-soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+  transition: transform var(--dur) var(--ease-spring);
+}
+
+.payment-history-circle.is-paid {
+  background: var(--good);
+  box-shadow: none;
+  color: var(--panel);
+}
+
+.payment-history-cell:hover .payment-history-circle {
+  transform: scale(1.06);
+}
+
+/* Charts and bars inside a waiting panel hold their draw-in until the panel is revealed. */
+.panel.reveal-pending *,
+.panel.reveal-pending *::before,
+.panel.reveal-pending *::after {
+  animation-play-state: paused;
+}
+
+/* Summary text may shrink with its tile instead of pushing into the padding. */
+.summary-card > div {
+  min-width: 0;
+}
+
+@media (min-width: 1121px) {
+  /* The three secondary headline tiles stack icon over figure, so their figures have room. */
+  .overview-summary .summary-card:not(:first-child) {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .overview-summary .summary-card:first-child {
+    align-items: center;
+  }
+}
+
+/* Card headers: the title block shrinks and its detail line wraps instead of pushing the card wider. */
+.loan-card-header > *,
+.loan-title,
+.loan-title > div {
+  min-width: 0;
+}
+
+.loan-title span {
+  overflow-wrap: anywhere;
+}
+
+/* In a card header the figure keeps its size; the title block takes the squeeze and wraps. */
+.loan-card-header > .loan-title {
+  flex: 1 1 auto;
+}
+
+.loan-card-header > strong,
+.loan-card-header > .loan-header-actions,
+.loan-card-header > .investment-gain-badge {
+  flex: none;
+}
+
+/* Placeholders stay readable (WCAG AA) but lighter than typed values. */
+::placeholder {
+  color: var(--muted);
+  opacity: 1;
 }

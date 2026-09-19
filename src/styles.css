@@ -52,7 +52,7 @@
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  min-height: 100dvh;
   background: linear-gradient(180deg, #fbfefd 0%, var(--bg) 45%, #edf6ff 100%);
 }
 
@@ -115,13 +115,13 @@ a {
 .app-shell {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .sidebar {
   position: sticky;
   top: 0;
-  height: 100vh;
+  height: 100dvh;
   border-right: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.86);
   backdrop-filter: blur(18px);
@@ -160,7 +160,7 @@ a {
 
 .nav-list {
   display: flex;
-  min-height: calc(100vh - 118px);
+  min-height: calc(100dvh - 118px);
   flex-direction: column;
   gap: 6px;
   margin-top: 34px;
@@ -895,7 +895,7 @@ a {
 }
 
 .amount-out {
-  color: #b42318 !important;
+  color: var(--danger) !important;
 }
 
 .account-stack,
@@ -1593,12 +1593,12 @@ a {
 }
 
 .trend-value.over {
-  fill: #dc2626;
+  fill: var(--danger);
 }
 
 .budget-threshold-line {
   fill: none;
-  stroke: #f59e0b;
+  stroke: var(--warning);
   stroke-width: 2.4;
   stroke-dasharray: 7 5;
   stroke-linejoin: round;
@@ -1606,7 +1606,7 @@ a {
 }
 
 .budget-axis-tick {
-  stroke: #f59e0b;
+  stroke: var(--warning);
   stroke-width: 1.5;
 }
 
@@ -1646,18 +1646,18 @@ a {
 }
 
 .budget-trend-swatch.within {
-  background: #16a34a;
+  background: var(--good);
 }
 
 .budget-trend-swatch.over {
-  background: #dc2626;
+  background: var(--danger);
 }
 
 .budget-trend-swatch.budget-line {
   width: 20px;
   height: 0;
   border-radius: 0;
-  border-top: 2.6px dashed #f59e0b;
+  border-top: 2.6px dashed var(--warning);
 }
 
 .faq-intro {
@@ -1811,12 +1811,12 @@ a {
 
 :root[data-theme="dark"] .account-icon.bank {
   background: #172554;
-  color: #93c5fd;
+  color: var(--accent);
 }
 
 :root[data-theme="dark"] .account-icon.card {
   background: #33210f;
-  color: #fbbf24;
+  color: var(--warning);
 }
 
 .account-icon.card {
@@ -1826,12 +1826,12 @@ a {
 
 .account-icon.food {
   background: #fff3e7;
-  color: #f97316;
+  color: var(--warning);
 }
 
 :root[data-theme="dark"] .account-icon.food {
   background: #3a2610;
-  color: #fb923c;
+  color: var(--warning);
 }
 
 .account-values {
@@ -3003,7 +3003,7 @@ a {
 .transaction-tag.method {
   border-color: rgba(37, 99, 235, 0.2);
   background: rgba(37, 99, 235, 0.1);
-  color: #2563eb;
+  color: var(--accent);
 }
 
 .transaction-tag.type,
@@ -3030,7 +3030,7 @@ a {
 :root[data-theme="dark"] .transaction-tag.method {
   border-color: rgba(96, 165, 250, 0.28);
   background: rgba(59, 130, 246, 0.14);
-  color: #93c5fd;
+  color: var(--accent);
 }
 
 .transaction-tag span {
@@ -3173,7 +3173,7 @@ a {
   grid-template-columns: minmax(0, 1fr) minmax(340px, 430px);
   gap: 36px;
   align-items: center;
-  min-height: 100vh;
+  min-height: 100dvh;
   padding: 42px;
 }
 
@@ -3653,7 +3653,7 @@ a {
 }
 
 .fullscreen-state {
-  min-height: 100vh;
+  min-height: 100dvh;
   border: 0;
 }
 
@@ -3726,7 +3726,7 @@ a {
   display: grid;
   gap: 15px;
   width: min(560px, 100%);
-  max-height: min(760px, calc(100vh - 36px));
+  max-height: min(760px, calc(100dvh - 36px));
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -4187,7 +4187,7 @@ a {
 }
 
 .summary-change.bad {
-  color: var(--danger, #dc2626);
+  color: var(--danger);
 }
 
 /* --- Coming up (upcoming AutoPay / EMIs) --- */
@@ -4264,7 +4264,7 @@ a {
   align-items: center;
   gap: 6px;
   margin: 0;
-  color: var(--danger, #dc2626);
+  color: var(--danger);
   font-size: 0.82rem;
   font-weight: 800;
 }
@@ -4500,9 +4500,9 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
-  border: 1px solid color-mix(in srgb, #ea580c 35%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
   border-radius: 10px;
-  background: color-mix(in srgb, #ea580c 8%, var(--panel));
+  background: color-mix(in srgb, var(--warning) 8%, var(--panel));
   color: var(--text);
   padding: 10px 14px;
   font-size: 0.9rem;
@@ -4510,7 +4510,7 @@ a {
 
 .attention-banner > svg {
   flex: none;
-  color: #ea580c;
+  color: var(--warning);
 }
 
 .attention-banner > span {

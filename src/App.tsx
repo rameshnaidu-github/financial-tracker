@@ -51,6 +51,7 @@ import {
 } from "./format";
 import { IconGlyph } from "./icons";
 import { accountImpact } from "./account-impact";
+import { useCountUp, useScrollReveal } from "./motion";
 import { cashflowPartsFromTypes, INFLOW_BEHAVIORS, type CashflowPart } from "./report-cashflow";
 import type {
   Account,
@@ -237,6 +238,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<{ message: string; action?: NoticeAction } | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
+  const contentRef = useRef<HTMLElement>(null);
+  useScrollReveal(contentRef, activePage);
   const noticeTimer = useRef<number | undefined>(undefined);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
@@ -264,6 +267,12 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("finance-theme", theme);
   }, [theme]);
+
+  // Each page names its own browser tab, so history and open tabs are recognisable.
+  useEffect(() => {
+    const label = navItems.find((item) => item.page === activePage)?.label;
+    document.title = label ? `${label} · Financial Tracker` : "Financial Tracker";
+  }, [activePage]);
 
   useEffect(() => {
     const onPopState = () => setActivePage(pageFromPath(window.location.pathname));
@@ -461,7 +470,7 @@ export default function App() {
       </aside>
 
       <main className="main-shell">
-        <header className="topbar">
+        <header className="topbar" key={activePage}>
           <div>
             <h1>{navItems.find((item) => item.page === activePage)?.label}</h1>
           </div>
@@ -483,7 +492,7 @@ export default function App() {
           </div>
         </header>
 
-        <section className="content-area">
+        <section className="content-area" ref={contentRef}>
           {activePage === "overview" && (
             <OverviewPage
               selectedAccountId={selectedAccountId}
@@ -879,17 +888,22 @@ function OverviewPage({
               ? formatINR(selectedAccount.availableLimitPaise ?? 0)
               : formatINR(overview.summary.availableCashPaise)
           }
+          countPaise={
+            selectedAccount?.type === "credit_card"
+              ? selectedAccount.availableLimitPaise ?? 0
+              : overview.summary.availableCashPaise
+          }
           icon={<WalletCards />}
         />
         <SummaryCard
           label="Credit card outstanding"
-          value={formatINR(overview.summary.creditOutstandingPaise)}
+          value={formatINR(overview.summary.creditOutstandingPaise)} countPaise={overview.summary.creditOutstandingPaise}
           icon={<CreditCard />}
           tone="warning"
         />
         <SummaryCard
           label="Outflow"
-          value={formatINR(overview.summary.totalOutflowPaise)}
+          value={formatINR(overview.summary.totalOutflowPaise)} countPaise={overview.summary.totalOutflowPaise}
           icon={<BarChart3 />}
           note={
             <ChangeVsLastMonth
@@ -902,7 +916,7 @@ function OverviewPage({
         />
         <SummaryCard
           label="Inflow"
-          value={formatINR(overview.summary.totalInflowPaise)}
+          value={formatINR(overview.summary.totalInflowPaise)} countPaise={overview.summary.totalInflowPaise}
           icon={<TrendingUp />}
           note={
             <ChangeVsLastMonth
@@ -917,12 +931,12 @@ function OverviewPage({
       </OverviewDisclosure>
 
       <section className="two-column">
-        <CollapsiblePanel title={`Recent activity · ${overview.recentTransactions.length}`} expanded={allExpanded} action={<button onClick={() => onNavigate("transactions")}>View all</button>}>
+        <CollapsiblePanel title={`Recent activity (${overview.recentTransactions.length})`} expanded={allExpanded} action={<button onClick={() => onNavigate("transactions")}>View all</button>}>
           <TransactionTable transactions={overview.recentTransactions} empty="No transactions yet." compact />
         </CollapsiblePanel>
 
         <div className="overview-side-stack">
-          <CollapsiblePanel title={`Account snapshot · ${overview.accounts.length}`} expanded={allExpanded} action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
+          <CollapsiblePanel title={`Account snapshot (${overview.accounts.length})`} expanded={allExpanded} action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
             <div className="account-stack">
               {overview.accounts.map((account) => (
                 <OverviewAccountLine key={account.id} account={account} alertPercent={cardAlertPercent} />
@@ -971,7 +985,7 @@ function OverviewPage({
       </section>
 
       <section className="two-column overview-analytics">
-        <CollapsiblePanel title="Top spending lines" expanded={allExpanded} action={<button onClick={() => onNavigate("reports")}>Details</button>}>
+        <CollapsiblePanel title="Top spending lines" expanded={allExpanded} action={<button onClick={() => onNavigate("reports")}>Open reports</button>}>
           <CategoryBars
             categories={overview.categoryReport.slice(0, 5)}
             onSelect={(category) => showMonthTransactions(category.subcategoryId)}
@@ -1088,7 +1102,7 @@ function CashflowPanel({ wealth, investedPaise }: { wealth: WealthSummary; inves
                   : "amount-out"
             }
           >
-            {cashflow.savingsRatePercent === null ? "—" : `${cashflow.savingsRatePercent}%`}
+            {cashflow.savingsRatePercent === null ? "Not enough data yet" : `${cashflow.savingsRatePercent}%`}
           </strong>
         </div>
       </div>
@@ -1100,7 +1114,7 @@ function CashflowPanel({ wealth, investedPaise }: { wealth: WealthSummary; inves
       )}
       <div className="cashflow-runway">
         <span>Emergency-fund runway</span>
-        <strong>{runwayMonths === null ? "—" : `${runwayMonths} months`}</strong>
+        <strong>{runwayMonths === null ? "Not enough data yet" : `${runwayMonths} months`}</strong>
         <small>How long your liquid cash covers your recent average monthly spending.</small>
       </div>
     </div>
@@ -1346,8 +1360,9 @@ function WeeklyEntryPage({
       <section className="panel entry-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">This week</p>
-            <h2>{week.label}</h2>
+            <h2>
+              This week <span className="heading-sub">{week.label}</span>
+            </h2>
           </div>
           <button className="secondary-action" onClick={() => setImportOpen(true)}>
             <FileSpreadsheet size={17} />
@@ -2079,7 +2094,7 @@ function TransactionsPage({
             onClick={() => setFiltersOpen((open) => !open)}
           >
             <SlidersHorizontal size={16} />
-            Filters{activeFilterCount > 0 ? ` · ${activeFilterCount}` : ""}
+            Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
           </button>
           <div id="transaction-filters" className={`filter-extra${filtersOpen ? " open" : ""}`}>
           <label className="control-field toolbar-control">
@@ -2732,7 +2747,6 @@ function ImportTransactionsModal({
       <form className="import-modal" onSubmit={submit} role="dialog" aria-modal="true">
         <div className="modal-title-row">
           <div>
-            <p className="eyebrow">Excel Import</p>
             <h2>Import transactions</h2>
           </div>
           <button type="button" className="icon-button" onClick={onClose} title="Close">
@@ -3658,15 +3672,15 @@ function BudgetPlannerPage({
               {formatShortDate(plan.start)} to {formatShortDate(plan.end)} · Day {plan.dayOfMonth} of {plan.daysInMonth}
             </p>
             <div className="summary-grid report-summary">
-              <SummaryCard label="Budgeted" value={formatINR(plan.totals.amountPaise)} icon={<PiggyBank />} />
-              <SummaryCard label="Used" value={formatINR(plan.totals.actualPaise)} icon={<BarChart3 />} tone={budgetSummaryTone(plan)} />
+              <SummaryCard label="Budgeted" value={formatINR(plan.totals.amountPaise)} countPaise={plan.totals.amountPaise} icon={<PiggyBank />} />
+              <SummaryCard label="Used" value={formatINR(plan.totals.actualPaise)} countPaise={plan.totals.actualPaise} icon={<BarChart3 />} tone={budgetSummaryTone(plan)} />
               <SummaryCard
                 label="Remaining"
-                value={formatINR(plan.totals.remainingPaise)}
+                value={formatINR(plan.totals.remainingPaise)} countPaise={plan.totals.remainingPaise}
                 icon={<WalletCards />}
                 tone={plan.totals.remainingPaise < 0 ? "warning" : "good"}
               />
-              <SummaryCard label="Projected" value={formatINR(plan.totals.projectedPaise)} icon={<TrendingUp />} tone={plan.totals.projectedPaise > plan.totals.amountPaise ? "warning" : "neutral"} />
+              <SummaryCard label="Projected" value={formatINR(plan.totals.projectedPaise)} countPaise={plan.totals.projectedPaise} icon={<TrendingUp />} tone={plan.totals.projectedPaise > plan.totals.amountPaise ? "warning" : "neutral"} />
             </div>
 
             <form className="budget-add-form" onSubmit={addBudget}>
@@ -3981,11 +3995,11 @@ function LoansPage({
   return (
     <div className="page-grid loans-page">
       <section className="summary-grid mini loan-summary-grid">
-        <SummaryCard label="Active outstanding" value={formatINR(activeOutstanding)} icon={<Landmark />} tone="warning" />
-        <SummaryCard label="Monthly EMI total" value={formatINR(monthlyEmiTotal)} icon={<CalendarDays />} />
+        <SummaryCard label="Active outstanding" value={formatINR(activeOutstanding)} countPaise={activeOutstanding} icon={<Landmark />} tone="warning" />
+        <SummaryCard label="Monthly EMI total" value={formatINR(monthlyEmiTotal)} countPaise={monthlyEmiTotal} icon={<CalendarDays />} />
         <SummaryCard
           label="Interest paid"
-          value={formatINR(paidInterest)}
+          value={formatINR(paidInterest)} countPaise={paidInterest}
           icon={<BarChart3 />}
           note={
             activeLoans.some((loan) => loan.estimatedHistoricalInterestPaidPaise > 0) ? (
@@ -4392,8 +4406,8 @@ function InvestmentsPage({
   return (
     <div className="page-grid loans-page">
       <section className="summary-grid report-summary">
-        <SummaryCard label="Invested" value={formatINR(totalInvested)} icon={<WalletCards />} />
-        <SummaryCard label="Current value" value={formatINR(totalCurrent)} icon={<BarChart3 />} />
+        <SummaryCard label="Invested" value={formatINR(totalInvested)} countPaise={totalInvested} icon={<WalletCards />} />
+        <SummaryCard label="Current value" value={formatINR(totalCurrent)} countPaise={totalCurrent} icon={<BarChart3 />} />
         <SummaryCard
           label="Total gain"
           value={signedImpact(totalGain)}
@@ -4411,7 +4425,7 @@ function InvestmentsPage({
       {lastUpdated && (
         <p className="helper-text investments-asof">
           <Info size={14} />
-          Values are entered manually — figures reflect what you last saved on{" "}
+          Values are entered manually. Figures reflect what you last saved on{" "}
           {formatDateWithYear(lastUpdated.slice(0, 10))}. SIPs you log against a mutual fund are added to it
           automatically.
         </p>
@@ -4747,7 +4761,7 @@ function VacationsPage({
   function remove(vacation: Vacation) {
     requestConfirm({
       message: "Remove this vacation?",
-      detail: `${vacation.name} will be removed. The tagged expenses stay in your normal expenses — only the trip grouping is deleted.`,
+      detail: `${vacation.name} will be removed. The tagged expenses stay in your normal expenses. Only the trip grouping is deleted.`,
       confirmLabel: "Remove",
       tone: "danger",
       onConfirm: async () => {
@@ -4767,12 +4781,12 @@ function VacationsPage({
     <div className="page-grid loans-page">
       <section className="summary-grid report-summary">
         <SummaryCard label="Trips" value={String(vacations.length)} icon={<Plane />} />
-        <SummaryCard label="Total spent" value={formatINR(totalSpent)} icon={<WalletCards />} />
-        {totalBudget > 0 && <SummaryCard label="Total budget" value={formatINR(totalBudget)} icon={<Target />} />}
+        <SummaryCard label="Total spent" value={formatINR(totalSpent)} countPaise={totalSpent} icon={<WalletCards />} />
+        {totalBudget > 0 && <SummaryCard label="Total budget" value={formatINR(totalBudget)} countPaise={totalBudget} icon={<Target />} />}
         {totalBudget > 0 && (
           <SummaryCard
             label="Left in budget"
-            value={formatINR(totalBudget - totalSpent)}
+            value={formatINR(totalBudget - totalSpent)} countPaise={totalBudget - totalSpent}
             icon={<PiggyBank />}
             tone={totalBudget - totalSpent >= 0 ? "good" : "warning"}
           />
@@ -4781,7 +4795,7 @@ function VacationsPage({
 
       <p className="helper-text investments-asof">
         <Info size={14} />
-        Tag any expense to a trip from the Weekly Entry form — it still counts in your normal expenses, and also rolls up here.
+        Tag any expense to a trip from the Weekly Entry form. It still counts in your normal expenses, and also rolls up here.
       </p>
 
       <div className="two-column loans-layout">
@@ -4830,7 +4844,7 @@ function VacationCard({
       : 0;
   const dateLabel =
     vacation.startDate && vacation.endDate
-      ? `${formatDateWithYear(vacation.startDate)} – ${formatDateWithYear(vacation.endDate)}`
+      ? `${formatDateWithYear(vacation.startDate)} to ${formatDateWithYear(vacation.endDate)}`
       : vacation.startDate
         ? `From ${formatDateWithYear(vacation.startDate)}`
         : "";
@@ -4862,7 +4876,7 @@ function VacationCard({
             </strong>
           </div>
           <div className="vacation-budget-bar">
-            <span style={{ width: `${usedPercent}%`, background: overBudget ? "#dc2626" : "#0ea5e9" }} />
+            <span style={{ width: `${usedPercent}%`, background: overBudget ? "var(--danger)" : "var(--accent)" }} />
           </div>
           <small>
             {overBudget
@@ -5065,7 +5079,7 @@ function SubscriptionsPage({
     <div className="page-grid loans-page">
       <section className="summary-grid mini loan-summary-grid">
         <SummaryCard label="Active subscriptions" value={String(activeCount)} icon={<CalendarClock />} />
-        <SummaryCard label="Monthly total" value={formatINR(monthlyTotal)} icon={<ArrowDownUp />} tone="warning" />
+        <SummaryCard label="Monthly total" value={formatINR(monthlyTotal)} countPaise={monthlyTotal} icon={<ArrowDownUp />} tone="warning" />
       </section>
 
       <div className="two-column loans-layout">
@@ -6231,7 +6245,7 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "Where is my data stored? Is anything uploaded online?",
     answer:
-      "Everything runs on this device. Your accounts, transactions, budgets and settings live in a local database on your computer — nothing is uploaded to any server. Backups are also saved locally."
+      "Everything runs on this device. Your accounts, transactions, budgets and settings live in a local database on your computer. Nothing is uploaded to any server. Backups are also saved locally."
   },
   {
     question: "How is 'Available cash' calculated?",
@@ -6249,24 +6263,24 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
       "It adds up every expense dated in the current calendar month. Income, transfers between your own accounts, and credit-card payments are not counted as spending."
   },
   {
-    question: "What do the budget labels mean — On track, Watch, Likely to exceed, Over budget?",
+    question: "What do the budget labels mean: On track, Watch, Likely to exceed, Over budget?",
     answer:
       "On track means spending is comfortably within budget. Watch means you're getting close. Likely to exceed means the month-end projection lands over the budget. Over budget means you've already spent more than the budgeted amount. The projection is what you've spent so far plus what that line usually adds in the rest of the month (from recent months that used it), so rent paid early isn't doubled. Without two months of history it follows your pace, and in the first days of a month it just shows what you've spent."
   },
   {
     question: "Are my investment values updated automatically?",
     answer:
-      "Market prices aren't fetched — stocks, mutual funds, gold, land, property, PF and fixed-deposit (FD) values are entered by you. One exception: a SIP you log against a mutual fund (Type Investment, SubType Mutual Funds, linked to the fund) is added to that fund's Invested and Current value automatically, if it's dated after you last typed those figures. SIPs from before then are assumed to be included already, so nothing is counted twice. When you enter a new value from your statement, that becomes the new starting point. The Investments page shows the date you last saved a change so you know how current the figures are. Each investment type is a dropdown showing its total invested, current value and net gain — click it to reveal every holding of that type."
+      "Market prices aren't fetched: stocks, mutual funds, gold, land, property, PF and fixed-deposit (FD) values are entered by you. One exception: a SIP you log against a mutual fund (Type Investment, SubType Mutual Funds, linked to the fund) is added to that fund's Invested and Current value automatically, if it's dated after you last typed those figures. SIPs from before then are assumed to be included already, so nothing is counted twice. When you enter a new value from your statement, that becomes the new starting point. The Investments page shows the date you last saved a change so you know how current the figures are. Each investment type is a dropdown showing its total invested, current value and net gain. Click it to reveal every holding of that type."
   },
   {
     question: "How do vacations work, and do trip expenses still count as normal expenses?",
     answer:
-      "A vacation is a label you put on expenses, not a new category. First create a trip on the Vacations page (optionally with dates and a budget). Then, when you add an Expense in Weekly Entry, tick 'Part of a vacation?' and choose the trip. That expense keeps its normal SubType (Food, Travel, Hotel…) and still counts in all your normal expense totals, reports and budgets — and it also rolls up under the trip. The Vacations page shows each trip's total spend, budget-vs-spent, and a breakdown by SubType. Deleting a trip only removes the grouping; the expenses themselves stay untouched."
+      "A vacation is a label you put on expenses, not a new category. First create a trip on the Vacations page (optionally with dates and a budget). Then, when you add an Expense in Weekly Entry, tick 'Part of a vacation?' and choose the trip. That expense keeps its normal SubType (Food, Travel, Hotel…) and still counts in all your normal expense totals, reports and budgets, and it also rolls up under the trip. The Vacations page shows each trip's total spend, budget-vs-spent, and a breakdown by SubType. Deleting a trip only removes the grouping; the expenses themselves stay untouched."
   },
   {
     question: "How are Inflow, Outflow and Savings in Reports calculated?",
     answer:
-      "Inflow adds up everything that brought money in for the period (income, plus any refund that isn't tied to a purchase). A refund recorded with the Refund button on a purchase isn't inflow: it reduces that purchase's SubType instead, so it never makes a month look like you earned more. Outflow adds up everything that took money out (expense, loan, investment, transfer, credit-card payment and any other outflow categories). Savings is simply Inflow minus Outflow — positive means you kept money, negative means you spent more than came in. Self transfers are left out of both sides, because moving money between your own accounts is not income or spending. The Outflow figure on the Overview uses this exact same calculation."
+      "Inflow adds up everything that brought money in for the period (income, plus any refund that isn't tied to a purchase). A refund recorded with the Refund button on a purchase isn't inflow: it reduces that purchase's SubType instead, so it never makes a month look like you earned more. Outflow adds up everything that took money out (expense, loan, investment, transfer, credit-card payment and any other outflow categories). Savings is simply Inflow minus Outflow. Positive means you kept money, negative means you spent more than came in. Self transfers are left out of both sides, because moving money between your own accounts is not income or spending. The Outflow figure on the Overview uses this exact same calculation."
   },
   {
     question: "How do I move money between my own bank accounts?",
@@ -6491,7 +6505,7 @@ function ProfilePage({
                 Save
               </button>
             </div>
-            <small>Credit cards turn red when utilization crosses this value (1–100).</small>
+            <small>Credit cards turn red when utilization crosses this value (1-100).</small>
           </div>
           <div className="settings-row backup-row">
             <span>Backup status</span>
@@ -6732,23 +6746,38 @@ function SummaryCard({
   value,
   icon,
   tone = "neutral",
-  note
+  note,
+  countPaise
 }: {
   label: string;
   value: string;
   icon: React.ReactNode;
   tone?: "neutral" | "warning" | "good";
   note?: React.ReactNode;
+  /** When given, the figure counts up to this amount (the formatted `value` stays the accessible text). */
+  countPaise?: number;
 }) {
   return (
     <div className={`summary-card ${tone}`}>
       <span>{icon}</span>
       <div>
         <p>{label}</p>
-        <strong>{value}</strong>
+        <strong>{countPaise === undefined ? value : <CountUp paise={countPaise} label={value} />}</strong>
         {note}
       </div>
     </div>
+  );
+}
+
+/** A money figure that counts up to its value when it first appears or changes. */
+function CountUp({ paise, label }: { paise: number; label: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useCountUp(ref, paise, formatINR);
+  return (
+    <>
+      <span className="visually-hidden">{label}</span>
+      <span ref={ref} aria-hidden="true" className="count-up" />
+    </>
   );
 }
 
@@ -6767,7 +6796,7 @@ function ChangeVsLastMonth({
   if (previous <= 0) return null;
   const [year, month] = comparison.month.split("-").map(Number);
   const shortMonth = new Date(year, month - 1, 1).toLocaleDateString("en-IN", { month: "short" });
-  const period = comparison.partial ? `1–${comparison.throughDay} ${shortMonth}` : shortMonth;
+  const period = comparison.partial ? `1-${comparison.throughDay} ${shortMonth}` : shortMonth;
   const change = Math.round(((current - previous) / previous) * 100);
   if (change === 0) {
     return <small className="summary-change">Same as {period}</small>;
@@ -6799,7 +6828,7 @@ function UpcomingPaymentsList({
       ? "Due today"
       : daysAway === 1
         ? "Due tomorrow"
-        : `In ${daysAway} days · ${formatDateWithYear(dueDate).replace(/ \d{4}$/, "")}`;
+        : `In ${daysAway} days, ${formatDateWithYear(dueDate).replace(/ \d{4}$/, "")}`;
   return (
     <div className="upcoming-list">
       {upcoming.items.map((item) => (
