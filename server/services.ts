@@ -3687,9 +3687,17 @@ function mapLoan(row: LoanRow): LoanSummary {
     trackingStartMonth,
     row.tenure_months
   );
-  const estimatedHistoricalInterestPaidPaise = Math.max(
-    historicalInstallments * row.monthly_emi_paise - openingPrincipalPaidPaise,
-    0
+  // EMIs due minus the principal that came down is the interest, but only if those EMIs were
+  // really paid. When the entered balance never dropped (or the rate is 0%), that difference is
+  // not interest, so the estimate is capped at what the loan's own rate would have charged.
+  const estimatedHistoricalInterestPaidPaise = Math.min(
+    Math.max(historicalInstallments * row.monthly_emi_paise - openingPrincipalPaidPaise, 0),
+    scheduledInterestPaise(
+      row.principal_amount_paise,
+      row.annual_interest_rate_bps,
+      row.monthly_emi_paise,
+      historicalInstallments
+    )
   );
   const trackedPrincipalPaidPaise = paymentTotals?.principal_paise ?? 0;
   const trackedInterestPaidPaise = paymentTotals?.interest_paise ?? 0;
@@ -3751,6 +3759,24 @@ function mapLoan(row: LoanRow): LoanSummary {
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+/** Interest the amortisation schedule charges over the first `installments` EMIs of a loan. */
+function scheduledInterestPaise(
+  principalPaise: number,
+  annualInterestRateBps: number,
+  monthlyEmiPaise: number,
+  installments: number
+) {
+  const monthlyRate = annualInterestRateBps / 10_000 / 12;
+  let balance = principalPaise;
+  let interestPaise = 0;
+  for (let month = 0; month < installments && balance > 0; month += 1) {
+    const interest = Math.round(balance * monthlyRate);
+    interestPaise += interest;
+    balance -= Math.max(monthlyEmiPaise - interest, 0);
+  }
+  return interestPaise;
 }
 
 function calculateRemainingPayments(

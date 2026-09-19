@@ -1514,18 +1514,6 @@ select:not([multiple]):not([size]) {
   min-width: 0;
 }
 
-@media (min-width: 1121px) {
-  /* The three secondary headline tiles stack icon over figure, so their figures have room. */
-  .overview-summary .summary-card:not(:first-child) {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 10px;
-  }
-
-  .overview-summary .summary-card:first-child {
-    align-items: center;
-  }
-}
 
 /* Card headers: the title block shrinks and its detail line wraps instead of pushing the card wider. */
 .loan-card-header > *,
@@ -2016,4 +2004,103 @@ button.donut-legend-item:hover {
   .ledger-row .row-actions {
     transition: none;
   }
+}
+
+/* ========== Polish: trust-blue actions, matching figures, a quiet background wash ========== */
+
+/* ---------- Background ---------- */
+/* Muted text one step darker so labels keep AA contrast over the wash (and read more easily). */
+:root {
+  --muted: #566072;
+}
+
+/*
+ * Three soft washes in the accent family (and a hint of money-green) sit on a fixed layer behind
+ * everything, so the page has depth without competing with figures. Surfaces stay opaque, and
+ * the washes are faint enough that text keeps AA contrast even where all three overlap.
+ */
+:root {
+  --wash-1: rgba(58, 85, 180, 0.06);
+  --wash-2: rgba(24, 119, 78, 0.035);
+  --wash-3: rgba(99, 124, 214, 0.045);
+}
+
+:root[data-theme="dark"] {
+  --wash-1: rgba(143, 163, 234, 0.1);
+  --wash-2: rgba(76, 195, 138, 0.05);
+  --wash-3: rgba(143, 163, 234, 0.06);
+}
+
+body,
+:root[data-theme="dark"] body {
+  background: transparent;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 620px at 6% -10%, var(--wash-1), transparent 62%),
+    radial-gradient(900px 560px at 102% 2%, var(--wash-2), transparent 60%),
+    radial-gradient(1300px 720px at 58% 112%, var(--wash-3), transparent 64%);
+}
+
+/* The sidebar lets the wash run behind it; nothing scrolls under it, so no blur is needed. */
+.sidebar,
+:root[data-theme="dark"] .sidebar {
+  outline: none;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  box-shadow: none;
+}
+
+/* ---------- Primary actions: the accent blue, the colour people read as "trust" ---------- */
+.primary-action {
+  background: var(--accent);
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 8px 18px -10px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.primary-action:not(:disabled):hover {
+  background: var(--accent-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 14px 26px -12px color-mix(in srgb, var(--accent) 75%, transparent);
+}
+
+.primary-action > .ui-icon {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+:root[data-theme="dark"] .primary-action {
+  background: var(--accent);
+  color: #0b0e14;
+}
+
+:root[data-theme="dark"] .primary-action:not(:disabled):hover {
+  background: var(--accent-strong);
+}
+
+/* ---------- Overview figures: every tile reads like Available cash ---------- */
+@media (min-width: 721px) {
+  .overview-lead .overview-summary .summary-card {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+  }
+}
+
+/* Profile Save shares the primary look: dark label on the light accent in dark mode (white was ~2.4:1). */
+.profile-menu .profile-save-button:not(.blurred):hover {
+  background: var(--accent-strong);
+}
+
+:root[data-theme="dark"] .profile-save-button,
+:root[data-theme="dark"] .profile-menu .profile-save-button,
+:root[data-theme="dark"] .profile-menu .profile-save-button:hover {
+  color: #0b0e14;
 }

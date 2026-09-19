@@ -3042,6 +3042,56 @@ test("bonds are an investment type with their own allocation slice", () => {
   assert(table.sql.includes("'bonds'"), "The investments table should accept bonds.");
 });
 
+test("historical interest never exceeds what the loan's rate charges", () => {
+  // Started three months ago, added today, balance still the full principal: the formula
+  // "EMIs due minus principal drop" used to book every assumed EMI as interest, even at 0%.
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+  const startMonth = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`;
+  const zero = services.createLoan({
+    name: "QA 0% consumer loan",
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    principalAmountPaise: 5_000_00,
+    startingOutstandingPaise: 5_000_00,
+    startMonth,
+    annualInterestRateBps: 0,
+    tenureMonths: 10,
+    monthlyEmiPaise: 500_00
+  });
+  const zeroSummary = services.listLoans(true).find((item) => item.id === zero.id);
+  assert(zeroSummary && zeroSummary.monthsElapsed > 0, "The 0% loan should have untracked months before today.");
+  assert(
+    zeroSummary.estimatedHistoricalInterestPaidPaise === 0 && zeroSummary.interestPaidPaise === 0,
+    `A 0% loan must show no interest paid, got ${zeroSummary.interestPaidPaise}.`
+  );
+
+  // Same shape at 12%: interest is capped at what 12% a year charges on 5,000 over those months.
+  const rated = services.createLoan({
+    name: "QA 12% loan with an unchanged balance",
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    principalAmountPaise: 5_000_00,
+    startingOutstandingPaise: 5_000_00,
+    startMonth,
+    annualInterestRateBps: 1200,
+    tenureMonths: 10,
+    monthlyEmiPaise: 528_00
+  });
+  const ratedSummary = services.listLoans(true).find((item) => item.id === rated.id);
+  assert(ratedSummary, "The 12% loan should be listed.");
+  let balance = 5_000_00;
+  let scheduled = 0;
+  for (let month = 0; month < ratedSummary.monthsElapsed; month += 1) {
+    const interest = Math.round(balance * 0.01);
+    scheduled += interest;
+    balance -= 528_00 - interest;
+  }
+  assert(
+    ratedSummary.estimatedHistoricalInterestPaidPaise > 0 &&
+      Math.abs(ratedSummary.estimatedHistoricalInterestPaidPaise - scheduled) <= ratedSummary.monthsElapsed,
+    `Estimated interest should follow the 12% schedule (${scheduled}), got ${ratedSummary.estimatedHistoricalInterestPaidPaise}.`
+  );
+});
+
 test("whole-rupee headline figures round and never show paise", () => {
   const cases: Array<[number, string]> = [
     [1_23_456_49, "₹1,23,456"],
