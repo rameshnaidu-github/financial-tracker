@@ -144,7 +144,7 @@ export function initDatabase() {
 
     CREATE TABLE IF NOT EXISTS investments (
       id TEXT PRIMARY KEY,
-      type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'other')),
+      type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'other')),
       name TEXT NOT NULL,
       invested_paise INTEGER NOT NULL CHECK (invested_paise >= 0),
       current_value_paise INTEGER NOT NULL CHECK (current_value_paise >= 0),
@@ -267,6 +267,10 @@ function ensureInvestmentIndexes() {
 function ensureInvestmentColumns() {
   addColumnIfMissing("investments", "shares", "REAL");
   addColumnIfMissing("investments", "purchase_date", "TEXT");
+  // The day the user last entered each figure; linked SIPs dated after it are added on top.
+  // NULL (holdings from before this) means "the day the holding was added".
+  addColumnIfMissing("investments", "invested_as_of", "TEXT");
+  addColumnIfMissing("investments", "value_as_of", "TEXT");
 }
 
 function migrateInvestmentTypes() {
@@ -274,18 +278,19 @@ function migrateInvestmentTypes() {
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'investments'")
     .get() as { sql?: string } | undefined;
 
-  // Only rebuild older tables whose CHECK constraint predates the 'fd' type.
-  if (!row?.sql || row.sql.includes("'fd'")) {
+  // Only rebuild older tables whose CHECK constraint predates the newest type ('bonds').
+  if (!row?.sql || row.sql.includes("'bonds'")) {
     return;
   }
 
+  createMigrationBackup("investment-types");
   db.exec("PRAGMA foreign_keys = OFF;");
   db.exec("BEGIN;");
   try {
     db.exec(`
       CREATE TABLE investments_new (
         id TEXT PRIMARY KEY,
-        type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'other')),
+        type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'other')),
         name TEXT NOT NULL,
         invested_paise INTEGER NOT NULL CHECK (invested_paise >= 0),
         current_value_paise INTEGER NOT NULL CHECK (current_value_paise >= 0),
@@ -293,12 +298,16 @@ function migrateInvestmentTypes() {
         purchase_date TEXT,
         note TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        invested_as_of TEXT,
+        value_as_of TEXT
       );
 
       INSERT INTO investments_new
-        (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at)
-      SELECT id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at
+        (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at,
+         invested_as_of, value_as_of)
+      SELECT id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at,
+             invested_as_of, value_as_of
       FROM investments;
 
       DROP TABLE investments;
@@ -615,7 +624,8 @@ function seedTaxonomy() {
         type.behavior,
         type.icon,
         type.color,
-        type.name === "Credit Card Payment" ? 1 : 0,
+        // Card payments and refunds are wired into the app's logic, so their Types can't be deleted.
+        type.id === "type_card_payment" || type.id === "type_refund" ? 1 : 0,
         typeIndex + 1
       );
       seeded.add(type.id);

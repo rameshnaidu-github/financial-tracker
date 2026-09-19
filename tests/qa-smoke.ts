@@ -2467,7 +2467,7 @@ function hasTaxonomyId(id: string) {
   return services.listCategoryTypes().some((type) => type.id === id || type.subcategories.some((sub) => sub.id === id));
 }
 
-test("defaults cover rent, bills, insurance, education, personal care and refunds", () => {
+test("defaults cover rent, bills, insurance, education, personal care and refunds", async () => {
   const expense = services.listCategoryTypes().find((type) => type.id === "type_expense");
   const names = new Set(expense?.subcategories.map((sub) => sub.name));
   for (const name of ["Rent", "Bills & Utilities", "Insurance", "Education", "Personal care"]) {
@@ -2475,6 +2475,8 @@ test("defaults cover rent, bills, insurance, education, personal care and refund
   }
   const refund = services.listCategoryTypes().find((type) => type.id === "type_refund");
   assert(refund?.behavior === "refund" && refund.subcategories.length === 0, "A Refund type with refund behavior should exist.");
+  assert(refund.isLocked, "The Refund type powers the Refund button, so it must be locked.");
+  await assertRejectsWithMessage("delete refund type", () => services.deleteCategoryType("type_refund"), "locked");
 });
 
 test("deleted defaults stay deleted after a restart while new defaults arrive once", () => {
@@ -2572,7 +2574,7 @@ test("backfilled EMIs are not double counted in loan history", () => {
   const r = 900 / 10_000 / 12;
   const amortized = Math.ceil(-Math.log(1 - (summary.outstandingPaise * r) / emiPaise) / Math.log(1 + r));
   assert(
-    summary.monthsLeft === Math.min(amortized, 60 - (historical + 3)),
+    summary.monthsLeft === amortized,
     `Months left should come from the outstanding balance (${amortized}), got ${summary.monthsLeft}.`
   );
 });
@@ -2762,6 +2764,281 @@ test("the transaction list filters to uncategorized rows", () => {
   assert(services.summarizeTransactions(query).count === 1, "Totals should use the same filter.");
   const csv = services.exportTransactionsCsv(query);
   assert(csv.includes("QA mystery UPI") && !csv.includes("QA known shop"), "Export should use the same filter.");
+});
+
+// ---- Linked SIPs grow a mutual fund's Invested and Current value ----
+
+function isoDaysFromToday(days: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function logSip(investmentId: string, date: string, amountPaise: number) {
+  assert(state.bankId, "Bank should exist.");
+  const created = services.createTransaction({
+    date,
+    accountId: state.bankId,
+    method: "bank_transfer",
+    merchant: "QA SIP",
+    typeId: typeId("Investment"),
+    subcategoryId: subcategoryId("Investment", "Mutual Funds"),
+    amountPaise,
+    direction: "outflow",
+    kind: "investment",
+    investmentId
+  }).transaction;
+  assert(created, "SIP should be created.");
+  return created.id;
+}
+
+function holding(id: string) {
+  const item = services.listInvestments().find((investment) => investment.id === id);
+  assert(item, "Holding should be listed.");
+  return item;
+}
+
+test("linked SIPs after the entered figures grow invested and current value once", () => {
+  const fund = services.createInvestment({
+    type: "mutual_funds",
+    name: "QA Flexi Cap SIP",
+    investedPaise: 1_20_000_00,
+    currentValuePaise: 1_38_500_00
+  });
+  // Already in the entered figures: a backfilled SIP from last month and one from today.
+  logSip(fund.id, isoDaysFromToday(-30), 10_000_00);
+  logSip(fund.id, isoDaysFromToday(0), 10_000_00);
+  let item = holding(fund.id);
+  assert(item.investedPaise === 1_20_000_00 && item.currentValuePaise === 1_38_500_00, "SIPs up to today are already in the entered figures.");
+  assert(item.sipsSinceCount === 0, "Nothing should be counted as added yet.");
+
+  logSip(fund.id, isoDaysFromToday(1), 10_000_00);
+  logSip(fund.id, isoDaysFromToday(32), 5_000_00);
+  item = holding(fund.id);
+  assert(item.investedPaise === 1_35_000_00, `Invested should grow by 15,000, got ${item.investedPaise}.`);
+  assert(item.currentValuePaise === 1_53_500_00, `Current value should grow by 15,000, got ${item.currentValuePaise}.`);
+  assert(item.gainPaise === 18_500_00, "A SIP buys units worth what was paid, so the gain is unchanged.");
+  assert(item.sipsSinceCount === 2 && item.sipsSincePaise === 15_000_00, "The card should know 2 SIPs worth 15,000 were added.");
+  assert(item.enteredInvestedPaise === 1_20_000_00, "The entered figure is kept separately.");
+});
+
+test("editing a holding resets only the figure that changed", () => {
+  const fund = services.createInvestment({
+    type: "mutual_funds",
+    name: "QA Index SIP",
+    investedPaise: 50_000_00,
+    currentValuePaise: 55_000_00
+  });
+  // Entered 60 days ago; one SIP has run since.
+  const enteredOn = isoDaysFromToday(-60);
+  dbModule.db
+    .prepare("UPDATE investments SET invested_as_of = ?, value_as_of = ? WHERE id = ?")
+    .run(enteredOn, enteredOn, fund.id);
+  logSip(fund.id, isoDaysFromToday(-30), 5_000_00);
+  const before = holding(fund.id);
+  assert(before.investedPaise === 55_000_00 && before.currentValuePaise === 60_000_00, "SIP counted before editing.");
+
+  // Saving the form unchanged (it shows the grown figures) must not change anything.
+  services.updateInvestment(fund.id, {
+    name: "QA Index SIP (renamed)",
+    investedPaise: before.investedPaise,
+    currentValuePaise: before.currentValuePaise
+  });
+  const unchanged = holding(fund.id);
+  assert(unchanged.investedPaise === 55_000_00 && unchanged.currentValuePaise === 60_000_00, "An unchanged save keeps the SIP.");
+  assert(unchanged.sipsSinceCount === 1 && unchanged.investedAsOf === enteredOn, "An unchanged save keeps the SIP baseline.");
+
+  // Today's statement value already includes last month's SIP; Invested is left alone.
+  services.updateInvestment(fund.id, { currentValuePaise: 62_000_00 });
+  const revalued = holding(fund.id);
+  assert(revalued.currentValuePaise === 62_000_00, `The typed value should stand as is, got ${revalued.currentValuePaise}.`);
+  assert(revalued.valueAsOf === isoDaysFromToday(0), "The value baseline moves to today.");
+  assert(revalued.investedPaise === 55_000_00 && revalued.investedAsOf === enteredOn, "Invested still counts the SIP.");
+
+  logSip(fund.id, isoDaysFromToday(1), 5_000_00);
+  const later = holding(fund.id);
+  assert(later.currentValuePaise === 67_000_00 && later.investedPaise === 60_000_00, "A later SIP lifts both figures again.");
+});
+
+test("SIP growth follows deletes, feeds net worth and works for older holdings", () => {
+  const fund = services.createInvestment({
+    type: "mutual_funds",
+    name: "QA Older Fund",
+    investedPaise: 10_000_00,
+    currentValuePaise: 11_000_00
+  });
+  // A holding from before this change has no as-of dates and was added some time ago.
+  dbModule.db
+    .prepare("UPDATE investments SET invested_as_of = NULL, value_as_of = NULL, created_at = '2026-01-10 06:00:00' WHERE id = ?")
+    .run(fund.id);
+  const worthBefore = services.getWealthSummary().netWorth.investmentsPaise;
+  logSip(fund.id, "2026-01-05", 1_000_00);
+  const sipId = logSip(fund.id, "2026-02-05", 2_000_00);
+  const item = holding(fund.id);
+  assert(item.investedAsOf === "2026-01-10", `An older holding counts from the day it was added, got ${item.investedAsOf}.`);
+  assert(item.investedPaise === 12_000_00 && item.currentValuePaise === 13_000_00, "Only the SIP after it was added counts.");
+  assert(
+    services.getWealthSummary().netWorth.investmentsPaise === worthBefore + 2_000_00,
+    "Net worth should use the grown current value."
+  );
+  services.deleteTransaction(sipId);
+  const after = holding(fund.id);
+  assert(after.investedPaise === 10_000_00 && after.currentValuePaise === 11_000_00, "Deleting the SIP takes it back out.");
+});
+
+// ---- Loan logic review ----
+
+function currentMonthIso() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function shiftMonthIso(month: string, count: number) {
+  const [year, index] = month.split("-").map(Number);
+  const date = new Date(year, index - 1 + count, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function payEmi(loanId: string, date: string, amountPaise: number, subName = "Personal", type: "emi" | "prepayment" = "emi") {
+  assert(state.bankId, "Bank should exist.");
+  return services.createTransaction({
+    date,
+    accountId: state.bankId,
+    method: "bank_transfer",
+    merchant: "QA loan payment",
+    typeId: typeId("Loan"),
+    subcategoryId: subcategoryId("Loan", subName),
+    amountPaise,
+    direction: "outflow",
+    kind: "emi",
+    loanId,
+    loanPaymentType: type
+  });
+}
+
+test("suggested EMI matches the reducing-balance formula", async () => {
+  const { calculateEmiPaise } = await import("../shared/finance.ts");
+  const P = 8_00_000_00;
+  const r = 900 / 10_000 / 12;
+  const expected = Math.ceil(Math.round((P * r * (1 + r) ** 60) / ((1 + r) ** 60 - 1)) / 100) * 100;
+  assert(calculateEmiPaise(P, 900, 60) === expected, `EMI for 8L at 9% over 60 months should be ${expected}.`);
+  assert(calculateEmiPaise(P, 900, 60) === 16_607_00, "It should be the ₹16,607 banks quote for 8L at 9% over 5 years.");
+  assert(calculateEmiPaise(1_20_000_00, 0, 12) === 10_000_00, "A zero-interest loan divides evenly.");
+  assert(calculateEmiPaise(0, 900, 12) === 0 && calculateEmiPaise(1_000_00, 900, 0) === 0, "Missing inputs give no suggestion.");
+});
+
+test("an EMI that cannot cover the interest is refused up front", async () => {
+  const terms = {
+    name: "QA Underwater Loan",
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    principalAmountPaise: 10_00_000_00,
+    startingOutstandingPaise: 10_00_000_00,
+    startMonth: "2026-01",
+    annualInterestRateBps: 1200,
+    tenureMonths: 60,
+    monthlyEmiPaise: 9_000_00
+  };
+  await assertRejectsWithMessage("create with EMI below interest", () => services.createLoan(terms), "doesn't cover the ₹10,000 monthly interest");
+  const ok = services.createLoan({ ...terms, name: "QA Healthy Loan", monthlyEmiPaise: 22_300_00 });
+  await assertRejectsWithMessage(
+    "edit rate so EMI no longer covers interest",
+    () => services.updateLoan(ok.id, { annualInterestRateBps: 3000 }),
+    "doesn't cover"
+  );
+});
+
+test("a final EMI above the payoff closes the loan", async () => {
+  const loan = services.createLoan({
+    name: "QA Nearly Done Loan",
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    principalAmountPaise: 2_00_000_00,
+    startingOutstandingPaise: 12_000_00,
+    startMonth: "2023-01",
+    annualInterestRateBps: 1200,
+    tenureMonths: 36,
+    monthlyEmiPaise: 6_643_00
+  });
+  payEmi(loan.id, "2026-01-05", 6_643_00);
+  const mid = services.listLoans(true).find((item) => item.id === loan.id);
+  assert(mid && mid.outstandingPaise === 12_000_00 - (6_643_00 - 120_00), "First EMI: 120 interest on 12,000, the rest principal.");
+  // Payoff is now about 5,531.77; the regular EMI of 6,643 must still be accepted and close it.
+  payEmi(loan.id, "2026-02-05", 6_643_00);
+  const closed = services.listLoans(true).find((item) => item.id === loan.id);
+  assert(closed?.outstandingPaise === 0, `The final EMI should close the loan, left ${closed?.outstandingPaise}.`);
+  assert(closed.monthsLeft === 0 && closed.closureMonth === null, "A closed loan has no months left or closure month.");
+  assert(closed.principalPaidPaise === 2_00_000_00, "All the principal is repaid.");
+
+  const other = services.createLoan({
+    name: "QA Overpaid Loan",
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    principalAmountPaise: 50_000_00,
+    startingOutstandingPaise: 5_000_00,
+    startMonth: "2025-01",
+    annualInterestRateBps: 1200,
+    tenureMonths: 12,
+    monthlyEmiPaise: 4_443_00
+  });
+  await assertRejectsWithMessage("overpay beyond an EMI", () => payEmi(other.id, "2026-03-05", 9_000_00), "The payoff on this loan is about ₹5,050");
+});
+
+test("months left and closure month follow the balance and this month's EMI", () => {
+  // Contract says it should be over, but money is still owed: months left must come from the balance.
+  const loan = services.createLoan({
+    name: "QA Overrun Loan",
+    subcategoryId: subcategoryId("Loan", "Home"),
+    principalAmountPaise: 5_00_000_00,
+    startingOutstandingPaise: 1_00_000_00,
+    startMonth: "2019-01",
+    annualInterestRateBps: 900,
+    tenureMonths: 60,
+    monthlyEmiPaise: 10_000_00
+  });
+  const r = 900 / 10_000 / 12;
+  const expectedLeft = (outstanding: number) => Math.ceil(-Math.log(1 - (outstanding * r) / 10_000_00) / Math.log(1 + r));
+  const before = services.listLoans(true).find((item) => item.id === loan.id);
+  assert(before?.monthsLeft === expectedLeft(1_00_000_00), `Expected ${expectedLeft(1_00_000_00)} months left, got ${before?.monthsLeft}.`);
+  // Nothing paid this month: the remaining EMIs start this month.
+  assert(
+    before.closureMonth === shiftMonthIso(currentMonthIso(), before.monthsLeft - 1),
+    `Closure should be ${shiftMonthIso(currentMonthIso(), before.monthsLeft - 1)}, got ${before.closureMonth}.`
+  );
+  payEmi(loan.id, `${currentMonthIso()}-01`, 10_000_00, "Home");
+  const after = services.listLoans(true).find((item) => item.id === loan.id);
+  assert(after?.monthsLeft === expectedLeft(after.outstandingPaise), "Months left follows the new balance.");
+  assert(
+    after.closureMonth === shiftMonthIso(currentMonthIso(), after.monthsLeft),
+    `With this month paid, the remaining EMIs start next month: expected ${shiftMonthIso(currentMonthIso(), after.monthsLeft)}, got ${after.closureMonth}.`
+  );
+});
+
+test("archived loans with a balance still count as owed", () => {
+  const owed = services.createLoan({
+    name: "QA Archived But Owed",
+    subcategoryId: subcategoryId("Loan", "Other"),
+    principalAmountPaise: 1_00_000_00,
+    startingOutstandingPaise: 40_000_00,
+    startMonth: "2025-06",
+    annualInterestRateBps: 1000,
+    tenureMonths: 24,
+    monthlyEmiPaise: 4_700_00
+  });
+  const before = services.getWealthSummary().netWorth.liabilitiesPaise;
+  services.archiveLoan(owed.id);
+  assert(services.getWealthSummary().netWorth.liabilitiesPaise === before, "Archiving must not make a debt disappear.");
+  services.updateLoan(owed.id, { startingOutstandingPaise: 0 });
+  assert(
+    services.getWealthSummary().netWorth.liabilitiesPaise === before - 40_000_00,
+    "A paid-off archived loan no longer counts."
+  );
+});
+
+test("bonds are an investment type with their own allocation slice", () => {
+  const bond = services.createInvestment({ type: "bonds", name: "QA RBI Floating Rate Bond", investedPaise: 1_00_000_00, currentValuePaise: 1_03_150_00 });
+  assert(bond.type === "bonds" && bond.typeLabel === "Bonds", "A bond holding should be stored with its label.");
+  const slice = services.getWealthSummary().allocation.find((segment) => segment.key === "bonds");
+  assert(slice?.label === "Bonds" && slice.valuePaise >= 1_03_150_00, "Bonds should get their own allocation slice.");
+  const table = dbModule.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'investments'").get() as { sql: string };
+  assert(table.sql.includes("'bonds'"), "The investments table should accept bonds.");
 });
 
 let failed = 0;
