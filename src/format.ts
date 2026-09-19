@@ -6,6 +6,15 @@ export function formatINR(paise: number) {
   }).format(paise / 100);
 }
 
+/** Headline figures: rounded to the nearest rupee, never showing paise. Rows keep formatINR. */
+export function formatINRWhole(paise: number) {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0
+  }).format(Math.round(paise / 100));
+}
+
 export function parseAmountToPaise(value: string) {
   const normalized = value.replace(/[₹,\s]/g, "");
   if (!normalized) return 0;

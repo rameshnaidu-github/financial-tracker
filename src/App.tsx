@@ -36,12 +36,13 @@ import {
   Utensils,
   WalletCards,
   X
-} from "lucide-react";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+} from "./ui-icons";
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Api } from "./api";
 import {
   currentMonth,
   formatINR,
+  formatINRWhole,
   formatMonth,
   formatShortDate,
   mondayWeekRange,
@@ -51,6 +52,8 @@ import {
 } from "./format";
 import { IconGlyph } from "./icons";
 import { accountImpact } from "./account-impact";
+import { flushSync } from "react-dom";
+import { prefersReducedMotion, useCountUp, useScrollReveal } from "./motion";
 import { cashflowPartsFromTypes, INFLOW_BEHAVIORS, type CashflowPart } from "./report-cashflow";
 import type {
   Account,
@@ -123,21 +126,54 @@ const emptyProfile: UserProfile = {
   age: ""
 };
 
-const navItems: Array<{ page: Page; label: string; icon: typeof Home }> = [
-  { page: "overview", label: "Overview", icon: Home },
-  { page: "weekly", label: "Weekly Entry", icon: CalendarDays },
-  { page: "transactions", label: "Transactions", icon: ArrowDownUp },
-  { page: "reports", label: "Reports", icon: BarChart3 },
-  { page: "budgets", label: "Budget Planner", icon: Target },
-  { page: "accounts", label: "Accounts", icon: WalletCards },
-  { page: "loans", label: "Loans", icon: Landmark },
-  { page: "investments", label: "Investments", icon: TrendingUp },
-  { page: "vacations", label: "Vacations", icon: Plane },
-  { page: "subscriptions", label: "AutoPay", icon: CalendarClock },
-  { page: "categories", label: "Categories", icon: Tags },
-  { page: "faq", label: "FAQ", icon: CircleHelp },
+type NavGroup = "Daily" | "Plan" | "Own & owe" | "Setup";
+
+// Grouped by how often people reach for them: everyday entry first, setup last.
+const navItems: Array<{ page: Page; label: string; icon: typeof Home; group?: NavGroup }> = [
+  { page: "overview", label: "Overview", icon: Home, group: "Daily" },
+  { page: "weekly", label: "Weekly Entry", icon: CalendarDays, group: "Daily" },
+  { page: "transactions", label: "Transactions", icon: ArrowDownUp, group: "Daily" },
+  { page: "reports", label: "Reports", icon: BarChart3, group: "Daily" },
+  { page: "budgets", label: "Budget Planner", icon: Target, group: "Plan" },
+  { page: "subscriptions", label: "AutoPay", icon: CalendarClock, group: "Plan" },
+  { page: "vacations", label: "Vacations", icon: Plane, group: "Plan" },
+  { page: "accounts", label: "Accounts", icon: WalletCards, group: "Own & owe" },
+  { page: "loans", label: "Loans", icon: Landmark, group: "Own & owe" },
+  { page: "investments", label: "Investments", icon: TrendingUp, group: "Own & owe" },
+  { page: "categories", label: "Categories", icon: Tags, group: "Setup" },
+  { page: "faq", label: "FAQ", icon: CircleHelp, group: "Setup" },
   { page: "profile", label: "Profile", icon: UserCircle }
 ];
+
+/**
+ * Page changes cross-fade through the View Transitions API where the browser has it. Without it,
+ * or when the person asks for less motion, the page simply swaps.
+ */
+function withPageTransition(update: () => void) {
+  const doc = document as Document & { startViewTransition?: (callback: () => void) => unknown };
+  if (typeof doc.startViewTransition !== "function" || prefersReducedMotion()) {
+    update();
+    return;
+  }
+  doc.startViewTransition(() => flushSync(update));
+}
+
+const NAV_GROUPS: NavGroup[] = ["Daily", "Plan", "Own & owe", "Setup"];
+const THEME_KEY = "finance-theme";
+
+function storedTheme(): Theme | null {
+  try {
+    const value = window.localStorage.getItem(THEME_KEY);
+    return value === "dark" || value === "light" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function systemTheme(): Theme {
+  if (typeof window.matchMedia !== "function") return "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
 
 // The phone bar keeps the four daily destinations; everything else lives under "More".
 const MOBILE_PRIMARY_PAGES: Page[] = ["overview", "weekly", "transactions", "reports"];
@@ -237,6 +273,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<{ message: string; action?: NoticeAction } | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
+  const contentRef = useRef<HTMLElement>(null);
+  useScrollReveal(contentRef, activePage);
   const noticeTimer = useRef<number | undefined>(undefined);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
@@ -244,9 +282,8 @@ export default function App() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
-  const [theme, setTheme] = useState<Theme>(() =>
-    typeof window !== "undefined" && window.localStorage.getItem("finance-theme") === "dark" ? "dark" : "light"
-  );
+  // Follows the system light/dark setting until the person picks one on Profile.
+  const [theme, setTheme] = useState<Theme>(() => (typeof window === "undefined" ? "light" : storedTheme() ?? systemTheme()));
 
   const loadBootstrap = useCallback(async () => {
     setError("");
@@ -260,13 +297,29 @@ export default function App() {
       .finally(() => setLoading(false));
   }, [loadBootstrap]);
 
-  useEffect(() => {
+  // Before paint, so a dark-mode visitor never sees a light frame.
+  useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
-    window.localStorage.setItem("finance-theme", theme);
   }, [theme]);
 
   useEffect(() => {
-    const onPopState = () => setActivePage(pageFromPath(window.location.pathname));
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const follow = () => {
+      if (!storedTheme()) setTheme(systemTheme());
+    };
+    media.addEventListener("change", follow);
+    return () => media.removeEventListener("change", follow);
+  }, []);
+
+  // Each page names its own browser tab, so history and open tabs are recognisable.
+  useEffect(() => {
+    const label = navItems.find((item) => item.page === activePage)?.label;
+    document.title = label ? `${label} · Financial Tracker` : "Financial Tracker";
+  }, [activePage]);
+
+  useEffect(() => {
+    const onPopState = () => withPageTransition(() => setActivePage(pageFromPath(window.location.pathname)));
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
@@ -281,7 +334,7 @@ export default function App() {
     if (`${window.location.pathname}${window.location.search}` !== target) {
       window.history.pushState({}, "", target);
     }
-    setActivePage(page);
+    withPageTransition(() => setActivePage(page));
   }, []);
 
   useEffect(() => {
@@ -432,22 +485,29 @@ export default function App() {
         </div>
 
         <nav className="nav-list" aria-label="Main">
-          {navItems
-            .filter((item) => item.page !== "profile")
-            .map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.page}
-                  className={`nav-item ${activePage === item.page ? "active" : ""}`}
-                  aria-current={activePage === item.page ? "page" : undefined}
-                  onClick={() => navigate(item.page)}
-                >
-                  <Icon size={18} />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
+          {NAV_GROUPS.map((group) => (
+            <div className="nav-group" key={group} role="group" aria-labelledby={`nav-group-${group.replace(/\W+/g, "-")}`}>
+              <span className="nav-group-label" id={`nav-group-${group.replace(/\W+/g, "-")}`}>
+                {group}
+              </span>
+              {navItems
+                .filter((item) => item.group === group)
+                .map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.page}
+                      className={`nav-item ${activePage === item.page ? "active" : ""}`}
+                      aria-current={activePage === item.page ? "page" : undefined}
+                      onClick={() => navigate(item.page)}
+                    >
+                      <Icon size={18} />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+            </div>
+          ))}
         </nav>
         {/* Profile sits below the list so it stays visible even when a short window scrolls the list. */}
         <button
@@ -461,7 +521,7 @@ export default function App() {
       </aside>
 
       <main className="main-shell">
-        <header className="topbar">
+        <header className="topbar" key={activePage}>
           <div>
             <h1>{navItems.find((item) => item.page === activePage)?.label}</h1>
           </div>
@@ -483,7 +543,7 @@ export default function App() {
           </div>
         </header>
 
-        <section className="content-area">
+        <section className="content-area" ref={contentRef}>
           {activePage === "overview" && (
             <OverviewPage
               selectedAccountId={selectedAccountId}
@@ -601,7 +661,17 @@ export default function App() {
               onProfileChange={setProfileDraft}
               onSaveProfile={saveProfile}
               onSaveCardAlert={saveCardAlert}
-              onThemeToggle={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
+              onThemeToggle={() =>
+                setTheme((value) => {
+                  const next = value === "dark" ? "light" : "dark";
+                  try {
+                    window.localStorage.setItem(THEME_KEY, next);
+                  } catch {
+                    // Private windows can refuse storage; the choice still applies for this visit.
+                  }
+                  return next;
+                })
+              }
             />
           )}
         </section>
@@ -721,11 +791,14 @@ function SetupPage({
           Add one bank account, credit card, or food card. Balances will then come from the starting value plus
           transactions you enter.
         </p>
-        <div className="category-cloud">
-          {categories.map((category) => (
-            <CategoryBadge key={category.id} category={category} />
-          ))}
-        </div>
+        <details className="category-cloud-disclosure">
+          <summary>See the {categories.length} starter categories</summary>
+          <div className="category-cloud">
+            {categories.map((category) => (
+              <CategoryBadge key={category.id} category={category} />
+            ))}
+          </div>
+        </details>
       </div>
       <div className="panel setup-panel">
         <h2>Add account</h2>
@@ -751,7 +824,6 @@ function OverviewPage({
   const [overview, setOverview] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [allExpanded, setAllExpanded] = useState(true);
   const [budgetPlan, setBudgetPlan] = useState<BudgetPlan | null>(null);
   const [wealth, setWealth] = useState<WealthSummary | null>(null);
   const [upcoming, setUpcoming] = useState<UpcomingPayments | null>(null);
@@ -840,20 +912,9 @@ function OverviewPage({
       amountPaise: category.amountPaise
     }))
   );
+  const allocationTotal = wealth ? wealth.allocation.reduce((sum, segment) => sum + segment.valuePaise, 0) : 0;
   return (
-    <div className="page-grid">
-      <div className="overview-toolbar">
-        <button
-          type="button"
-          className="secondary-action collapse-all-button"
-          aria-expanded={allExpanded}
-          onClick={() => setAllExpanded((value) => !value)}
-        >
-          <ChevronDown size={16} className={allExpanded ? "collapse-all-icon expanded" : "collapse-all-icon"} />
-          {allExpanded ? "Collapse all" : "Expand all"}
-        </button>
-      </div>
-
+    <div className="page-grid overview-page">
       {overview.summary.uncategorizedCount > 0 && (
         <div className="attention-banner" role="status">
           <CircleAlert size={18} />
@@ -870,155 +931,157 @@ function OverviewPage({
         </div>
       )}
 
-      <OverviewDisclosure title="Financial highlights" expanded={allExpanded}>
-      <section className="summary-grid overview-summary">
-        <SummaryCard
-          label={selectedAccount?.type === "credit_card" ? "Available card limit" : "Available cash"}
-          value={
-            selectedAccount?.type === "credit_card"
-              ? formatINR(selectedAccount.availableLimitPaise ?? 0)
-              : formatINR(overview.summary.availableCashPaise)
-          }
-          icon={<WalletCards />}
-        />
-        <SummaryCard
-          label="Credit card outstanding"
-          value={formatINR(overview.summary.creditOutstandingPaise)}
-          icon={<CreditCard />}
-          tone="warning"
-        />
-        <SummaryCard
-          label="Outflow"
-          value={formatINR(overview.summary.totalOutflowPaise)}
-          icon={<BarChart3 />}
-          note={
-            <ChangeVsLastMonth
-              current={overview.summary.totalOutflowPaise}
-              previous={overview.comparison.outflowPaise}
-              comparison={overview.comparison}
-              higherIsGood={false}
-            />
-          }
-        />
-        <SummaryCard
-          label="Inflow"
-          value={formatINR(overview.summary.totalInflowPaise)}
-          icon={<TrendingUp />}
-          note={
-            <ChangeVsLastMonth
-              current={overview.summary.totalInflowPaise}
-              previous={overview.comparison.inflowPaise}
-              comparison={overview.comparison}
-              higherIsGood
-            />
-          }
-        />
-      </section>
-      </OverviewDisclosure>
-
-      <section className="two-column">
-        <CollapsiblePanel title={`Recent activity · ${overview.recentTransactions.length}`} expanded={allExpanded} action={<button onClick={() => onNavigate("transactions")}>View all</button>}>
-          <TransactionTable transactions={overview.recentTransactions} empty="No transactions yet." compact />
-        </CollapsiblePanel>
-
-        <div className="overview-side-stack">
-          <CollapsiblePanel title={`Account snapshot · ${overview.accounts.length}`} expanded={allExpanded} action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
-            <div className="account-stack">
-              {overview.accounts.map((account) => (
-                <OverviewAccountLine key={account.id} account={account} alertPercent={cardAlertPercent} />
-              ))}
-            </div>
-          </CollapsiblePanel>
-
-          <CollapsiblePanel
-            title={`Coming up · next ${upcoming?.windowDays ?? 14} days`}
-            expanded={allExpanded}
-            action={<button onClick={() => onNavigate("subscriptions")}>AutoPay</button>}
-          >
-            <UpcomingPaymentsList upcoming={upcoming} availableCashPaise={overview.summary.availableCashPaise} />
-          </CollapsiblePanel>
+      {/* The one raised surface on the page: what you can spend, then how the month is moving. */}
+      <section className="overview-lead" aria-label="Headline figures">
+        <div className="summary-grid overview-summary">
+          <SummaryCard
+            label={selectedAccount?.type === "credit_card" ? "Available card limit" : "Available cash"}
+            value={
+              selectedAccount?.type === "credit_card"
+                ? formatINRWhole(selectedAccount.availableLimitPaise ?? 0)
+                : formatINRWhole(overview.summary.availableCashPaise)
+            }
+            countPaise={
+              selectedAccount?.type === "credit_card"
+                ? selectedAccount.availableLimitPaise ?? 0
+                : overview.summary.availableCashPaise
+            }
+            icon={<WalletCards />}
+          />
+          <SummaryCard
+            label="Credit card outstanding"
+            value={formatINRWhole(overview.summary.creditOutstandingPaise)}
+            countPaise={overview.summary.creditOutstandingPaise}
+            icon={<CreditCard />}
+            tone="warning"
+          />
+          <SummaryCard
+            label="Outflow"
+            value={formatINRWhole(overview.summary.totalOutflowPaise)}
+            countPaise={overview.summary.totalOutflowPaise}
+            icon={<BarChart3 />}
+            note={
+              <ChangeVsLastMonth
+                current={overview.summary.totalOutflowPaise}
+                previous={overview.comparison.outflowPaise}
+                comparison={overview.comparison}
+                higherIsGood={false}
+              />
+            }
+          />
+          <SummaryCard
+            label="Inflow"
+            value={formatINRWhole(overview.summary.totalInflowPaise)}
+            countPaise={overview.summary.totalInflowPaise}
+            icon={<TrendingUp />}
+            note={
+              <ChangeVsLastMonth
+                current={overview.summary.totalInflowPaise}
+                previous={overview.comparison.inflowPaise}
+                comparison={overview.comparison}
+                higherIsGood
+              />
+            }
+          />
         </div>
       </section>
 
-      <section className="two-column overview-analytics">
-        <CollapsiblePanel
-          title={`Spending mix · ${formatMonth(overview.month)}`}
-          expanded={allExpanded}
-          action={<button onClick={() => onNavigate("reports")}>Open reports</button>}
-        >
-          {spendingSegments.length === 0 || overview.summary.spendingPaise <= 0 ? (
-            <EmptyState text="No category spending yet this month." />
-          ) : (
-            <DonutChart
-              segments={spendingSegments}
-              totalPaise={overview.summary.spendingPaise}
-              ariaLabel="Spending by category"
-              centerLabel="Spent"
-              centerValue={formatINR(overview.summary.spendingPaise)}
-              className="overview-donut-chart"
-              onSegmentClick={(segment) => showMonthTransactions(segment.id)}
+      <OverviewBand title="This month" detail={formatMonth(overview.month)}>
+        <div className="two-column overview-band-pair">
+          <Panel title="Spending mix" action={<button onClick={() => onNavigate("reports")}>Open reports</button>}>
+            {spendingSegments.length === 0 || overview.summary.spendingPaise <= 0 ? (
+              <EmptyState text="No category spending yet this month." />
+            ) : (
+              <DonutChart
+                segments={spendingSegments}
+                totalPaise={overview.summary.spendingPaise}
+                ariaLabel="Spending by category"
+                centerLabel="Spent"
+                centerValue={formatINRWhole(overview.summary.spendingPaise)}
+                className="overview-donut-chart"
+                onSegmentClick={(segment) => showMonthTransactions(segment.id)}
+              />
+            )}
+          </Panel>
+          <Panel title="Budget guardrails" action={<button onClick={() => onNavigate("budgets")}>Plan</button>}>
+            <BudgetGuardrails
+              plan={budgetPlan}
+              uncategorizedCount={overview.summary.uncategorizedCount}
+              onReviewUncategorized={() => onNavigate("transactions", { status: "uncategorized" })}
             />
-          )}
-        </CollapsiblePanel>
-
-        <CollapsiblePanel title="Net worth" expanded={allExpanded}>
-          {wealth ? (
-            <NetWorthPanel wealth={wealth} />
-          ) : (
-            <EmptyState text="Net worth is loading." />
-          )}
-        </CollapsiblePanel>
-      </section>
-
-      <section className="two-column overview-analytics">
-        <CollapsiblePanel title="Top spending lines" expanded={allExpanded} action={<button onClick={() => onNavigate("reports")}>Details</button>}>
-          <CategoryBars
-            categories={overview.categoryReport.slice(0, 5)}
-            onSelect={(category) => showMonthTransactions(category.subcategoryId)}
-          />
-        </CollapsiblePanel>
-
-        <CollapsiblePanel title="Budget guardrails" expanded={allExpanded} action={<button onClick={() => onNavigate("budgets")}>Plan</button>}>
-          <BudgetGuardrails
-            plan={budgetPlan}
-            uncategorizedCount={overview.summary.uncategorizedCount}
-            onReviewUncategorized={() => onNavigate("transactions", { status: "uncategorized" })}
-          />
-        </CollapsiblePanel>
-      </section>
-
-      <section className="overview-report-section">
-        <CollapsiblePanel title="Asset allocation" expanded={allExpanded}>
-          {wealth && wealth.allocation.length > 0 ? (
-            <DonutChart
-              segments={wealth.allocation.map((segment) => ({
-                id: segment.key,
-                name: segment.label,
-                color: segment.color,
-                amountPaise: segment.valuePaise
-              }))}
-              totalPaise={wealth.allocation.reduce((sum, segment) => sum + segment.valuePaise, 0)}
-              ariaLabel="Asset allocation"
-              centerLabel="Assets"
-              centerValue={formatINR(wealth.allocation.reduce((sum, segment) => sum + segment.valuePaise, 0))}
-              className="overview-donut-chart overview-donut-chart--large"
-            />
-          ) : (
-            <EmptyState text="Add accounts or investments to see your allocation." />
-          )}
-        </CollapsiblePanel>
-      </section>
-
-      <section className="overview-report-section">
-        <CollapsiblePanel title={`This month's cashflow · ${formatMonth(overview.month)}`} expanded={allExpanded}>
+          </Panel>
+        </div>
+        <Panel title="Cashflow">
           {wealth ? (
             <CashflowPanel wealth={wealth} investedPaise={overview.summary.investedPaise} />
           ) : (
             <EmptyState text="Cashflow is loading." />
           )}
-        </CollapsiblePanel>
-      </section>
+        </Panel>
+      </OverviewBand>
+
+      <OverviewBand title="Activity & upcoming">
+        <div className="two-column overview-band-pair">
+          <Panel title="Recent activity" action={<button onClick={() => onNavigate("transactions")}>View all</button>}>
+            <TransactionTable transactions={overview.recentTransactions} empty="No transactions yet." compact />
+          </Panel>
+          <Panel
+            title={`Coming up in ${upcoming?.windowDays ?? 14} days`}
+            action={<button onClick={() => onNavigate("subscriptions")}>AutoPay</button>}
+          >
+            <UpcomingPaymentsList upcoming={upcoming} availableCashPaise={overview.summary.availableCashPaise} />
+          </Panel>
+        </div>
+      </OverviewBand>
+
+      <OverviewBand title="Wealth">
+        <div className="two-column overview-band-pair">
+          <Panel title="Net worth">
+            {wealth ? <NetWorthPanel wealth={wealth} /> : <EmptyState text="Net worth is loading." />}
+          </Panel>
+          <Panel title="Asset allocation">
+            {wealth && wealth.allocation.length > 0 ? (
+              <DonutChart
+                segments={wealth.allocation.map((segment) => ({
+                  id: segment.key,
+                  name: segment.label,
+                  color: segment.color,
+                  amountPaise: segment.valuePaise
+                }))}
+                totalPaise={allocationTotal}
+                ariaLabel="Asset allocation"
+                centerLabel="Assets"
+                centerValue={formatINRWhole(allocationTotal)}
+                className="overview-donut-chart"
+              />
+            ) : (
+              <EmptyState text="Add accounts or investments to see your allocation." />
+            )}
+          </Panel>
+        </div>
+        <Panel title="Account snapshot" action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
+          <div className="account-stack">
+            {overview.accounts.map((account) => (
+              <OverviewAccountLine key={account.id} account={account} alertPercent={cardAlertPercent} />
+            ))}
+          </div>
+        </Panel>
+      </OverviewBand>
     </div>
+  );
+}
+
+/** A labelled band of the Overview: a quiet heading over the panels that answer one question. */
+function OverviewBand({ title, detail, children }: { title: string; detail?: string; children: React.ReactNode }) {
+  const headingId = `overview-band-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+  return (
+    <section className="overview-band" aria-labelledby={headingId}>
+      <header className="overview-band-head">
+        <h2 id={headingId}>{title}</h2>
+        {detail && <span>{detail}</span>}
+      </header>
+      <div className="overview-band-body">{children}</div>
+    </section>
   );
 }
 
@@ -1030,21 +1093,21 @@ function NetWorthPanel({ wealth }: { wealth: WealthSummary }) {
       <div className="net-worth-headline">
         <span>Total net worth</span>
         <strong className={netWorth.netWorthPaise >= 0 ? "amount-in" : "amount-out"}>
-          {formatINR(netWorth.netWorthPaise)}
+          {formatINRWhole(netWorth.netWorthPaise)}
         </strong>
       </div>
       <div className="net-worth-breakdown">
         <div>
           <span>Liquid cash</span>
-          <strong>{formatINR(netWorth.liquidPaise)}</strong>
+          <strong>{formatINRWhole(netWorth.liquidPaise)}</strong>
         </div>
         <div>
           <span>Investments</span>
-          <strong>{formatINR(netWorth.investmentsPaise)}</strong>
+          <strong>{formatINRWhole(netWorth.investmentsPaise)}</strong>
         </div>
         <div>
           <span>Liabilities</span>
-          <strong className="amount-out">−{formatINR(netWorth.liabilitiesPaise)}</strong>
+          <strong className="amount-out">−{formatINRWhole(netWorth.liabilitiesPaise)}</strong>
         </div>
       </div>
       {points.length >= 2 ? (
@@ -1088,7 +1151,7 @@ function CashflowPanel({ wealth, investedPaise }: { wealth: WealthSummary; inves
                   : "amount-out"
             }
           >
-            {cashflow.savingsRatePercent === null ? "—" : `${cashflow.savingsRatePercent}%`}
+            {cashflow.savingsRatePercent === null ? "Not enough data yet" : `${cashflow.savingsRatePercent}%`}
           </strong>
         </div>
       </div>
@@ -1100,7 +1163,7 @@ function CashflowPanel({ wealth, investedPaise }: { wealth: WealthSummary; inves
       )}
       <div className="cashflow-runway">
         <span>Emergency-fund runway</span>
-        <strong>{runwayMonths === null ? "—" : `${runwayMonths} months`}</strong>
+        <strong>{runwayMonths === null ? "Not enough data yet" : `${runwayMonths} months`}</strong>
         <small>How long your liquid cash covers your recent average monthly spending.</small>
       </div>
     </div>
@@ -1346,8 +1409,9 @@ function WeeklyEntryPage({
       <section className="panel entry-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">This week</p>
-            <h2>{week.label}</h2>
+            <h2>
+              This week <span className="heading-sub">{week.label}</span>
+            </h2>
           </div>
           <button className="secondary-action" onClick={() => setImportOpen(true)}>
             <FileSpreadsheet size={17} />
@@ -1602,6 +1666,15 @@ function WeeklyEntryPage({
               </button>
             </form>
 
+            <details className="category-cloud-disclosure">
+              <summary>
+                Filter by category
+                {weeklyCategoryFilterId && (
+                  <span className="category-cloud-active">
+                    {categories.find((category) => category.id === weeklyCategoryFilterId)?.name}
+                  </span>
+                )}
+              </summary>
             <div className="category-shortcuts category-filter-chips">
               {categories.map((category) => (
                 <button
@@ -1624,6 +1697,7 @@ function WeeklyEntryPage({
                 <Plus size={16} /> Add category
               </button>
             </div>
+            </details>
 
             <TransactionTable transactions={visibleTransactions} empty="No transactions in this week yet." />
       </section>
@@ -2079,7 +2153,7 @@ function TransactionsPage({
             onClick={() => setFiltersOpen((open) => !open)}
           >
             <SlidersHorizontal size={16} />
-            Filters{activeFilterCount > 0 ? ` · ${activeFilterCount}` : ""}
+            Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
           </button>
           <div id="transaction-filters" className={`filter-extra${filtersOpen ? " open" : ""}`}>
           <label className="control-field toolbar-control">
@@ -2240,7 +2314,9 @@ function TransactionsPage({
                   <div className="ledger-row transaction-row-card">
                     <div className="transaction-primary-cell">
                       <strong>{transaction.merchant || transaction.note || "Untitled transaction"}</strong>
-                      <span>{formatShortDate(transaction.date)}</span>
+                      <span>
+                        {formatShortDate(transaction.date)} · {methodLabel(transaction.method)}
+                      </span>
                     </div>
                     <div className="transaction-tag-strip" aria-label="Transaction tags">
                       <TransactionTag
@@ -2248,17 +2324,11 @@ function TransactionsPage({
                         icon={accountIconForType(transaction.accountType, 13)}
                         label={transaction.accountName}
                       />
-                      <TransactionTag tone="method" label={methodLabel(transaction.method)} />
-                      <TransactionTag
-                        tone="type"
-                        icon={<IconGlyph name={typeCategory.icon} size={13} />}
-                        label={typeCategory.name}
-                        color={typeCategory.color}
-                      />
                       <TransactionTag
                         tone="subtype"
                         icon={<IconGlyph name={subTypeCategory.icon} size={13} />}
                         label={subTypeCategory.name}
+                        title={`${typeCategory.name}: ${subTypeCategory.name}`}
                         color={subTypeCategory.color}
                       />
                     </div>
@@ -2732,7 +2802,6 @@ function ImportTransactionsModal({
       <form className="import-modal" onSubmit={submit} role="dialog" aria-modal="true">
         <div className="modal-title-row">
           <div>
-            <p className="eyebrow">Excel Import</p>
             <h2>Import transactions</h2>
           </div>
           <button type="button" className="icon-button" onClick={onClose} title="Close">
@@ -3658,15 +3727,15 @@ function BudgetPlannerPage({
               {formatShortDate(plan.start)} to {formatShortDate(plan.end)} · Day {plan.dayOfMonth} of {plan.daysInMonth}
             </p>
             <div className="summary-grid report-summary">
-              <SummaryCard label="Budgeted" value={formatINR(plan.totals.amountPaise)} icon={<PiggyBank />} />
-              <SummaryCard label="Used" value={formatINR(plan.totals.actualPaise)} icon={<BarChart3 />} tone={budgetSummaryTone(plan)} />
+              <SummaryCard label="Budgeted" value={formatINRWhole(plan.totals.amountPaise)} countPaise={plan.totals.amountPaise} icon={<PiggyBank />} />
+              <SummaryCard label="Used" value={formatINRWhole(plan.totals.actualPaise)} countPaise={plan.totals.actualPaise} icon={<BarChart3 />} tone={budgetSummaryTone(plan)} />
               <SummaryCard
                 label="Remaining"
-                value={formatINR(plan.totals.remainingPaise)}
+                value={formatINRWhole(plan.totals.remainingPaise)} countPaise={plan.totals.remainingPaise}
                 icon={<WalletCards />}
                 tone={plan.totals.remainingPaise < 0 ? "warning" : "good"}
               />
-              <SummaryCard label="Projected" value={formatINR(plan.totals.projectedPaise)} icon={<TrendingUp />} tone={plan.totals.projectedPaise > plan.totals.amountPaise ? "warning" : "neutral"} />
+              <SummaryCard label="Projected" value={formatINRWhole(plan.totals.projectedPaise)} countPaise={plan.totals.projectedPaise} icon={<TrendingUp />} tone={plan.totals.projectedPaise > plan.totals.amountPaise ? "warning" : "neutral"} />
             </div>
 
             <form className="budget-add-form" onSubmit={addBudget}>
@@ -3981,11 +4050,11 @@ function LoansPage({
   return (
     <div className="page-grid loans-page">
       <section className="summary-grid mini loan-summary-grid">
-        <SummaryCard label="Active outstanding" value={formatINR(activeOutstanding)} icon={<Landmark />} tone="warning" />
-        <SummaryCard label="Monthly EMI total" value={formatINR(monthlyEmiTotal)} icon={<CalendarDays />} />
+        <SummaryCard label="Active outstanding" value={formatINRWhole(activeOutstanding)} countPaise={activeOutstanding} icon={<Landmark />} tone="warning" />
+        <SummaryCard label="Monthly EMI total" value={formatINRWhole(monthlyEmiTotal)} countPaise={monthlyEmiTotal} icon={<CalendarDays />} />
         <SummaryCard
           label="Interest paid"
-          value={formatINR(paidInterest)}
+          value={formatINRWhole(paidInterest)} countPaise={paidInterest}
           icon={<BarChart3 />}
           note={
             activeLoans.some((loan) => loan.estimatedHistoricalInterestPaidPaise > 0) ? (
@@ -4392,8 +4461,8 @@ function InvestmentsPage({
   return (
     <div className="page-grid loans-page">
       <section className="summary-grid report-summary">
-        <SummaryCard label="Invested" value={formatINR(totalInvested)} icon={<WalletCards />} />
-        <SummaryCard label="Current value" value={formatINR(totalCurrent)} icon={<BarChart3 />} />
+        <SummaryCard label="Invested" value={formatINRWhole(totalInvested)} countPaise={totalInvested} icon={<WalletCards />} />
+        <SummaryCard label="Current value" value={formatINRWhole(totalCurrent)} countPaise={totalCurrent} icon={<BarChart3 />} />
         <SummaryCard
           label="Total gain"
           value={signedImpact(totalGain)}
@@ -4411,7 +4480,7 @@ function InvestmentsPage({
       {lastUpdated && (
         <p className="helper-text investments-asof">
           <Info size={14} />
-          Values are entered manually — figures reflect what you last saved on{" "}
+          Values are entered manually. Figures reflect what you last saved on{" "}
           {formatDateWithYear(lastUpdated.slice(0, 10))}. SIPs you log against a mutual fund are added to it
           automatically.
         </p>
@@ -4747,7 +4816,7 @@ function VacationsPage({
   function remove(vacation: Vacation) {
     requestConfirm({
       message: "Remove this vacation?",
-      detail: `${vacation.name} will be removed. The tagged expenses stay in your normal expenses — only the trip grouping is deleted.`,
+      detail: `${vacation.name} will be removed. The tagged expenses stay in your normal expenses. Only the trip grouping is deleted.`,
       confirmLabel: "Remove",
       tone: "danger",
       onConfirm: async () => {
@@ -4767,12 +4836,12 @@ function VacationsPage({
     <div className="page-grid loans-page">
       <section className="summary-grid report-summary">
         <SummaryCard label="Trips" value={String(vacations.length)} icon={<Plane />} />
-        <SummaryCard label="Total spent" value={formatINR(totalSpent)} icon={<WalletCards />} />
-        {totalBudget > 0 && <SummaryCard label="Total budget" value={formatINR(totalBudget)} icon={<Target />} />}
+        <SummaryCard label="Total spent" value={formatINRWhole(totalSpent)} countPaise={totalSpent} icon={<WalletCards />} />
+        {totalBudget > 0 && <SummaryCard label="Total budget" value={formatINRWhole(totalBudget)} countPaise={totalBudget} icon={<Target />} />}
         {totalBudget > 0 && (
           <SummaryCard
             label="Left in budget"
-            value={formatINR(totalBudget - totalSpent)}
+            value={formatINRWhole(totalBudget - totalSpent)} countPaise={totalBudget - totalSpent}
             icon={<PiggyBank />}
             tone={totalBudget - totalSpent >= 0 ? "good" : "warning"}
           />
@@ -4781,7 +4850,7 @@ function VacationsPage({
 
       <p className="helper-text investments-asof">
         <Info size={14} />
-        Tag any expense to a trip from the Weekly Entry form — it still counts in your normal expenses, and also rolls up here.
+        Tag any expense to a trip from the Weekly Entry form. It still counts in your normal expenses, and also rolls up here.
       </p>
 
       <div className="two-column loans-layout">
@@ -4830,7 +4899,7 @@ function VacationCard({
       : 0;
   const dateLabel =
     vacation.startDate && vacation.endDate
-      ? `${formatDateWithYear(vacation.startDate)} – ${formatDateWithYear(vacation.endDate)}`
+      ? `${formatDateWithYear(vacation.startDate)} to ${formatDateWithYear(vacation.endDate)}`
       : vacation.startDate
         ? `From ${formatDateWithYear(vacation.startDate)}`
         : "";
@@ -4862,7 +4931,7 @@ function VacationCard({
             </strong>
           </div>
           <div className="vacation-budget-bar">
-            <span style={{ width: `${usedPercent}%`, background: overBudget ? "#dc2626" : "#0ea5e9" }} />
+            <span style={{ width: `${usedPercent}%`, background: overBudget ? "var(--danger)" : "var(--accent)" }} />
           </div>
           <small>
             {overBudget
@@ -5065,7 +5134,7 @@ function SubscriptionsPage({
     <div className="page-grid loans-page">
       <section className="summary-grid mini loan-summary-grid">
         <SummaryCard label="Active subscriptions" value={String(activeCount)} icon={<CalendarClock />} />
-        <SummaryCard label="Monthly total" value={formatINR(monthlyTotal)} icon={<ArrowDownUp />} tone="warning" />
+        <SummaryCard label="Monthly total" value={formatINRWhole(monthlyTotal)} countPaise={monthlyTotal} icon={<ArrowDownUp />} tone="warning" />
       </section>
 
       <div className="two-column loans-layout">
@@ -5674,57 +5743,6 @@ type BarCategory = {
   typeId?: string;
 };
 
-function CategoryBars({
-  categories,
-  onSelect
-}: {
-  categories: BarCategory[];
-  onSelect?: (category: BarCategory) => void;
-}) {
-  if (categories.length === 0) {
-    return <EmptyState text="No category spending for this period." />;
-  }
-
-  return (
-    <div className="category-bars">
-      {categories.map((category) => {
-        const clickable = Boolean(onSelect && category.subcategoryId && isDrillableId(category.subcategoryId));
-        return (
-        <div
-          className={`bar-row${clickable ? " bar-row-link" : ""}`}
-          key={category.name}
-          {...(clickable
-            ? {
-                role: "button",
-                tabIndex: 0,
-                "aria-label": `Show ${category.name} transactions`,
-                onClick: () => onSelect?.(category),
-                onKeyDown: (event: React.KeyboardEvent) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onSelect?.(category);
-                  }
-                }
-              }
-            : {})}
-        >
-          <div className="bar-label">
-            <span className="category-icon" style={{ "--cat-color": category.color } as React.CSSProperties}>
-              <IconGlyph name={category.icon} size={16} />
-            </span>
-            <span>{category.name}</span>
-          </div>
-          <div className="bar-track">
-            <div style={{ width: `${Math.min(Math.abs(category.share), 100)}%`, background: category.color }} />
-          </div>
-          <strong>{formatINR(category.amountPaise)}</strong>
-        </div>
-        );
-      })}
-    </div>
-  );
-}
-
 // Report buckets for "Other", uncategorised, or card lines don't map to one real filter.
 function isDrillableId(id: string | undefined) {
   return Boolean(id) && !id!.includes(":") && id !== "uncategorized" && id !== "other-chart-segments";
@@ -5848,7 +5866,7 @@ function OutflowMixChart({
               ariaLabel="Outflow mix by Type"
               onSegmentClick={onTypeClick ? (segment) => onTypeClick(segment.id) : undefined}
               centerLabel="Outflow"
-              centerValue={formatINR(outflowPaise)}
+              centerValue={formatINRWhole(outflowPaise)}
               className="report-donut-chart"
             />
           )}
@@ -5916,7 +5934,7 @@ function ReportTypeAnalytics({
                 : undefined
             }
             centerLabel="Total"
-            centerValue={formatINR(selected.amountPaise)}
+            centerValue={formatINRWhole(selected.amountPaise)}
             className="report-donut-chart"
           />
         </div>
@@ -5942,121 +5960,109 @@ function DonutChart({
   className?: string;
   onSegmentClick?: (segment: DonutSegment) => void;
 }) {
-  const width = 520;
-  const height = 360;
-  const centerX = width / 2;
-  const centerY = height / 2;
-  const radius = 92;
-  const lineStartRadius = 116;
-  const lineBendRadius = 138;
+  // A ring with a legend beside it: names and figures read as text, not as labels on leader lines.
+  const size = 220;
+  const center = size / 2;
+  const radius = 84;
   const circumference = 2 * Math.PI * radius;
-  let cursor = 0;
+  const [activeId, setActiveId] = useState<string | null>(null);
 
   if (segments.length === 0 || totalPaise <= 0) {
     return (
-      <svg className={`donut-chart ${className}`.trim()} viewBox={`0 0 ${width} ${height}`} aria-label="No chart data">
-        <circle className="donut-empty" cx={centerX} cy={centerY} r={radius} />
-      </svg>
+      <div className={`donut-figure ${className}`.trim()}>
+        <svg className="donut-chart" viewBox={`0 0 ${size} ${size}`} role="img" aria-label="No chart data">
+          <circle className="donut-empty" cx={center} cy={center} r={radius} />
+        </svg>
+      </div>
     );
   }
 
+  // A hairline gap between slices keeps neighbours with similar colours apart.
+  const gap = segments.length > 1 ? 2 : 0;
+  let cursor = 0;
   const slices = segments.map((segment) => {
     const share = (segment.amountPaise / totalPaise) * 100;
-    const labelShare = segment.labelShare ?? share;
-    const dash = (share / 100) * circumference;
-    const dashOffset = -(cursor / 100) * circumference;
-    const midAngle = ((cursor + share / 2) / 100) * 360 - 90;
-    const radians = (midAngle * Math.PI) / 180;
-    const side = Math.cos(radians) >= 0 ? "right" : "left";
+    const length = (share / 100) * circumference;
+    const dash = Math.max(length - gap, 0.5);
     const slice = {
       ...segment,
       share,
-      labelShare,
+      labelShare: segment.labelShare ?? share,
       dash,
-      dashOffset,
-      radians,
-      side,
-      labelY: centerY + Math.sin(radians) * lineBendRadius
+      dashOffset: -(cursor / 100) * circumference,
+      drillable: Boolean(onSegmentClick && isDrillableId(segment.id))
     };
     cursor += share;
     return slice;
   });
-
-  for (const side of ["left", "right"] as const) {
-    const sideSlices = slices.filter((slice) => slice.side === side).sort((a, b) => a.labelY - b.labelY);
-    // Each label is two text lines (~30px tall); stack labels relative to the
-    // previous one so clustered small slices never overlap.
-    const gap = 36;
-    sideSlices.forEach((slice, index) => {
-      const floor = index === 0 ? 45 : sideSlices[index - 1].labelY + gap;
-      slice.labelY = Math.max(slice.labelY, floor);
-    });
-    for (let index = sideSlices.length - 1; index >= 0; index -= 1) {
-      const ceiling = index === sideSlices.length - 1 ? 315 : sideSlices[index + 1].labelY - gap;
-      sideSlices[index].labelY = Math.min(sideSlices[index].labelY, ceiling);
-    }
-  }
+  const sliceState = (id: string) => (activeId === null ? "" : activeId === id ? " is-active" : " is-dim");
 
   return (
-    <svg className={`donut-chart ${className}`.trim()} viewBox={`0 0 ${width} ${height}`} aria-label={ariaLabel}>
-      <circle className="donut-track" cx={centerX} cy={centerY} r={radius} />
-      {slices.map((segment) => {
-        const startX = centerX + Math.cos(segment.radians) * lineStartRadius;
-        const startY = centerY + Math.sin(segment.radians) * lineStartRadius;
-        const bendX = centerX + Math.cos(segment.radians) * lineBendRadius;
-        const labelX = segment.side === "right" ? 455 : 65;
-        const lineEndX = segment.side === "right" ? labelX - 8 : labelX + 8;
-        return (
-          <g
+    <div className={`donut-figure ${className}`.trim()} data-active={activeId ?? undefined}>
+      <svg className="donut-chart" viewBox={`0 0 ${size} ${size}`} role="img" aria-label={ariaLabel}>
+        <circle className="donut-track" cx={center} cy={center} r={radius} />
+        {slices.map((segment) => (
+          <circle
             key={segment.id}
-            {...(onSegmentClick && isDrillableId(segment.id)
-              ? {
-                  className: "donut-slice-link",
-                  role: "button",
-                  tabIndex: 0,
-                  "aria-label": `Show ${segment.name} transactions`,
-                  onClick: () => onSegmentClick(segment),
-                  onKeyDown: (event: React.KeyboardEvent) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      onSegmentClick(segment);
-                    }
-                  }
-                }
-              : {})}
+            className={`donut-segment${segment.drillable ? " donut-segment-link" : ""}${sliceState(segment.id)}`}
+            cx={center}
+            cy={center}
+            r={radius}
+            stroke={segment.color}
+            strokeDasharray={`${segment.dash} ${circumference - segment.dash}`}
+            strokeDashoffset={segment.dashOffset}
+            onMouseEnter={() => setActiveId(segment.id)}
+            onMouseLeave={() => setActiveId(null)}
+            onClick={segment.drillable ? () => onSegmentClick?.(segment) : undefined}
           >
             <title>{`${segment.name}: ${formatShare(segment.labelShare)} (${formatINR(segment.amountPaise)})`}</title>
-            <circle
-              className="donut-segment"
-              cx={centerX}
-              cy={centerY}
-              r={radius}
-              stroke={segment.color}
-              strokeDasharray={`${segment.dash} ${circumference - segment.dash}`}
-              strokeDashoffset={segment.dashOffset}
-              transform={`rotate(-90 ${centerX} ${centerY})`}
-            />
-            <polyline
-              className="donut-leader"
-              stroke={segment.color}
-              points={`${startX},${startY} ${bendX},${segment.labelY} ${lineEndX},${segment.labelY}`}
-            />
-            <text
-              className="donut-label"
-              x={labelX}
-              y={segment.labelY - 3}
-              textAnchor={segment.side === "right" ? "start" : "end"}
-            >
-              <tspan x={labelX}>{segment.name}</tspan>
-              <tspan className="donut-label-share" x={labelX} dy="16">{formatShare(segment.labelShare)}</tspan>
-            </text>
-          </g>
-        );
-      })}
-      <circle className="donut-center" cx={centerX} cy={centerY} r="64" />
-      <text className="donut-center-label" x={centerX} y={centerY - 5} textAnchor="middle">{centerLabel}</text>
-      <text className="donut-center-value" x={centerX} y={centerY + 17} textAnchor="middle">{centerValue}</text>
-    </svg>
+          </circle>
+        ))}
+        <text className="donut-center-label" x={center} y={center - 8} textAnchor="middle">
+          {centerLabel}
+        </text>
+        <text className="donut-center-value" x={center} y={center + 16} textAnchor="middle">
+          {centerValue}
+        </text>
+      </svg>
+      <ul className="donut-legend" aria-label={`${ariaLabel} legend`}>
+        {slices.map((segment) => {
+          const body = (
+            <>
+              <i className="donut-swatch" style={{ background: segment.color }} aria-hidden="true" />
+              <span className="donut-legend-name">{segment.name}</span>
+              <span className="donut-legend-share">{formatShare(segment.labelShare)}</span>
+              <strong className="donut-legend-amount">{formatINR(segment.amountPaise)}</strong>
+            </>
+          );
+          const hover = {
+            onMouseEnter: () => setActiveId(segment.id),
+            onMouseLeave: () => setActiveId(null),
+            onFocus: () => setActiveId(segment.id),
+            onBlur: () => setActiveId(null)
+          };
+          return (
+            <li key={segment.id} className={`donut-legend-row${sliceState(segment.id)}`}>
+              {segment.drillable ? (
+                <button
+                  type="button"
+                  className="donut-legend-item"
+                  aria-label={`Show ${segment.name} transactions`}
+                  onClick={() => onSegmentClick?.(segment)}
+                  {...hover}
+                >
+                  {body}
+                </button>
+              ) : (
+                <div className="donut-legend-item" {...hover}>
+                  {body}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
@@ -6096,17 +6102,19 @@ function TransactionTag({
   icon,
   label,
   tone = "neutral",
-  color
+  color,
+  title
 }: {
   icon?: React.ReactNode;
   label: string;
+  title?: string;
   tone?: "neutral" | "account" | "method" | "type" | "subtype";
   color?: string;
 }) {
   const colorStyle = color ? ({ "--cat-color": color } as React.CSSProperties) : undefined;
 
   return (
-    <span className={`transaction-tag ${tone}`} style={colorStyle}>
+    <span className={`transaction-tag ${tone}`} style={colorStyle} title={title}>
       {icon}
       <span>{label}</span>
     </span>
@@ -6231,7 +6239,7 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "Where is my data stored? Is anything uploaded online?",
     answer:
-      "Everything runs on this device. Your accounts, transactions, budgets and settings live in a local database on your computer — nothing is uploaded to any server. Backups are also saved locally."
+      "Everything runs on this device. Your accounts, transactions, budgets and settings live in a local database on your computer. Nothing is uploaded to any server. Backups are also saved locally."
   },
   {
     question: "How is 'Available cash' calculated?",
@@ -6249,24 +6257,24 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
       "It adds up every expense dated in the current calendar month. Income, transfers between your own accounts, and credit-card payments are not counted as spending."
   },
   {
-    question: "What do the budget labels mean — On track, Watch, Likely to exceed, Over budget?",
+    question: "What do the budget labels mean: On track, Watch, Likely to exceed, Over budget?",
     answer:
       "On track means spending is comfortably within budget. Watch means you're getting close. Likely to exceed means the month-end projection lands over the budget. Over budget means you've already spent more than the budgeted amount. The projection is what you've spent so far plus what that line usually adds in the rest of the month (from recent months that used it), so rent paid early isn't doubled. Without two months of history it follows your pace, and in the first days of a month it just shows what you've spent."
   },
   {
     question: "Are my investment values updated automatically?",
     answer:
-      "Market prices aren't fetched — stocks, mutual funds, gold, land, property, PF and fixed-deposit (FD) values are entered by you. One exception: a SIP you log against a mutual fund (Type Investment, SubType Mutual Funds, linked to the fund) is added to that fund's Invested and Current value automatically, if it's dated after you last typed those figures. SIPs from before then are assumed to be included already, so nothing is counted twice. When you enter a new value from your statement, that becomes the new starting point. The Investments page shows the date you last saved a change so you know how current the figures are. Each investment type is a dropdown showing its total invested, current value and net gain — click it to reveal every holding of that type."
+      "Market prices aren't fetched: stocks, mutual funds, gold, land, property, PF and fixed-deposit (FD) values are entered by you. One exception: a SIP you log against a mutual fund (Type Investment, SubType Mutual Funds, linked to the fund) is added to that fund's Invested and Current value automatically, if it's dated after you last typed those figures. SIPs from before then are assumed to be included already, so nothing is counted twice. When you enter a new value from your statement, that becomes the new starting point. The Investments page shows the date you last saved a change so you know how current the figures are. Each investment type is a dropdown showing its total invested, current value and net gain. Click it to reveal every holding of that type."
   },
   {
     question: "How do vacations work, and do trip expenses still count as normal expenses?",
     answer:
-      "A vacation is a label you put on expenses, not a new category. First create a trip on the Vacations page (optionally with dates and a budget). Then, when you add an Expense in Weekly Entry, tick 'Part of a vacation?' and choose the trip. That expense keeps its normal SubType (Food, Travel, Hotel…) and still counts in all your normal expense totals, reports and budgets — and it also rolls up under the trip. The Vacations page shows each trip's total spend, budget-vs-spent, and a breakdown by SubType. Deleting a trip only removes the grouping; the expenses themselves stay untouched."
+      "A vacation is a label you put on expenses, not a new category. First create a trip on the Vacations page (optionally with dates and a budget). Then, when you add an Expense in Weekly Entry, tick 'Part of a vacation?' and choose the trip. That expense keeps its normal SubType (Food, Travel, Hotel…) and still counts in all your normal expense totals, reports and budgets, and it also rolls up under the trip. The Vacations page shows each trip's total spend, budget-vs-spent, and a breakdown by SubType. Deleting a trip only removes the grouping; the expenses themselves stay untouched."
   },
   {
     question: "How are Inflow, Outflow and Savings in Reports calculated?",
     answer:
-      "Inflow adds up everything that brought money in for the period (income, plus any refund that isn't tied to a purchase). A refund recorded with the Refund button on a purchase isn't inflow: it reduces that purchase's SubType instead, so it never makes a month look like you earned more. Outflow adds up everything that took money out (expense, loan, investment, transfer, credit-card payment and any other outflow categories). Savings is simply Inflow minus Outflow — positive means you kept money, negative means you spent more than came in. Self transfers are left out of both sides, because moving money between your own accounts is not income or spending. The Outflow figure on the Overview uses this exact same calculation."
+      "Inflow adds up everything that brought money in for the period (income, plus any refund that isn't tied to a purchase). A refund recorded with the Refund button on a purchase isn't inflow: it reduces that purchase's SubType instead, so it never makes a month look like you earned more. Outflow adds up everything that took money out (expense, loan, investment, transfer, credit-card payment and any other outflow categories). Savings is simply Inflow minus Outflow. Positive means you kept money, negative means you spent more than came in. Self transfers are left out of both sides, because moving money between your own accounts is not income or spending. The Outflow figure on the Overview uses this exact same calculation."
   },
   {
     question: "How do I move money between my own bank accounts?",
@@ -6491,7 +6499,7 @@ function ProfilePage({
                 Save
               </button>
             </div>
-            <small>Credit cards turn red when utilization crosses this value (1–100).</small>
+            <small>Credit cards turn red when utilization crosses this value (1-100).</small>
           </div>
           <div className="settings-row backup-row">
             <span>Backup status</span>
@@ -6680,75 +6688,43 @@ function Panel({
   );
 }
 
-function CollapsiblePanel({
-  title,
-  action,
-  expanded,
-  children
-}: {
-  title: string;
-  action?: React.ReactNode;
-  expanded: boolean;
-  children: React.ReactNode;
-}) {
-  const contentId = `panel-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-
-  return (
-    <section className={`panel collapsible-panel ${expanded ? "expanded" : ""}`}>
-      <div className="panel-header">
-        <h2>{title}</h2>
-        {action && (
-          <div className="panel-header-actions">
-            <div className="panel-action">{action}</div>
-          </div>
-        )}
-      </div>
-      {expanded && <div id={contentId} className="collapsible-content">{children}</div>}
-    </section>
-  );
-}
-
-function OverviewDisclosure({
-  title,
-  expanded,
-  children
-}: {
-  title: string;
-  expanded: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="overview-disclosure">
-      <div className="overview-disclosure-header">
-        <h2>{title}</h2>
-      </div>
-      {expanded && <div className="collapsible-content">{children}</div>}
-    </section>
-  );
-}
-
 function SummaryCard({
   label,
   value,
   icon,
   tone = "neutral",
-  note
+  note,
+  countPaise
 }: {
   label: string;
   value: string;
   icon: React.ReactNode;
   tone?: "neutral" | "warning" | "good";
   note?: React.ReactNode;
+  /** When given, the figure counts up to this amount (the formatted `value` stays the accessible text). */
+  countPaise?: number;
 }) {
   return (
     <div className={`summary-card ${tone}`}>
       <span>{icon}</span>
       <div>
         <p>{label}</p>
-        <strong>{value}</strong>
+        <strong>{countPaise === undefined ? value : <CountUp paise={countPaise} label={value} />}</strong>
         {note}
       </div>
     </div>
+  );
+}
+
+/** A money figure that counts up to its value when it first appears or changes. */
+function CountUp({ paise, label }: { paise: number; label: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useCountUp(ref, paise, formatINRWhole);
+  return (
+    <>
+      <span className="visually-hidden">{label}</span>
+      <span ref={ref} aria-hidden="true" className="count-up" />
+    </>
   );
 }
 
@@ -6763,11 +6739,11 @@ function ChangeVsLastMonth({
   comparison: Overview["comparison"];
   higherIsGood: boolean;
 }) {
-  // Nothing to compare against — a percentage off zero would be meaningless.
+  // Nothing to compare against; a percentage off zero would be meaningless.
   if (previous <= 0) return null;
   const [year, month] = comparison.month.split("-").map(Number);
   const shortMonth = new Date(year, month - 1, 1).toLocaleDateString("en-IN", { month: "short" });
-  const period = comparison.partial ? `1–${comparison.throughDay} ${shortMonth}` : shortMonth;
+  const period = comparison.partial ? `1-${comparison.throughDay} ${shortMonth}` : shortMonth;
   const change = Math.round(((current - previous) / previous) * 100);
   if (change === 0) {
     return <small className="summary-change">Same as {period}</small>;
@@ -6799,7 +6775,7 @@ function UpcomingPaymentsList({
       ? "Due today"
       : daysAway === 1
         ? "Due tomorrow"
-        : `In ${daysAway} days · ${formatDateWithYear(dueDate).replace(/ \d{4}$/, "")}`;
+        : `In ${daysAway} days, ${formatDateWithYear(dueDate).replace(/ \d{4}$/, "")}`;
   return (
     <div className="upcoming-list">
       {upcoming.items.map((item) => (
@@ -6936,7 +6912,7 @@ function recentMonthOptions(fromMonth: string, count: number) {
 }
 
 // Splits and refunds depend on other records (split lines, the original purchase), so a
-// one-tap copy can't reproduce them faithfully — those are left to the normal form.
+// one-tap copy can't reproduce them faithfully, so those are left to the normal form.
 // Money back only makes sense for something that was paid out: not transfers or card bills.
 function shiftMonth(month: string, count: number) {
   const [year, monthIndex] = month.split("-").map(Number);

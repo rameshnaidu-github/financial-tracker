@@ -10,6 +10,13 @@ export default defineConfig({
     }
   },
   build: {
-    outDir: "dist"
+    outDir: "dist",
+    rollupOptions: {
+      output: {
+        // Libraries and the icon set change rarely: separate chunks stay cached across app updates.
+        manualChunks: (id) =>
+          id.includes("@phosphor-icons") ? "icons" : id.includes("node_modules") ? "vendor" : undefined
+      }
+    }
   }
 });

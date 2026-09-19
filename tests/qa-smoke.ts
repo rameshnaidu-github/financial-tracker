@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
 import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
+import { formatINR, formatINRWhole } from "../src/format.ts";
 import { INFLOW_BEHAVIORS, SELF_TRANSFER_SUBCATEGORY_ID } from "../shared/finance.ts";
 import type { ReportType } from "../src/types.ts";
 
@@ -3039,6 +3040,23 @@ test("bonds are an investment type with their own allocation slice", () => {
   assert(slice?.label === "Bonds" && slice.valuePaise >= 1_03_150_00, "Bonds should get their own allocation slice.");
   const table = dbModule.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'investments'").get() as { sql: string };
   assert(table.sql.includes("'bonds'"), "The investments table should accept bonds.");
+});
+
+test("whole-rupee headline figures round and never show paise", () => {
+  const cases: Array<[number, string]> = [
+    [1_23_456_49, "₹1,23,456"],
+    [1_23_456_50, "₹1,23,457"],
+    [99, "₹1"],
+    [0, "₹0"],
+    [-4_56_78, "-₹457"],
+    [10_00_00_000_00, "₹10,00,00,000"]
+  ];
+  for (const [paise, expected] of cases) {
+    const shown = formatINRWhole(paise).replace(/\u00a0/g, " ");
+    assert(shown === expected, `formatINRWhole(${paise}) should be ${expected}, got ${shown}`);
+    assert(!/\.\d/.test(shown), `formatINRWhole(${paise}) must not show paise`);
+  }
+  assert(formatINR(1_23_456_49).endsWith(".49"), "Row figures keep their paise.");
 });
 
 let failed = 0;

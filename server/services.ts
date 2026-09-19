@@ -2302,7 +2302,7 @@ export function getTrendReport(
       const from = `${selectedMonth}-${String(startDay).padStart(2, "0")}`;
       const to = `${selectedMonth}-${String(endDay).padStart(2, "0")}`;
       points.push({
-        label: `${startDay}–${endDay}`,
+        label: `${startDay}-${endDay}`,
         amountPaise: amountForType(getMonthlyReport(accountId, selectedMonth, from, to))
       });
     }
@@ -2387,7 +2387,7 @@ export function getBudgetTrendReport(
       const from = `${selectedMonth}-${String(startDay).padStart(2, "0")}`;
       const to = `${selectedMonth}-${String(endDay).padStart(2, "0")}`;
       points.push({
-        label: `${startDay}–${endDay}`,
+        label: `${startDay}-${endDay}`,
         actualPaise: actualForSub(getMonthlyReport(accountId, selectedMonth, from, to)),
         budgetPaise: weeklyBudget
       });
