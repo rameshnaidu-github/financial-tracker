@@ -781,8 +781,18 @@ textarea:focus {
 /* The tag strip already clips gracefully, so it can give up width before the row overflows. */
 /* Wider screens only: on phones the base stylesheet stacks the row in one column. */
 @media (min-width: 721px) {
+  /*
+   * A fixed amount column (and the reserved action width) is what lets every row's figure start
+   * on the same x: an auto column was as wide as that row's own figure, so the digits went ragged.
+   * 164px clears the longest realistic figure measured in the browser (a crore with paise, 145px).
+   */
   .ledger-row {
-    grid-template-columns: minmax(150px, 1.1fr) minmax(0, 2fr) minmax(104px, auto) auto;
+    grid-template-columns: minmax(150px, 1.1fr) minmax(0, 2fr) 164px 185px;
+  }
+
+  /* Figures read down the column from their sign, not from their last digit. */
+  .ledger-row .transaction-amount-cell {
+    text-align: left;
   }
 }
 

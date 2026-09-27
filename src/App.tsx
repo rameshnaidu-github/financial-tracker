@@ -6649,7 +6649,7 @@ function AccountManagerLine({
                 : "The balance before your first transaction here. Change it if the app doesn't match your bank."}
             </p>
             <div className="account-actions">
-              <button type="submit" disabled={saving}>
+              <button type="submit" className="primary-action" disabled={saving}>
                 {saving ? "Saving..." : "Save"}
               </button>
               <button type="button" className="secondary-action" onClick={() => setEditing(false)}>
