@@ -2104,3 +2104,32 @@ body::before {
 :root[data-theme="dark"] .profile-menu .profile-save-button:hover {
   color: #0b0e14;
 }
+
+/* ---------- Fit: inline account editor and the amount column ---------- */
+/*
+ * Grid items keep their content's minimum width by default, so the editor's inputs held their
+ * default character width, overlapped the next field and pushed past the card. Let the cells and
+ * their inputs shrink to the column instead.
+ */
+.account-edit-form .control-field {
+  min-width: 0;
+}
+
+.account-edit-form .control-field > input,
+.account-edit-form .control-field > select {
+  width: 100%;
+  min-width: 0;
+}
+
+/*
+ * Every row is its own grid, so an "auto" action column was as wide as that row's own buttons and
+ * the amounts ended on three different x positions. Reserve the widest set (two icon buttons, Edit
+ * and the gaps) on pointer widths; rows with fewer buttons sit against the same right edge.
+ * Phones keep the stacked row from the base stylesheet.
+ */
+@media (min-width: 721px) {
+  .ledger-row .row-actions {
+    min-width: 185px;
+    justify-content: flex-end;
+  }
+}

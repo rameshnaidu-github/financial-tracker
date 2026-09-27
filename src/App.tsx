@@ -150,12 +150,18 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home; group?: Na
  * or when the person asks for less motion, the page simply swaps.
  */
 function withPageTransition(update: () => void) {
-  const doc = document as Document & { startViewTransition?: (callback: () => void) => unknown };
-  if (typeof doc.startViewTransition !== "function" || prefersReducedMotion()) {
+  const doc = document as Document & {
+    startViewTransition?: (callback: () => void) => { finished?: Promise<void> };
+  };
+  // A hidden page cannot capture the snapshots a transition needs, so it would only throw.
+  if (typeof doc.startViewTransition !== "function" || prefersReducedMotion() || document.hidden) {
     update();
     return;
   }
-  doc.startViewTransition(() => flushSync(update));
+  const transition = doc.startViewTransition(() => flushSync(update));
+  // Interrupting a transition (a quick second navigation) rejects this promise. The page has
+  // already changed by then, so swallow it rather than leaving an unhandled rejection.
+  transition?.finished?.catch(() => {});
 }
 
 const NAV_GROUPS: NavGroup[] = ["Daily", "Plan", "Own & owe", "Setup"];
