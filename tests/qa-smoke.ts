@@ -2299,6 +2299,51 @@ test("the budget plan reports last month's spend per category", () => {
   assert(untouched?.previousActualPaise === 0, "A category with no spend last month should report zero.");
 });
 
+test("the account editor payload saves a card's due day", () => {
+  const suffix = Date.now().toString().slice(-5);
+  const card = services.createAccount({
+    name: `QA Editor Card ${suffix}`,
+    type: "credit_card",
+    startingBalancePaise: 2_000_00,
+    creditLimitPaise: 1_00_000_00
+  });
+  services.createTransaction({
+    date: "2027-04-02",
+    accountId: card.id,
+    method: "credit_card",
+    merchant: "QA editor spend",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Shopping"),
+    amountPaise: 3_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  // Exactly what the inline editor sends: every field at once, including the due day.
+  services.updateAccount(card.id, {
+    name: `QA Editor Card ${suffix}`,
+    startingBalancePaise: 2_000_00,
+    creditLimitPaise: 1_00_000_00,
+    paymentDueDay: 21
+  });
+  const saved = services.listAccounts().find((item) => item.id === card.id);
+  assert(saved?.paymentDueDay === 21, `The editor should store the due day, got ${saved?.paymentDueDay}.`);
+  assert(saved.outstandingPaise === 5_000_00, `Saving the editor must not disturb the balance, got ${saved.outstandingPaise}.`);
+
+  const due = services.getUpcomingPayments(14, "2027-04-15").items.find((item) => item.id === card.id);
+  assert(due?.dueDate === "2027-04-21", `The saved day should drive the reminder, got ${due?.dueDate}.`);
+
+  // Editing again without mentioning the day keeps it; clearing it explicitly removes the reminder.
+  services.updateAccount(card.id, { name: `QA Editor Card ${suffix} renamed` });
+  assert(services.listAccounts().find((item) => item.id === card.id)?.paymentDueDay === 21, "An unrelated edit must keep the day.");
+  services.updateAccount(card.id, { paymentDueDay: null });
+  assert(services.listAccounts().find((item) => item.id === card.id)?.paymentDueDay === null, "Clearing the day should be possible from the editor.");
+  assert(
+    !services.getUpcomingPayments(14, "2027-04-15").items.some((item) => item.id === card.id),
+    "A card with no due day must not be listed."
+  );
+});
+
 test("a loan reminds from its EMI due day", () => {
   const suffix = Date.now().toString().slice(-5);
   const loan = services.createLoan({

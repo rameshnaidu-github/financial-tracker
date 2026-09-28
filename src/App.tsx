@@ -3774,29 +3774,30 @@ function BudgetPlannerPage({
                   onChange={(event) => setAmount(event.target.value)}
                   placeholder="25000"
                 />
-                {selectedScope && (
-                  <small className="budget-last-month">
-                    {selectedScope.previousActualPaise > 0 ? (
-                      <>
-                        {formatMonth(plan.previousMonth)}: <strong>{formatINR(selectedScope.previousActualPaise)}</strong>
-                        <button
-                          type="button"
-                          className="text-action"
-                          onClick={() => setAmount(String(Math.round(selectedScope.previousActualPaise / 100)))}
-                        >
-                          Use this
-                        </button>
-                      </>
-                    ) : (
-                      <>Nothing spent here in {formatMonth(plan.previousMonth)}</>
-                    )}
-                  </small>
-                )}
               </label>
               <button className="primary-action" type="submit" disabled={saving || !subScopes.length}>
                 <Plus size={17} />
                 Add
               </button>
+              {/* Its own row: inside a field this note made that column taller and the row went ragged. */}
+              {selectedScope && (
+                <p className="budget-last-month budget-add-note">
+                  {selectedScope.previousActualPaise > 0 ? (
+                    <>
+                      {formatMonth(plan.previousMonth)}: <strong>{formatINR(selectedScope.previousActualPaise)}</strong>
+                      <button
+                        type="button"
+                        className="text-action"
+                        onClick={() => setAmount(String(Math.round(selectedScope.previousActualPaise / 100)))}
+                      >
+                        Use this
+                      </button>
+                    </>
+                  ) : (
+                    <>Nothing spent here in {formatMonth(plan.previousMonth)}</>
+                  )}
+                </p>
+              )}
             </form>
 
             {plan.lines.length === 0 ? (
@@ -4104,7 +4105,6 @@ function LoansPage({
     });
   }
 
-  const [addOpen, setAddOpen] = useState(false);
   // Biggest first, so the ring and the bars read in the same order.
   const loanSegments = activeLoans
     .filter((loan) => loan.outstandingPaise > 0)
@@ -4115,11 +4115,6 @@ function LoansPage({
       amountPaise: loan.outstandingPaise
     }))
     .sort((a, b) => b.amountPaise - a.amountPaise);
-
-  // Editing a loan reuses the same form, so open the drawer when one is picked.
-  useEffect(() => {
-    if (editingLoan) setAddOpen(true);
-  }, [editingLoan]);
 
   async function restore(loan: Loan) {
     try {
@@ -4148,7 +4143,7 @@ function LoansPage({
         />
       </section>
 
-      <div className="section-stack">
+      <div className="two-column loans-layout">
         <Panel title="Loan tracker">
           {activeLoans.length === 0 ? (
             <EmptyState text="No active loans yet." />
@@ -4182,25 +4177,7 @@ function LoansPage({
           )}
         </Panel>
 
-        <Panel title="Outstanding by loan">
-          <MixChart
-            segments={loanSegments}
-            totalPaise={activeOutstanding}
-            ariaLabel="Outstanding by loan"
-            centerLabel="Outstanding"
-            centerValue={formatINRWhole(activeOutstanding)}
-            className="overview-donut-chart"
-            emptyText="Nothing outstanding yet. Add a loan to see the split."
-          />
-        </Panel>
-
-        <details
-          className="section-form-disclosure"
-          open={addOpen}
-          onToggle={(event) => setAddOpen(event.currentTarget.open)}
-        >
-          <summary>{editingLoan ? "Edit loan" : "Add loan"}</summary>
-          <div className="section-form-body">
+        <Panel title={editingLoan ? "Edit loan" : "Add loan"}>
           {loanType ? (
             <LoanForm
               key={editingLoan?.id ?? "new-loan"}
@@ -4216,9 +4193,20 @@ function LoansPage({
           ) : (
             <EmptyState text="Loan Type is missing. Add a Type with Loan behavior in Categories first." />
           )}
-          </div>
-        </details>
+        </Panel>
       </div>
+
+      <Panel title="Outstanding by loan">
+        <MixChart
+          segments={loanSegments}
+          totalPaise={activeOutstanding}
+          ariaLabel="Outstanding by loan"
+          centerLabel="Outstanding"
+          centerValue={formatINRWhole(activeOutstanding)}
+          className="overview-donut-chart"
+          emptyText="Nothing outstanding yet. Add a loan to see the split."
+        />
+      </Panel>
     </div>
   );
 }
@@ -4319,6 +4307,7 @@ function LoanForm({
 
   return (
     <form className="stack-form loan-form" onSubmit={submit}>
+      <div className="form-pair form-pair-tight">
       <label>
         Loan name
         <input value={name} onChange={(event) => setName(event.target.value)} placeholder="HDFC home loan" required />
@@ -4334,6 +4323,7 @@ function LoanForm({
           <option value="__custom__">Add custom loan type</option>
         </select>
       </label>
+      </div>
       {subcategoryChoice === "__custom__" && (
         <label>
           Custom loan type
@@ -4345,27 +4335,49 @@ function LoanForm({
           />
         </label>
       )}
-      <label>
-        Principal amount
-        <input value={principal} onChange={(event) => setPrincipal(event.target.value)} placeholder="₹0" inputMode="decimal" required />
-      </label>
-      <label>
-        Current outstanding
-        <input value={outstanding} onChange={(event) => setOutstanding(event.target.value)} placeholder="₹0" inputMode="decimal" required />
-        <small className="field-hint">Planning to add past EMIs too? Enter the outstanding before the earliest one.</small>
-      </label>
-      <label>
-        Month and year taken
-        <input type="month" value={startMonth} onChange={(event) => setStartMonth(event.target.value)} required />
-      </label>
-      <label>
-        Interest rate
-        <input value={interestRate} onChange={(event) => setInterestRate(event.target.value)} placeholder="8.5%" inputMode="decimal" required />
-      </label>
-      <label>
-        Tenure in months
-        <input value={tenureMonths} onChange={(event) => setTenureMonths(event.target.value)} placeholder="240" inputMode="numeric" required />
-      </label>
+      {/* Paired so the whole form fits on one screen: the due day used to sit far below the fold. */}
+      <div className="form-pair form-pair-tight">
+        <label>
+          Principal amount
+          <input value={principal} onChange={(event) => setPrincipal(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+        </label>
+        <label>
+          Current outstanding
+          <input value={outstanding} onChange={(event) => setOutstanding(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+        </label>
+      </div>
+      <small className="field-hint">Planning to add past EMIs too? Enter the outstanding before the earliest one.</small>
+      <div className="form-pair form-pair-tight">
+        <label>
+          Month and year taken
+          <input type="month" value={startMonth} onChange={(event) => setStartMonth(event.target.value)} required />
+        </label>
+        <label>
+          Interest rate
+          <input value={interestRate} onChange={(event) => setInterestRate(event.target.value)} placeholder="8.5%" inputMode="decimal" required />
+        </label>
+      </div>
+      <div className="form-pair form-pair-tight">
+        <label>
+          Tenure in months
+          <input value={tenureMonths} onChange={(event) => setTenureMonths(event.target.value)} placeholder="240" inputMode="numeric" required />
+        </label>
+        <label>
+          EMI due day
+          <input
+            value={emiDueDay}
+            onChange={(event) => setEmiDueDay(event.target.value)}
+            placeholder="5"
+            inputMode="numeric"
+            min={1}
+            max={31}
+            type="number"
+          />
+        </label>
+      </div>
+      <small className="field-hint">
+        The EMI due day is the day of the month it leaves your account. Set it and the Overview reminds you before it is due.
+      </small>
       <label>
         Monthly EMI
         <input value={monthlyEmi} onChange={(event) => setMonthlyEmi(event.target.value)} placeholder="₹0" inputMode="decimal" required />
@@ -4382,21 +4394,6 @@ function LoanForm({
             )}
           </span>
         )}
-      </label>
-      <label>
-        EMI due day (optional)
-        <input
-          value={emiDueDay}
-          onChange={(event) => setEmiDueDay(event.target.value)}
-          placeholder="5"
-          inputMode="numeric"
-          min={1}
-          max={31}
-          type="number"
-        />
-        <small className="field-hint">
-          The day of the month the EMI leaves your account. Set it and the Overview reminds you before it is due.
-        </small>
       </label>
       {error && <p className="form-error">{error}</p>}
       <div className="loan-form-actions">
@@ -4548,7 +4545,7 @@ function InvestmentsPage({
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
   const [editing, setEditing] = useState<Investment | null>(null);
-  const [addOpen, setAddOpen] = useState(false);
+  const [chartTypeId, setChartTypeId] = useState<string>("all");
   const totalInvested = investments.reduce((sum, item) => sum + item.investedPaise, 0);
   const totalCurrent = investments.reduce((sum, item) => sum + item.currentValuePaise, 0);
   const totalGain = totalCurrent - totalInvested;
@@ -4562,20 +4559,15 @@ function InvestmentsPage({
     ""
   );
 
-  const holdingSegments = investments
-    .filter((item) => item.currentValuePaise > 0)
-    .map((item) => ({
-      id: item.id,
-      name: item.name,
-      color: item.color,
-      amountPaise: item.currentValuePaise
-    }))
-    .sort((a, b) => b.amountPaise - a.amountPaise);
-
-  // Editing reuses the add form, so open the drawer when a holding is picked.
-  useEffect(() => {
-    if (editing) setAddOpen(true);
-  }, [editing]);
+  // Grouped by type by default; picking one type opens up its own holdings.
+  const chartType = INVESTMENT_TYPES.find((type) => type.id === chartTypeId) ?? null;
+  const chartSegments = chartType
+    ? investments
+        .filter((item) => item.type === chartType.id && item.currentValuePaise > 0)
+        .map((item) => ({ id: item.id, name: item.name, color: item.color, amountPaise: item.currentValuePaise }))
+        .sort((a, b) => b.amountPaise - a.amountPaise)
+    : investmentTypeSegments(investments);
+  const chartTotalPaise = chartSegments.reduce((sum, segment) => sum + segment.amountPaise, 0);
 
   function remove(investment: Investment) {
     requestConfirm({
@@ -4624,10 +4616,10 @@ function InvestmentsPage({
         </p>
       )}
 
-      <div className="section-stack">
+      <div className="two-column loans-layout">
         <Panel title="Portfolio">
           {groups.length === 0 ? (
-            <EmptyState text="No investments yet. Add your first holding below." />
+            <EmptyState text="No investments yet. Add your first holding on the right." />
           ) : (
             <div className="investment-groups">
               {groups.map((group) => (
@@ -4643,38 +4635,47 @@ function InvestmentsPage({
           )}
         </Panel>
 
-        <Panel title="Current value by holding">
-          <MixChart
-            segments={holdingSegments}
-            totalPaise={totalCurrent}
-            ariaLabel="Current value by holding"
-            centerLabel="Portfolio"
-            centerValue={formatINRWhole(totalCurrent)}
-            className="overview-donut-chart"
-            emptyText="Add a holding to see how your portfolio is split."
+        <Panel title={editing ? "Edit investment" : "Add investment"}>
+          <InvestmentForm
+            key={editing?.id ?? "new-investment"}
+            investment={editing}
+            onCancel={editing ? () => setEditing(null) : undefined}
+            onSaved={async (message) => {
+              setEditing(null);
+              await refresh();
+              showNotice(message);
+            }}
           />
         </Panel>
-
-        <details
-          className="section-form-disclosure"
-          open={addOpen}
-          onToggle={(event) => setAddOpen(event.currentTarget.open)}
-        >
-          <summary>{editing ? "Edit investment" : "Add investment"}</summary>
-          <div className="section-form-body">
-            <InvestmentForm
-              key={editing?.id ?? "new-investment"}
-              investment={editing}
-              onCancel={editing ? () => setEditing(null) : undefined}
-              onSaved={async (message) => {
-                setEditing(null);
-                await refresh();
-                showNotice(message);
-              }}
-            />
-          </div>
-        </details>
       </div>
+
+      <Panel
+        title={chartType ? `${chartType.label} holdings` : "Current value by type"}
+        action={
+          <label className="chart-scope">
+            <span className="visually-hidden">Show</span>
+            <select value={chartTypeId} onChange={(event) => setChartTypeId(event.target.value)}>
+              <option value="all">All types</option>
+              {INVESTMENT_TYPES.filter((type) => investments.some((item) => item.type === type.id)).map((type) => (
+                <option key={type.id} value={type.id}>
+                  {type.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        }
+      >
+        <MixChart
+          segments={chartSegments}
+          totalPaise={chartTotalPaise}
+          ariaLabel={chartType ? `${chartType.label} holdings` : "Current value by type"}
+          centerLabel={chartType ? chartType.label : "Portfolio"}
+          centerValue={formatINRWhole(chartTotalPaise)}
+          className="overview-donut-chart"
+          emptyText={chartType ? `Nothing held in ${chartType.label} yet.` : "Add a holding to see how your portfolio is split."}
+          onSegmentClick={chartType ? undefined : (segment) => setChartTypeId(segment.id)}
+        />
+      </Panel>
     </div>
   );
 }
@@ -5818,7 +5819,7 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
             <input value={limit} onChange={(event) => setLimit(event.target.value)} placeholder="₹1,50,000" inputMode="decimal" required />
           </label>
           <label>
-            Payment due day (optional)
+            Payment due day
             <input
               value={dueDay}
               onChange={(event) => setDueDay(event.target.value)}
@@ -6816,13 +6817,14 @@ function AccountManagerLine({
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [draft, setDraft] = useState({ name: "", opening: "", limit: "" });
+  const [draft, setDraft] = useState({ name: "", opening: "", limit: "", dueDay: "" });
 
   function startEdit() {
     setDraft({
       name: account.name,
       opening: amountInputFromPaise(account.startingBalancePaise),
-      limit: account.creditLimitPaise === null ? "" : amountInputFromPaise(account.creditLimitPaise)
+      limit: account.creditLimitPaise === null ? "" : amountInputFromPaise(account.creditLimitPaise),
+      dueDay: account.paymentDueDay ? String(account.paymentDueDay) : ""
     });
     setEditing(true);
   }
@@ -6839,12 +6841,18 @@ function AccountManagerLine({
       onError?.("Amounts can't be negative.");
       return;
     }
+    const typedDueDay = draft.dueDay.trim();
+    const dueDay = typedDueDay ? Number.parseInt(typedDueDay, 10) : null;
+    if (typedDueDay && (!Number.isInteger(dueDay) || dueDay! < 1 || dueDay! > 31)) {
+      onError?.("Payment due day must be a day of the month, 1 to 31.");
+      return;
+    }
     setSaving(true);
     try {
       await Api.updateAccount(account.id, {
         name: draft.name.trim(),
         startingBalancePaise: openingPaise,
-        ...(limitPaise !== undefined ? { creditLimitPaise: limitPaise } : {})
+        ...(limitPaise !== undefined ? { creditLimitPaise: limitPaise, paymentDueDay: dueDay } : {})
       });
       const shift = openingPaise - account.startingBalancePaise;
       setEditing(false);
@@ -6897,40 +6905,58 @@ function AccountManagerLine({
       {expanded && <>
         {isCard && <CardLimitSummary account={account} alertPercent={alertPercent} />}
         {editing ? (
-          <form className="account-edit-form" onSubmit={save}>
-            <label className="control-field">
-              <span className="control-label">Name</span>
+          <form className="stack-form account-edit-form" onSubmit={save}>
+            <label>
+              Name
               <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
             </label>
-            <label className="control-field">
-              <span className="control-label">{isCard ? "Opening outstanding" : "Opening balance"}</span>
+            <label>
+              {isCard ? "Opening outstanding" : "Opening balance"}
               <input
                 inputMode="decimal"
                 value={draft.opening}
                 onChange={(event) => setDraft({ ...draft, opening: event.target.value })}
               />
+              <small className="field-hint">
+                {isCard
+                  ? "What you owed on this card before your first transaction here. Change it to match your statement."
+                  : "The balance before your first transaction here. Change it if the app doesn't match your bank."}
+              </small>
             </label>
             {isCard && (
-              <label className="control-field">
-                <span className="control-label">Credit limit</span>
-                <input
-                  inputMode="decimal"
-                  value={draft.limit}
-                  onChange={(event) => setDraft({ ...draft, limit: event.target.value })}
-                />
-              </label>
+              <>
+                <label>
+                  Credit limit
+                  <input
+                    inputMode="decimal"
+                    value={draft.limit}
+                    onChange={(event) => setDraft({ ...draft, limit: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Payment due day
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={31}
+                    value={draft.dueDay}
+                    onChange={(event) => setDraft({ ...draft, dueDay: event.target.value })}
+                    placeholder="18"
+                  />
+                  <small className="field-hint">
+                    The day the bill is due each month. Leave it blank for no reminder.
+                  </small>
+                </label>
+              </>
             )}
-            <p className="helper-text account-edit-hint">
-              {isCard
-                ? "What you owed on this card before your first transaction here. Change it to match your statement."
-                : "The balance before your first transaction here. Change it if the app doesn't match your bank."}
-            </p>
-            <div className="account-actions">
-              <button type="submit" className="primary-action" disabled={saving}>
-                {saving ? "Saving..." : "Save"}
-              </button>
-              <button type="button" className="secondary-action" onClick={() => setEditing(false)}>
+            <div className="loan-form-actions">
+              <button type="button" className="secondary-action" onClick={() => setEditing(false)} disabled={saving}>
                 Cancel
+              </button>
+              <button type="submit" className="primary-action" disabled={saving}>
+                <Check size={16} />
+                {saving ? "Saving..." : "Save"}
               </button>
             </div>
           </form>
@@ -7398,6 +7424,20 @@ function isSelfTransfer(transaction: Transaction) {
  * One segment per credit card that owes money: the amount outstanding, carrying the card's limit so
  * the bar view can draw it as utilisation rather than against the biggest card.
  */
+/** One segment per investment type that holds something: all stocks together, all funds together. */
+function investmentTypeSegments(investments: Investment[]): DonutSegment[] {
+  return INVESTMENT_TYPES.map((type) => ({
+    id: type.id,
+    name: type.label,
+    color: type.color,
+    amountPaise: investments
+      .filter((item) => item.type === type.id)
+      .reduce((sum, item) => sum + item.currentValuePaise, 0)
+  }))
+    .filter((segment) => segment.amountPaise > 0)
+    .sort((a, b) => b.amountPaise - a.amountPaise);
+}
+
 function cardUtilisationSegments(accounts: Account[]): DonutSegment[] {
   const palette = ["#3a55b4", "#b45309", "#0f766e", "#9333ea", "#be123c", "#15803d"];
   return accounts

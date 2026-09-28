@@ -2271,62 +2271,13 @@ button.mix-bar-head:hover > span {
   box-shadow: inset 0 0 0 1px var(--line);
 }
 
-/* ---------- A section's add form, folded away under its list ---------- */
-.section-stack {
-  display: grid;
-  gap: var(--space-5);
-  min-width: 0;
-}
-
-.section-form-disclosure {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--panel);
-}
-
-.section-form-disclosure > summary {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 52px;
-  padding: 0 20px;
-  font-size: 1.02rem;
-  font-weight: 640;
-  letter-spacing: -0.015em;
-  list-style: none;
-  cursor: pointer;
-}
-
-.section-form-disclosure > summary::-webkit-details-marker {
-  display: none;
-}
-
-.section-form-disclosure > summary::after {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-right: 1.6px solid var(--muted);
-  border-bottom: 1.6px solid var(--muted);
-  transform: translateY(-2px) rotate(45deg);
-  transition: transform var(--dur) var(--ease-spring);
-}
-
-.section-form-disclosure[open] > summary::after {
-  transform: translateY(1px) rotate(-135deg);
-}
-
-.section-form-body {
-  border-top: 1px solid var(--line);
-  padding: var(--space-5) 20px var(--space-6);
-  animation: reveal 360ms var(--ease-out) backwards;
-}
-
-/* ---------- Weekly Entry: the action sits under the middle of its form ---------- */
-.entry-form .add-button {
-  grid-column: 1 / -1;
-  justify-self: center;
-  min-width: 220px;
-  margin-top: 4px;
+/* ---------- The scope picker that sits in a chart panel's header ---------- */
+.chart-scope select {
+  min-height: 38px;
+  border-radius: 999px;
+  padding: 0 34px 0 14px;
+  font-size: 0.86rem;
+  font-weight: 560;
 }
 
 /* ---------- Budget planner: what this category actually cost last month ---------- */
@@ -2377,10 +2328,53 @@ button.mix-bar-head:hover > span {
   cursor: default;
 }
 
+/* ---------- Weekly Entry: the action sits under the middle of its form ---------- */
+.entry-form .add-button {
+  grid-column: 1 / -1;
+  justify-self: center;
+  min-width: 220px;
+  margin-top: 4px;
+}
+
 @media (max-width: 720px) {
   /* A phone has no room for a centred island: the action takes the full width. */
   .entry-form .add-button {
     width: 100%;
     min-width: 0;
   }
+}
+
+/* ---------- Budget add row: two fields and a button on one line ---------- */
+/* Scoped above phone width so the base stylesheet keeps its own stacked phone layout. */
+@media (min-width: 721px) {
+  /* Three tracks, not four: the button hugs its label instead of stretching a spare column. */
+  .budget-add-form {
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto;
+    align-items: end;
+  }
+}
+
+.budget-add-note {
+  grid-column: 1 / -1;
+  margin-top: -4px;
+}
+
+/* ---------- The account editor reads like the loan and AutoPay editors ---------- */
+/* One column of labelled fields: the old three-across grid squeezed every input. */
+.account-edit-form.stack-form {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.account-edit-form.stack-form .loan-form-actions {
+  justify-content: flex-end;
+}
+
+/* The add/edit panel is a narrow column, so these paired fields need a lower threshold to sit side
+   by side. Without it the loan form runs past a laptop screen and the due day hides. Only the loan
+   form opts in: a date input cannot shrink this far, as the vacation form showed. */
+.form-pair-tight {
+  grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+  gap: 10px;
 }
