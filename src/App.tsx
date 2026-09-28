@@ -108,6 +108,8 @@ type DonutSegment = {
   color: string;
   amountPaise: number;
   labelShare?: number;
+  /** A ceiling this figure is measured against, such as a credit card's limit. */
+  maxPaise?: number;
 };
 type NoticeAction = { label: string; onClick: () => void };
 type NoticeOptions = { action?: NoticeAction; durationMs?: number };
@@ -554,7 +556,6 @@ export default function App() {
             <OverviewPage
               selectedAccountId={selectedAccountId}
               selectedAccount={selectedAccount}
-              cardAlertPercent={cardAlertPercent}
               refreshKey={refreshKey}
               onNavigate={navigate}
             />
@@ -659,6 +660,7 @@ export default function App() {
           {activePage === "profile" && (
             <ProfilePage
               profile={profileDraft}
+              savedProfile={bootstrap.profile}
               settings={bootstrap.settings}
               backupStatus={backupStatus}
               theme={theme}
@@ -817,13 +819,11 @@ function SetupPage({
 function OverviewPage({
   selectedAccountId,
   selectedAccount,
-  cardAlertPercent,
   refreshKey,
   onNavigate
 }: {
   selectedAccountId: string;
   selectedAccount?: Account;
-  cardAlertPercent: number;
   refreshKey: number;
   onNavigate: Navigate;
 }) {
@@ -919,6 +919,8 @@ function OverviewPage({
     }))
   );
   const allocationTotal = wealth ? wealth.allocation.reduce((sum, segment) => sum + segment.valuePaise, 0) : 0;
+  const cardSegments = cardUtilisationSegments(overview.accounts);
+  const cardOutstandingPaise = cardSegments.reduce((sum, segment) => sum + segment.amountPaise, 0);
   return (
     <div className="page-grid overview-page">
       {overview.summary.uncategorizedCount > 0 && (
@@ -1065,12 +1067,16 @@ function OverviewPage({
             )}
           </Panel>
         </div>
-        <Panel title="Account snapshot" action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
-          <div className="account-stack">
-            {overview.accounts.map((account) => (
-              <OverviewAccountLine key={account.id} account={account} alertPercent={cardAlertPercent} />
-            ))}
-          </div>
+        <Panel title="Card utilisation" action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
+          <MixChart
+            segments={cardSegments}
+            totalPaise={cardOutstandingPaise}
+            ariaLabel="Credit card utilisation"
+            centerLabel="Card debt"
+            centerValue={formatINRWhole(cardOutstandingPaise)}
+            className="overview-donut-chart"
+            emptyText="No credit card owes anything right now."
+          />
         </Panel>
       </OverviewBand>
     </div>
@@ -3593,6 +3599,10 @@ function BudgetPlannerPage({
   const [editAmount, setEditAmount] = useState("");
 
   // Budgets are planned per Expense SubType only (no whole-Type budgets).
+  const selectedScope = useMemo(
+    () => (plan?.availableScopes ?? []).find((scope) => budgetScopeKey(scope) === subKey) ?? null,
+    [plan, subKey]
+  );
   const subScopes = useMemo(
     () =>
       (plan?.availableScopes ?? []).filter(
@@ -3764,6 +3774,24 @@ function BudgetPlannerPage({
                   onChange={(event) => setAmount(event.target.value)}
                   placeholder="25000"
                 />
+                {selectedScope && (
+                  <small className="budget-last-month">
+                    {selectedScope.previousActualPaise > 0 ? (
+                      <>
+                        {formatMonth(plan.previousMonth)}: <strong>{formatINR(selectedScope.previousActualPaise)}</strong>
+                        <button
+                          type="button"
+                          className="text-action"
+                          onClick={() => setAmount(String(Math.round(selectedScope.previousActualPaise / 100)))}
+                        >
+                          Use this
+                        </button>
+                      </>
+                    ) : (
+                      <>Nothing spent here in {formatMonth(plan.previousMonth)}</>
+                    )}
+                  </small>
+                )}
               </label>
               <button className="primary-action" type="submit" disabled={saving || !subScopes.length}>
                 <Plus size={17} />
@@ -3859,6 +3887,25 @@ function BudgetLineCard({
         </div>
       </div>
 
+      <p className="budget-last-month">
+        {line.previousActualPaise > 0 ? (
+          <>
+            Last month: <strong>{formatINR(line.previousActualPaise)}</strong>
+            {line.amountPaise > 0 && (
+              <span className={gainToneClass(line.previousActualPaise - line.amountPaise)}>
+                {line.amountPaise > line.previousActualPaise
+                  ? ` (planning ${formatINR(line.amountPaise - line.previousActualPaise)} more)`
+                  : line.amountPaise < line.previousActualPaise
+                    ? ` (planning ${formatINR(line.previousActualPaise - line.amountPaise)} less)`
+                    : " (same as planned)"}
+              </span>
+            )}
+          </>
+        ) : (
+          <>Nothing spent here last month</>
+        )}
+      </p>
+
       <div className="budget-progress">
         <div>
           <span>{line.usedPercent}% used</span>
@@ -3943,6 +3990,8 @@ function AccountsPage({
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
   const activeAccounts = accounts.filter((account) => !account.isArchived);
+  const cardSegments = cardUtilisationSegments(activeAccounts);
+  const cardOutstandingPaise = cardSegments.reduce((sum, segment) => sum + segment.amountPaise, 0);
 
   async function remove(account: Account) {
     requestConfirm({
@@ -3988,6 +4037,18 @@ function AccountsPage({
           Deleting an unused account removes it permanently. Accounts with linked transactions are hidden so reports keep their history.
         </p>
       </Panel>
+      <Panel title="Card utilisation">
+        <MixChart
+          segments={cardSegments}
+          totalPaise={cardOutstandingPaise}
+          ariaLabel="Credit card utilisation"
+          centerLabel="Card debt"
+          centerValue={formatINRWhole(cardOutstandingPaise)}
+          className="overview-donut-chart"
+          emptyText="No credit card owes anything right now."
+        />
+      </Panel>
+
       <Panel title="Add account">
         <AccountForm
           onCreated={async () => {
@@ -4043,6 +4104,23 @@ function LoansPage({
     });
   }
 
+  const [addOpen, setAddOpen] = useState(false);
+  // Biggest first, so the ring and the bars read in the same order.
+  const loanSegments = activeLoans
+    .filter((loan) => loan.outstandingPaise > 0)
+    .map((loan) => ({
+      id: loan.id,
+      name: loan.name,
+      color: loan.subcategoryColor,
+      amountPaise: loan.outstandingPaise
+    }))
+    .sort((a, b) => b.amountPaise - a.amountPaise);
+
+  // Editing a loan reuses the same form, so open the drawer when one is picked.
+  useEffect(() => {
+    if (editingLoan) setAddOpen(true);
+  }, [editingLoan]);
+
   async function restore(loan: Loan) {
     try {
       await Api.updateLoan(loan.id, { isArchived: false });
@@ -4070,7 +4148,7 @@ function LoansPage({
         />
       </section>
 
-      <div className="two-column loans-layout">
+      <div className="section-stack">
         <Panel title="Loan tracker">
           {activeLoans.length === 0 ? (
             <EmptyState text="No active loans yet." />
@@ -4104,7 +4182,25 @@ function LoansPage({
           )}
         </Panel>
 
-        <Panel title={editingLoan ? "Edit loan" : "Add loan"}>
+        <Panel title="Outstanding by loan">
+          <MixChart
+            segments={loanSegments}
+            totalPaise={activeOutstanding}
+            ariaLabel="Outstanding by loan"
+            centerLabel="Outstanding"
+            centerValue={formatINRWhole(activeOutstanding)}
+            className="overview-donut-chart"
+            emptyText="Nothing outstanding yet. Add a loan to see the split."
+          />
+        </Panel>
+
+        <details
+          className="section-form-disclosure"
+          open={addOpen}
+          onToggle={(event) => setAddOpen(event.currentTarget.open)}
+        >
+          <summary>{editingLoan ? "Edit loan" : "Add loan"}</summary>
+          <div className="section-form-body">
           {loanType ? (
             <LoanForm
               key={editingLoan?.id ?? "new-loan"}
@@ -4120,7 +4216,8 @@ function LoansPage({
           ) : (
             <EmptyState text="Loan Type is missing. Add a Type with Loan behavior in Categories first." />
           )}
-        </Panel>
+          </div>
+        </details>
       </div>
     </div>
   );
@@ -4147,6 +4244,7 @@ function LoanForm({
   const [interestRate, setInterestRate] = useState(loan ? rateInputFromBps(loan.annualInterestRateBps) : "");
   const [tenureMonths, setTenureMonths] = useState(loan ? String(loan.tenureMonths) : "");
   const [monthlyEmi, setMonthlyEmi] = useState(loan ? amountInputFromPaise(loan.monthlyEmiPaise) : "");
+  const [emiDueDay, setEmiDueDay] = useState(loan?.emiDueDay ? String(loan.emiDueDay) : "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   // Your bank's EMI is the source of truth; this is the textbook figure for the terms entered.
@@ -4190,7 +4288,9 @@ function LoanForm({
         startMonth,
         annualInterestRateBps: parseRateToBps(interestRate),
         tenureMonths: Number.parseInt(tenureMonths, 10),
-        monthlyEmiPaise: parseAmountToPaise(monthlyEmi)
+        monthlyEmiPaise: parseAmountToPaise(monthlyEmi),
+        // Left blank means no reminder; clearing it on an existing loan turns the reminder off.
+        emiDueDay: emiDueDay.trim() ? Number.parseInt(emiDueDay, 10) : null
       };
 
       if (loan) {
@@ -4207,6 +4307,7 @@ function LoanForm({
         setInterestRate("");
         setTenureMonths("");
         setMonthlyEmi("");
+        setEmiDueDay("");
         await onSaved("Loan added.");
       }
     } catch (err) {
@@ -4281,6 +4382,21 @@ function LoanForm({
             )}
           </span>
         )}
+      </label>
+      <label>
+        EMI due day (optional)
+        <input
+          value={emiDueDay}
+          onChange={(event) => setEmiDueDay(event.target.value)}
+          placeholder="5"
+          inputMode="numeric"
+          min={1}
+          max={31}
+          type="number"
+        />
+        <small className="field-hint">
+          The day of the month the EMI leaves your account. Set it and the Overview reminds you before it is due.
+        </small>
       </label>
       {error && <p className="form-error">{error}</p>}
       <div className="loan-form-actions">
@@ -4432,6 +4548,7 @@ function InvestmentsPage({
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
   const [editing, setEditing] = useState<Investment | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
   const totalInvested = investments.reduce((sum, item) => sum + item.investedPaise, 0);
   const totalCurrent = investments.reduce((sum, item) => sum + item.currentValuePaise, 0);
   const totalGain = totalCurrent - totalInvested;
@@ -4444,6 +4561,21 @@ function InvestmentsPage({
     (latest, item) => (item.updatedAt > latest ? item.updatedAt : latest),
     ""
   );
+
+  const holdingSegments = investments
+    .filter((item) => item.currentValuePaise > 0)
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      color: item.color,
+      amountPaise: item.currentValuePaise
+    }))
+    .sort((a, b) => b.amountPaise - a.amountPaise);
+
+  // Editing reuses the add form, so open the drawer when a holding is picked.
+  useEffect(() => {
+    if (editing) setAddOpen(true);
+  }, [editing]);
 
   function remove(investment: Investment) {
     requestConfirm({
@@ -4473,13 +4605,13 @@ function InvestmentsPage({
           label="Total gain"
           value={signedImpact(totalGain)}
           icon={<TrendingUp />}
-          tone={totalGain >= 0 ? "good" : "warning"}
+          valueClassName={gainToneClass(totalGain)}
         />
         <SummaryCard
           label="Return"
-          value={`${returnPercent >= 0 ? "+" : ""}${returnPercent}%`}
+          value={`${returnPercent > 0 ? "+" : ""}${returnPercent}%`}
           icon={<ArrowDownUp />}
-          tone={totalGain >= 0 ? "good" : "warning"}
+          valueClassName={gainToneClass(totalGain)}
         />
       </section>
 
@@ -4492,10 +4624,10 @@ function InvestmentsPage({
         </p>
       )}
 
-      <div className="two-column loans-layout">
+      <div className="section-stack">
         <Panel title="Portfolio">
           {groups.length === 0 ? (
-            <EmptyState text="No investments yet. Add your first holding on the right." />
+            <EmptyState text="No investments yet. Add your first holding below." />
           ) : (
             <div className="investment-groups">
               {groups.map((group) => (
@@ -4511,18 +4643,37 @@ function InvestmentsPage({
           )}
         </Panel>
 
-        <Panel title={editing ? "Edit investment" : "Add investment"}>
-          <InvestmentForm
-            key={editing?.id ?? "new-investment"}
-            investment={editing}
-            onCancel={editing ? () => setEditing(null) : undefined}
-            onSaved={async (message) => {
-              setEditing(null);
-              await refresh();
-              showNotice(message);
-            }}
+        <Panel title="Current value by holding">
+          <MixChart
+            segments={holdingSegments}
+            totalPaise={totalCurrent}
+            ariaLabel="Current value by holding"
+            centerLabel="Portfolio"
+            centerValue={formatINRWhole(totalCurrent)}
+            className="overview-donut-chart"
+            emptyText="Add a holding to see how your portfolio is split."
           />
         </Panel>
+
+        <details
+          className="section-form-disclosure"
+          open={addOpen}
+          onToggle={(event) => setAddOpen(event.currentTarget.open)}
+        >
+          <summary>{editing ? "Edit investment" : "Add investment"}</summary>
+          <div className="section-form-body">
+            <InvestmentForm
+              key={editing?.id ?? "new-investment"}
+              investment={editing}
+              onCancel={editing ? () => setEditing(null) : undefined}
+              onSaved={async (message) => {
+                setEditing(null);
+                await refresh();
+                showNotice(message);
+              }}
+            />
+          </div>
+        </details>
       </div>
     </div>
   );
@@ -4537,7 +4688,8 @@ function InvestmentCard({
   onEdit: (investment: Investment) => void;
   onDelete: (investment: Investment) => void;
 }) {
-  const positive = investment.gainPaise >= 0;
+  const tone = gainToneClass(investment.gainPaise);
+  const positive = investment.gainPaise > 0;
   return (
     <article className="loan-card investment-card">
       <div className="loan-card-header">
@@ -4555,7 +4707,7 @@ function InvestmentCard({
             </span>
           </div>
         </div>
-        <span className={`investment-gain-badge ${positive ? "up" : "down"}`}>
+        <span className={`investment-gain-badge ${tone}`}>
           {positive ? "+" : ""}
           {investment.gainPercent}%
         </span>
@@ -4572,7 +4724,7 @@ function InvestmentCard({
         </div>
         <div>
           <span>Gain / loss</span>
-          <strong className={positive ? "amount-in" : "amount-out"}>{signedImpact(investment.gainPaise)}</strong>
+          <strong className={tone}>{signedImpact(investment.gainPaise)}</strong>
         </div>
       </div>
 
@@ -4621,7 +4773,8 @@ function InvestmentGroup({
   const current = items.reduce((sum, item) => sum + item.currentValuePaise, 0);
   const gain = current - invested;
   const gainPercent = invested > 0 ? Math.round((gain / invested) * 100) : 0;
-  const positive = gain >= 0;
+  const tone = gainToneClass(gain);
+  const positive = gain > 0;
 
   return (
     <div className={`investment-group ${expanded ? "expanded" : ""}`}>
@@ -4646,9 +4799,9 @@ function InvestmentGroup({
             <strong>{formatINR(current)}</strong>
           </div>
           <div>
-            <span>Net {positive ? "gain" : "loss"}</span>
-            <strong className={positive ? "amount-in" : "amount-out"}>
-              {signedImpact(gain)} ({gainPercent >= 0 ? "+" : ""}
+            <span>Net {gain < 0 ? "loss" : "gain"}</span>
+            <strong className={tone}>
+              {signedImpact(gain)} ({gainPercent > 0 ? "+" : ""}
               {gainPercent}%)
             </strong>
           </div>
@@ -5611,6 +5764,7 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
   const [name, setName] = useState("");
   const [starting, setStarting] = useState("");
   const [limit, setLimit] = useState("");
+  const [dueDay, setDueDay] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -5624,11 +5778,13 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
         name,
         type,
         startingBalancePaise: parseAmountToPaise(starting),
-        creditLimitPaise: type === "credit_card" ? parseAmountToPaise(limit) : undefined
+        creditLimitPaise: type === "credit_card" ? parseAmountToPaise(limit) : undefined,
+        paymentDueDay: type === "credit_card" && dueDay.trim() ? Number.parseInt(dueDay, 10) : null
       });
       setName("");
       setStarting("");
       setLimit("");
+      setDueDay("");
       await onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add account.");
@@ -5656,10 +5812,27 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
         <input value={starting} onChange={(event) => setStarting(event.target.value)} placeholder="₹0" inputMode="decimal" />
       </label>
       {type === "credit_card" && (
-        <label>
-          Credit limit
-          <input value={limit} onChange={(event) => setLimit(event.target.value)} placeholder="₹1,50,000" inputMode="decimal" required />
-        </label>
+        <>
+          <label>
+            Credit limit
+            <input value={limit} onChange={(event) => setLimit(event.target.value)} placeholder="₹1,50,000" inputMode="decimal" required />
+          </label>
+          <label>
+            Payment due day (optional)
+            <input
+              value={dueDay}
+              onChange={(event) => setDueDay(event.target.value)}
+              placeholder="18"
+              inputMode="numeric"
+              min={1}
+              max={31}
+              type="number"
+            />
+            <small className="field-hint">
+              The day the bill is due each month. Set it and the Overview reminds you while the card still owes money.
+            </small>
+          </label>
+        </>
       )}
       {error && <p className="form-error">{error}</p>}
       <button className="primary-action" disabled={saving}>
@@ -6072,6 +6245,104 @@ function DonutChart({
   );
 }
 
+/**
+ * One chart, two readings of the same figures: a ring for the split and bars for side-by-side
+ * comparison. A segment may carry its own `maxPaise` (a credit card's limit), and the bar view then
+ * draws it against that instead of against the biggest segment.
+ */
+function MixChart({
+  segments,
+  totalPaise,
+  ariaLabel,
+  centerLabel,
+  centerValue,
+  className = "",
+  emptyText,
+  onSegmentClick
+}: {
+  segments: DonutSegment[];
+  totalPaise: number;
+  ariaLabel: string;
+  centerLabel: string;
+  centerValue: string;
+  className?: string;
+  emptyText: string;
+  onSegmentClick?: (segment: DonutSegment) => void;
+}) {
+  const [mode, setMode] = useState<"pie" | "bar">("pie");
+
+  if (segments.length === 0 || totalPaise <= 0) {
+    return <EmptyState text={emptyText} />;
+  }
+
+  const largest = segments.reduce((max, segment) => Math.max(max, segment.amountPaise), 0);
+  return (
+    <div className="mix-chart">
+      <div className="mix-switch" role="group" aria-label={`${ariaLabel} view`}>
+        {(["pie", "bar"] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            aria-pressed={mode === option}
+            onClick={() => setMode(option)}
+          >
+            {option === "pie" ? "Pie" : "Bar"}
+          </button>
+        ))}
+      </div>
+      {mode === "pie" ? (
+        <DonutChart
+          segments={segments}
+          totalPaise={totalPaise}
+          ariaLabel={ariaLabel}
+          centerLabel={centerLabel}
+          centerValue={centerValue}
+          className={className}
+          onSegmentClick={onSegmentClick}
+        />
+      ) : (
+        <ul className="mix-bars" aria-label={ariaLabel}>
+          {segments.map((segment) => {
+            const ceiling = segment.maxPaise ?? largest;
+            const share = ceiling > 0 ? Math.min((segment.amountPaise / ceiling) * 100, 100) : 0;
+            const drillable = Boolean(onSegmentClick) && isDrillableId(segment.id);
+            const head = (
+              <>
+                <span>{segment.name}</span>
+                <strong>{formatINR(segment.amountPaise)}</strong>
+              </>
+            );
+            return (
+              <li className="mix-bar-row" key={segment.id}>
+                {drillable ? (
+                  <button
+                    type="button"
+                    className="mix-bar-head"
+                    aria-label={`Show ${segment.name}`}
+                    onClick={() => onSegmentClick?.(segment)}
+                  >
+                    {head}
+                  </button>
+                ) : (
+                  <div className="mix-bar-head">{head}</div>
+                )}
+                <div className="mix-bar-track">
+                  <span className="mix-bar-fill" style={{ width: `${share}%`, background: segment.color }} />
+                </div>
+                <small className="mix-bar-note">
+                  {segment.maxPaise
+                    ? `${formatShare(share)} of ${formatINR(segment.maxPaise)}`
+                    : formatShare((segment.amountPaise / totalPaise) * 100)}
+                </small>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function consolidateDonutSegments(segments: DonutSegment[], maxSegments = 8): DonutSegment[] {
   const sorted = [...segments].sort((a, b) => b.amountPaise - a.amountPaise);
   if (sorted.length <= maxSegments) return sorted;
@@ -6205,40 +6476,6 @@ function categoryFromTransaction(transaction: Transaction): Category {
     isLocked: false,
     sortOrder: 0
   };
-}
-
-function OverviewAccountLine({ account, alertPercent }: { account: Account; alertPercent: number }) {
-  const isCard = account.type === "credit_card";
-  const limit = account.creditLimitPaise ?? 0;
-  const usage = isCard && limit > 0 ? Math.min(Math.max(Math.round((account.outstandingPaise / limit) * 100), 0), 100) : 0;
-  const highUsage = isCard && usage > alertPercent;
-
-  return (
-    <div className="account-line overview-account-line">
-      <div className="account-leading">
-        <span className={`account-icon ${accountIconTone(account.type)}`}>
-          {accountIconForType(account.type, 21)}
-        </span>
-        <div>
-          <strong>{account.name}</strong>
-          <span>{accountTypeLabel(account.type)}</span>
-        </div>
-      </div>
-      <div className="account-values">
-        {isCard ? (
-          <>
-            <strong className={highUsage ? "utilization-danger" : ""}>{usage}%</strong>
-            <span>Utilized</span>
-          </>
-        ) : (
-          <>
-            <strong>{formatINR(account.balancePaise)}</strong>
-            <span>Balance</span>
-          </>
-        )}
-      </div>
-    </div>
-  );
 }
 
 const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
@@ -6391,6 +6628,7 @@ function AccountImpactCard({ account, transactions }: { account: Account; transa
 
 function ProfilePage({
   profile,
+  savedProfile,
   settings,
   backupStatus,
   theme,
@@ -6402,19 +6640,26 @@ function ProfilePage({
   onThemeToggle
 }: {
   profile: UserProfile;
+  savedProfile: UserProfile;
   settings: Record<string, string>;
   backupStatus: BackupStatus | null;
   theme: Theme;
   saving: boolean;
   cardAlertPercent: number;
   onProfileChange: (profile: UserProfile) => void;
-  onSaveProfile: () => void;
+  onSaveProfile: () => Promise<void> | void;
   onSaveCardAlert: (percent: number) => Promise<void> | void;
   onThemeToggle: () => void;
 }) {
   const displayName = profile.name || "Your profile";
   const displayEmail = profile.email || "Local profile";
+  const [editing, setEditing] = useState(false);
   const [cardAlertDraft, setCardAlertDraft] = useState(String(cardAlertPercent));
+  // Only a real difference counts as unsaved: opening the editor changes nothing by itself.
+  const profileDirty =
+    profile.name !== savedProfile.name ||
+    profile.email !== savedProfile.email ||
+    profile.age !== savedProfile.age;
 
   useEffect(() => {
     setCardAlertDraft(String(cardAlertPercent));
@@ -6450,6 +6695,7 @@ function ProfilePage({
               value={profile.name}
               onChange={(event) => onProfileChange({ ...profile, name: event.target.value })}
               placeholder="Add your name"
+              readOnly={!editing}
             />
           </label>
           <label>
@@ -6458,6 +6704,7 @@ function ProfilePage({
               value={profile.email}
               onChange={(event) => onProfileChange({ ...profile, email: event.target.value })}
               placeholder="name@example.com"
+              readOnly={!editing}
             />
           </label>
           <label>
@@ -6467,17 +6714,47 @@ function ProfilePage({
               inputMode="numeric"
               onChange={(event) => onProfileChange({ ...profile, age: event.target.value })}
               placeholder="Add age"
+              readOnly={!editing}
             />
           </label>
-          <button
-            className={`profile-save-button ${profileCanSave ? "" : "blurred"}`}
-            onClick={onSaveProfile}
-            disabled={saving || !profileCanSave}
-            title={profileCanSave ? "Save profile" : "Enter a valid name, email, and age"}
-          >
-            <Check size={16} />
-            {saving ? "Saving..." : "Save profile"}
-          </button>
+          {editing ? (
+            <div className="profile-edit-actions">
+              <button
+                className={`profile-save-button ${profileCanSave ? "" : "blurred"} ${profileDirty ? "is-dirty" : ""}`}
+                onClick={async () => {
+                  await onSaveProfile();
+                  setEditing(false);
+                }}
+                disabled={saving || !profileCanSave || !profileDirty}
+                title={
+                  !profileDirty
+                    ? "Nothing to save yet"
+                    : profileCanSave
+                      ? "Save profile"
+                      : "Enter a valid name, email, and age"
+                }
+              >
+                <Check size={16} />
+                {saving ? "Saving..." : profileDirty ? "Save changes" : "Save profile"}
+              </button>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => {
+                  onProfileChange(savedProfile);
+                  setEditing(false);
+                }}
+                disabled={saving}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button type="button" className="secondary-action profile-edit-button" onClick={() => setEditing(true)}>
+              <Pencil size={16} />
+              Edit
+            </button>
+          )}
         </div>
 
         <div className="profile-settings" aria-label="Settings">
@@ -6700,7 +6977,8 @@ function SummaryCard({
   icon,
   tone = "neutral",
   note,
-  countPaise
+  countPaise,
+  valueClassName
 }: {
   label: string;
   value: string;
@@ -6709,13 +6987,17 @@ function SummaryCard({
   note?: React.ReactNode;
   /** When given, the figure counts up to this amount (the formatted `value` stays the accessible text). */
   countPaise?: number;
+  /** Colours the figure itself, for cards whose meaning follows the sign of the number. */
+  valueClassName?: string;
 }) {
   return (
     <div className={`summary-card ${tone}`}>
       <span>{icon}</span>
       <div>
         <p>{label}</p>
-        <strong>{countPaise === undefined ? value : <CountUp paise={countPaise} label={value} />}</strong>
+        <strong className={valueClassName}>
+          {countPaise === undefined ? value : <CountUp paise={countPaise} label={value} />}
+        </strong>
         {note}
       </div>
     </div>
@@ -6774,7 +7056,7 @@ function UpcomingPaymentsList({
     return <PanelLoader label="Checking what's due" />;
   }
   if (upcoming.items.length === 0) {
-    return <EmptyState text="Nothing due soon. AutoPay renewals and loan EMIs appear here before they're charged." />;
+    return <EmptyState text="Nothing due soon. AutoPay renewals, loan EMIs and card bills appear here before they're charged." />;
   }
   const dueLabel = (daysAway: number, dueDate: string) =>
     daysAway === 0
@@ -6786,11 +7068,14 @@ function UpcomingPaymentsList({
     <div className="upcoming-list">
       {upcoming.items.map((item) => (
         <div className={`upcoming-row${item.daysAway <= 2 ? " soon" : ""}`} key={`${item.kind}-${item.id}`}>
-          <span className="upcoming-icon">{item.kind === "loan" ? <Landmark size={16} /> : <CalendarClock size={16} />}</span>
+          <span className="upcoming-icon">
+            {item.kind === "loan" ? <Landmark size={16} /> : item.kind === "card" ? <CreditCard size={16} /> : <CalendarClock size={16} />}
+          </span>
           <div className="upcoming-main">
             <strong>{item.name}</strong>
             <small>
-              {item.kind === "loan" ? "Loan EMI" : "AutoPay"} · {dueLabel(item.daysAway, item.dueDate)}
+              {item.kind === "loan" ? "Loan EMI" : item.kind === "card" ? "Card bill" : "AutoPay"} ·{" "}
+              {dueLabel(item.daysAway, item.dueDate)}
             </small>
           </div>
           <strong className="amount-out">{formatINR(item.amountPaise)}</strong>
@@ -7106,6 +7391,31 @@ function selfTransferTargetAccounts(accounts: Account[], sourceAccountId: string
 
 function isSelfTransfer(transaction: Transaction) {
   return transaction.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID && Boolean(transaction.transferAccountId);
+}
+
+/** Up is good, down is danger, exactly unchanged is ordinary text (white would vanish in light mode). */
+/**
+ * One segment per credit card that owes money: the amount outstanding, carrying the card's limit so
+ * the bar view can draw it as utilisation rather than against the biggest card.
+ */
+function cardUtilisationSegments(accounts: Account[]): DonutSegment[] {
+  const palette = ["#3a55b4", "#b45309", "#0f766e", "#9333ea", "#be123c", "#15803d"];
+  return accounts
+    .filter((account) => account.type === "credit_card" && account.outstandingPaise > 0)
+    .sort((a, b) => b.outstandingPaise - a.outstandingPaise)
+    .map((account, index) => ({
+      id: account.id,
+      name: account.name,
+      color: palette[index % palette.length],
+      amountPaise: account.outstandingPaise,
+      maxPaise: account.creditLimitPaise ?? undefined
+    }));
+}
+
+function gainToneClass(paise: number) {
+  if (paise > 0) return "amount-in";
+  if (paise < 0) return "amount-out";
+  return "amount-flat";
 }
 
 function signedImpact(paise: number) {

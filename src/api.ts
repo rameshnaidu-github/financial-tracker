@@ -76,10 +76,17 @@ export const Api = {
     type: "bank" | "credit_card" | "food_card";
     startingBalancePaise: number;
     creditLimitPaise?: number;
+    paymentDueDay?: number | null;
   }) => api<Account>("/api/accounts", { method: "POST", body }),
   updateAccount: (
     id: string,
-    body: { name?: string; startingBalancePaise?: number; creditLimitPaise?: number; isArchived?: boolean }
+    body: {
+      name?: string;
+      startingBalancePaise?: number;
+      creditLimitPaise?: number;
+      paymentDueDay?: number | null;
+      isArchived?: boolean;
+    }
   ) =>
     api<Account>(`/api/accounts/${id}`, { method: "PATCH", body }),
   deleteAccount: (id: string) =>
@@ -102,6 +109,7 @@ export const Api = {
     annualInterestRateBps: number;
     tenureMonths: number;
     monthlyEmiPaise: number;
+    emiDueDay?: number | null;
   }) => api<Loan>("/api/loans", { method: "POST", body }),
   updateLoan: (id: string, body: Partial<{
     name: string;
@@ -112,6 +120,7 @@ export const Api = {
     annualInterestRateBps: number;
     tenureMonths: number;
     monthlyEmiPaise: number;
+    emiDueDay: number | null;
     isArchived: boolean;
   }>) => api<Loan>(`/api/loans/${id}`, { method: "PATCH", body }),
   archiveLoan: (id: string) =>
