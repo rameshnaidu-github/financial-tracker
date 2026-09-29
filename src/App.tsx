@@ -3206,6 +3206,9 @@ function ReportsPage({
                   ? `${new Date().getFullYear()}, January to date`
                   : "by year"}
             </p>
+            {/* Budget vs actual carries a legend here; this holds the same row open so the
+                two charts start on the same line. */}
+            <div className="trend-legend-slot" aria-hidden="true" />
             <TrendChart points={trend.points} variant={trendStyle} color={trend.color} />
           </>
         )}
@@ -3320,7 +3323,7 @@ function BudgetTrendChart({
   const withinColor = "#16a34a";
   const overColor = "#dc2626";
   const width = 760;
-  const height = 300;
+  const height = 360;
   const pad = { top: 30, right: 14, bottom: 32, left: 52 };
   const innerWidth = width - pad.left - pad.right;
   const innerHeight = height - pad.top - pad.bottom;
@@ -3483,7 +3486,7 @@ function TrendChart({
   color: string;
 }) {
   const width = 760;
-  const height = 300;
+  const height = 360;
   const pad = { top: 30, right: 14, bottom: 32, left: 14 };
   const innerWidth = width - pad.left - pad.right;
   const innerHeight = height - pad.top - pad.bottom;
@@ -6106,6 +6109,9 @@ function OutflowMixChart({
           <strong>{formatINR(outflowPaise)}</strong>
         </div>
       </div>
+      {/* Nothing to filter here, but the row stays open so this card lines up with the
+          SubType card next to it, whose chips live in the same row. */}
+      <div className="report-chart-controls" aria-hidden="true" />
       <div className="pie-panel">
         <div className="pie-chart">
           {outflowSegments.length === 0 || outflowPaise <= 0 ? (
@@ -6161,7 +6167,7 @@ function ReportTypeAnalytics({
           <strong>{selected.name}</strong>
         </div>
       </div>
-      <div className="type-filter-chips">
+      <div className="report-chart-controls type-filter-chips">
         {types.map((type) => (
           <button
             key={type.typeId}

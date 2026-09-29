@@ -1615,23 +1615,58 @@ a {
   font-weight: 600;
 }
 
+/* Two to a row, always: an odd control keeps its column rather than stretching across,
+   and both panels' control blocks end up the same height without being told to. */
 .trend-controls {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: stretch;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
+@media (max-width: 520px) {
+  .trend-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Compact: the label sits beside its value instead of above it, which halves the height
+   and gives the chart the room. Still a labelled native select, still a comfortable
+   target -- only the box around it got smaller. */
 .trend-controls .control-field {
-  min-height: 58px;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 6px 30px 6px 12px;
 }
 
+.trend-controls .control-label {
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.trend-controls .control-field select {
+  min-height: 20px;
+  text-align: right;
+  font-size: 0.86rem;
+}
+
+.trend-controls .control-field svg {
+  bottom: auto;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+}
+
+/* Wide enough for the longest value ("Month on month", "September 2026") and sized so a
+   row holds two, which keeps both panels' control blocks the same height. */
 .trend-mode-control,
 .trend-style-control,
 .trend-month-control,
 .trend-type-control {
-  min-width: 190px;
+  min-width: 0;
 }
 
 .trend-caption {
@@ -3442,20 +3477,53 @@ a {
 
 /* The outflow mix and the type breakdown read the same month, so they sit side by side
    on a wide window and fall back to one column when there is no room for both. */
+/* The outflow mix and the type breakdown read the same month, so they sit side by side
+   on a wide window and fall back to one column when there is no room for both.
+   The container owns three rows -- heading, controls, chart -- and each half inherits
+   them, so a row is as tall as the taller side and the two cards line up whatever each
+   one has to show. A browser without subgrid ignores it and simply stacks as before. */
 .report-chart-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto auto auto;
   gap: 18px;
   margin: 14px 0 0;
   align-items: start;
 }
 
-/* Trends against Budget vs actual, the same pairing one level up. */
+.report-chart-grid > .report-analytics {
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  gap: 16px;
+}
+
+.report-chart-controls {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+/* Trends against Budget vs actual, the same pairing one level up, sharing five rows:
+   heading, controls, caption, legend, chart. Only Budget vs actual has a legend, so
+   Trends holds that row open with an empty slot and the two charts start together. */
 .report-panel-pair {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
+  grid-template-rows: auto auto auto auto auto;
+  column-gap: 18px;
+  row-gap: 0;
   align-items: start;
+}
+
+.report-panel-pair > .panel {
+  display: grid;
+  grid-row: span 5;
+  grid-template-rows: subgrid;
+  align-content: start;
+}
+
+.trend-legend-slot {
+  min-height: 0;
 }
 
 /* Below this the two columns are narrower than a chart's own controls, so they stack.
@@ -3548,6 +3616,9 @@ a {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   justify-items: center;
+  /* Shared rows make both cards the height of the taller one, so spare space belongs at
+     the bottom. Centred, it would float the shorter card's donut out of line. */
+  align-content: start;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-soft);

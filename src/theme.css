@@ -1846,6 +1846,7 @@ body::after {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  align-content: flex-start;
   justify-content: center;
   gap: 20px 28px;
   width: 100%;
