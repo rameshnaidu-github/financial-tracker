@@ -1845,7 +1845,9 @@ body::after {
 .donut-figure.report-donut-chart {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  /* Top, not centre. Centred, a ring next to a long legend is pushed down by half the
+     difference, which walks it out of line with the ring in the card beside it. */
+  align-items: flex-start;
   align-content: flex-start;
   justify-content: center;
   gap: 20px 28px;
@@ -1858,17 +1860,22 @@ body::after {
   aspect-ratio: auto;
 }
 
+/* One size for every donut, so a pair of them can never drift apart. Bigger than it was:
+   at 188px the ring floated in the middle of a 500px card with the space around it doing
+   nothing. The ribbon moving into the heading pays for the extra height. */
 .donut-figure .donut-chart {
   flex: 0 0 auto;
-  width: 188px;
-  height: 188px;
+  width: 228px;
+  height: 228px;
   overflow: visible;
 }
 
 .donut-figure .donut-segment,
 .donut-figure .donut-track,
 .donut-figure .donut-empty {
-  stroke-width: 26;
+  /* Kept in proportion with the larger ring, so it reads as the same chart drawn bigger
+     rather than a fatter one. */
+  stroke-width: 24;
 }
 
 .donut-figure .donut-segment {
@@ -1890,6 +1897,13 @@ body::after {
   font-size: 19px;
   font-weight: 650;
   letter-spacing: -0.02em;
+}
+
+/* A 240px basis pushed the legend underneath the larger ring, which made the card taller
+   rather than fuller. A smaller basis keeps the two side by side; the legend still grows
+   into whatever the ring leaves, so on a wide card it is wider than its basis. */
+.report-donut-chart .donut-legend {
+  flex-basis: 180px;
 }
 
 .donut-legend {

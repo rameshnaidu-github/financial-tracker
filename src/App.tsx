@@ -6109,9 +6109,6 @@ function OutflowMixChart({
           <strong>{formatINR(outflowPaise)}</strong>
         </div>
       </div>
-      {/* Nothing to filter here, but the row stays open so this card lines up with the
-          SubType card next to it, whose chips live in the same row. */}
-      <div className="report-chart-controls" aria-hidden="true" />
       <div className="pie-panel">
         <div className="pie-chart">
           {outflowSegments.length === 0 || outflowPaise <= 0 ? (
@@ -6164,20 +6161,23 @@ function ReportTypeAnalytics({
       <div className="report-chart-header">
         <div>
           <span>SubType mix</span>
-          <strong>{selected.name}</strong>
+          {/* The chosen filter is already lit in the ribbon beside this, so repeating its
+              name here said nothing. Its total does. */}
+          <strong>{formatINR(selected.amountPaise)}</strong>
         </div>
-      </div>
-      <div className="report-chart-controls type-filter-chips">
-        {types.map((type) => (
-          <button
-            key={type.typeId}
-            className={selected.typeId === type.typeId ? "active" : ""}
-            onClick={() => onSelect(type.typeId)}
-            type="button"
-          >
-            <CategoryBadge category={typeToCategory(type)} compact />
-          </button>
-        ))}
+        <div className="type-filter-chips">
+          {types.map((type) => (
+            <button
+              key={type.typeId}
+              className={selected.typeId === type.typeId ? "active" : ""}
+              onClick={() => onSelect(type.typeId)}
+              type="button"
+              aria-pressed={selected.typeId === type.typeId}
+            >
+              <CategoryBadge category={typeToCategory(type)} compact />
+            </button>
+          ))}
+        </div>
       </div>
       <div className="pie-panel">
         <div className="pie-chart">
