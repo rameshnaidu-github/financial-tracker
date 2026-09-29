@@ -175,6 +175,7 @@ function withPageTransition(update: () => void) {
 
 const NAV_GROUPS: NavGroup[] = ["Daily", "Plan", "Own & owe", "Setup"];
 const THEME_KEY = "finance-theme";
+const INTRO_ON_LAUNCH_KEY = "finance-intro-on-launch";
 
 function storedTheme(): Theme | null {
   try {
@@ -188,6 +189,19 @@ function storedTheme(): Theme | null {
 function systemTheme(): Theme {
   if (typeof window.matchMedia !== "function") return "light";
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+/**
+ * Whether opening the app should play the intro. On by default, so a browser that refuses
+ * storage still gets the film rather than silently losing it; "0" is the only way off.
+ */
+function shouldPlayIntroOnLaunch(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(INTRO_ON_LAUNCH_KEY) !== "0";
+  } catch {
+    return true;
+  }
 }
 
 // The phone bar keeps the four daily destinations; everything else lives under "More".
@@ -297,7 +311,11 @@ export default function App() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
-  const [introOpen, setIntroOpen] = useState(false);
+  // The intro plays on every open of the app, whatever page was asked for. Decided here,
+  // synchronously at mount, so it is the first thing painted rather than something that
+  // waits for the app's data; the owner can turn it off in Profile.
+  const [introOnLaunch, setIntroOnLaunch] = useState(shouldPlayIntroOnLaunch);
+  const [introOpen, setIntroOpen] = useState(() => shouldPlayIntroOnLaunch());
 
   // Follows the system light/dark setting until the person picks one on Profile.
   const [theme, setTheme] = useState<Theme>(() => (typeof window === "undefined" ? "light" : storedTheme() ?? systemTheme()));
@@ -449,25 +467,25 @@ export default function App() {
   })();
   const activeAccounts = accounts.filter((account) => !account.isArchived);
 
-  // The intro plays once, on a genuinely new install: no accounts yet and never seen before.
+  // A failed boot must not sit behind a film: if the app cannot load, show why at once.
   useEffect(() => {
-    if (loading || error || !bootstrap) return;
-    let seen = true;
-    try {
-      seen = window.localStorage.getItem("finance-intro-seen") === "1";
-    } catch {
-      // Private windows refuse storage; better to stay quiet than to replay every launch.
-    }
-    if (!seen && activeAccounts.length === 0) setIntroOpen(true);
-  }, [loading, error, bootstrap, activeAccounts.length]);
+    if (error) setIntroOpen(false);
+  }, [error]);
 
   const closeIntro = useCallback(() => {
     setIntroOpen(false);
-    try {
-      window.localStorage.setItem("finance-intro-seen", "1");
-    } catch {
-      // Nothing to remember it with; it will simply show again next time.
-    }
+  }, []);
+
+  const toggleIntroOnLaunch = useCallback(() => {
+    setIntroOnLaunch((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(INTRO_ON_LAUNCH_KEY, next ? "1" : "0");
+      } catch {
+        // Nothing to remember it with; the preference lasts for this session only.
+      }
+      return next;
+    });
   }, []);
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
@@ -492,12 +510,25 @@ export default function App() {
     }
   }, [activeAccounts, selectedAccountId]);
 
+  // The film covers the boot, so the data loads behind it and there is nothing to wait for
+  // when it ends. A spinner under the overlay would only be a flash on the handoff, so the
+  // loading screen stands down while the intro is up.
   if (loading) {
-    return <FullScreenState icon={<Loader2 className="spin" />} title="Loading Financial Tracker" />;
+    return (
+      <>
+        {introOpen && <IntroVideo onClose={closeIntro} />}
+        {!introOpen && <FullScreenState icon={<Loader2 className="spin" />} title="Loading Financial Tracker" />}
+      </>
+    );
   }
 
   if (error) {
-    return <FullScreenState icon={<CircleAlert />} title="Could not load app" detail={error} />;
+    return (
+      <>
+        {introOpen && <IntroVideo onClose={closeIntro} />}
+        <FullScreenState icon={<CircleAlert />} title="Could not load app" detail={error} />
+      </>
+    );
   }
 
   if (!bootstrap || activeAccounts.length === 0) {
@@ -695,6 +726,8 @@ export default function App() {
           {activePage === "profile" && (
             <ProfilePage
               onPlayIntro={() => setIntroOpen(true)}
+              introOnLaunch={introOnLaunch}
+              onToggleIntroOnLaunch={toggleIntroOnLaunch}
               profile={profileDraft}
               savedProfile={bootstrap.profile}
               settings={bootstrap.settings}
@@ -6667,6 +6700,8 @@ function AccountImpactCard({ account, transactions }: { account: Account; transa
 
 function ProfilePage({
   onPlayIntro,
+  introOnLaunch,
+  onToggleIntroOnLaunch,
   profile,
   savedProfile,
   settings,
@@ -6680,6 +6715,8 @@ function ProfilePage({
   onThemeToggle
 }: {
   onPlayIntro: () => void;
+  introOnLaunch: boolean;
+  onToggleIntroOnLaunch: () => void;
   profile: UserProfile;
   savedProfile: UserProfile;
   settings: Record<string, string>;
@@ -6804,11 +6841,25 @@ function ProfilePage({
             <span>Currency</span>
             <strong>{settings.currency ?? "INR"}</strong>
           </div>
-          <div className="settings-row">
+          <div className="settings-row intro-row">
             <span>Intro</span>
-            <button type="button" className="secondary-action" onClick={onPlayIntro}>
-              Watch intro
-            </button>
+            <div className="intro-row-controls">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={introOnLaunch}
+                className="switch-control"
+                onClick={onToggleIntroOnLaunch}
+              >
+                <span className="switch-track" aria-hidden="true">
+                  <span className="switch-thumb" />
+                </span>
+                Play on launch
+              </button>
+              <button type="button" className="secondary-action" onClick={onPlayIntro}>
+                Watch intro
+              </button>
+            </div>
           </div>
           <div className="settings-row card-alert-row">
             <span>Card utilization alert</span>
@@ -7215,17 +7266,46 @@ function PanelLoader({ label }: { label: string }) {
 function IntroVideo({ onClose }: { onClose: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [soundOn, setSoundOn] = useState(false);
+  // Closing is a handoff, not an unmount: the overlay plays itself out and then goes.
+  const [leaving, setLeaving] = useState(false);
+  const leave = useCallback(() => setLeaving(true), []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") leave();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [leave]);
+
+  // The film now plays on every open, so it must never be the thing standing in the way.
+  // If it cannot start within a few seconds -- blocked request, decode failure, a stalled
+  // network -- it hands off by itself rather than leaving a dark rectangle on screen.
+  useEffect(() => {
+    const watchdog = window.setTimeout(() => {
+      const video = videoRef.current;
+      if (!video || video.readyState < 3 || (video.paused && video.currentTime === 0)) leave();
+    }, 4000);
+    return () => window.clearTimeout(watchdog);
+  }, [leave]);
+
+  // Belt and braces: if the leaving animation never reports back, close anyway.
+  useEffect(() => {
+    if (!leaving) return;
+    const fallback = window.setTimeout(onClose, 900);
+    return () => window.clearTimeout(fallback);
+  }, [leaving, onClose]);
 
   return (
-    <div className="intro-overlay" role="dialog" aria-modal="true" aria-label="What Financial Tracker does">
+    <div
+      className={`intro-overlay${leaving ? " is-leaving" : ""}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label="What Financial Tracker does"
+      onAnimationEnd={(event) => {
+        if (leaving && event.target === event.currentTarget) onClose();
+      }}
+    >
       <div className="intro-frame">
         <video
           ref={videoRef}
@@ -7234,7 +7314,10 @@ function IntroVideo({ onClose }: { onClose: () => void }) {
           autoPlay
           muted={!soundOn}
           playsInline
-          onEnded={onClose}
+          preload="auto"
+          onEnded={leave}
+          onError={leave}
+          onStalled={leave}
         />
         <div className="intro-actions">
           <button
@@ -7250,7 +7333,7 @@ function IntroVideo({ onClose }: { onClose: () => void }) {
           >
             {soundOn ? "Mute" : "Sound on"}
           </button>
-          <button type="button" className="primary-action" onClick={onClose}>
+          <button type="button" className="primary-action" onClick={leave}>
             Skip
           </button>
         </div>

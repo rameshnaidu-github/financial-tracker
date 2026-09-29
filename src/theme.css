@@ -2453,6 +2453,64 @@ button.mix-bar-head:hover > span {
   gap: 10px;
 }
 
+/* The handoff: the scrim fades and the frame lifts away, so the page underneath is
+   revealed rather than replacing the film between one frame and the next. Both animate
+   transform and opacity only, so the whole move stays on the compositor. */
+.intro-overlay.is-leaving {
+  /* --ease-out is expo-like and would dump most of the fade in the first third, which
+     reads as a cut. The spring curve spends its time in the middle, so the page arrives. */
+  animation: intro-overlay-out 520ms var(--ease-spring) both;
+  pointer-events: none;
+}
+
+.intro-overlay.is-leaving .intro-frame {
+  animation: intro-frame-out 460ms var(--ease-spring) both;
+}
+
+@keyframes intro-overlay-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.02);
+  }
+}
+
+@keyframes intro-frame-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-18px) scale(0.96);
+  }
+}
+
+@keyframes intro-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Asked for less motion: the same handoff, quickly, with nothing moving. */
+@media (prefers-reduced-motion: reduce) {
+  .intro-overlay,
+  .intro-frame {
+    animation: none;
+  }
+
+  .intro-overlay.is-leaving,
+  .intro-overlay.is-leaving .intro-frame {
+    animation: intro-fade-out 140ms var(--ease-out) both;
+  }
+}
+
 @media (max-width: 720px) {
   .intro-actions {
     justify-content: stretch;
