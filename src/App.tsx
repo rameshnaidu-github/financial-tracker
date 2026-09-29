@@ -153,7 +153,11 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home; group?: Na
  */
 function withPageTransition(update: () => void) {
   const doc = document as Document & {
-    startViewTransition?: (callback: () => void) => { finished?: Promise<void> };
+    startViewTransition?: (callback: () => void) => {
+      finished?: Promise<void>;
+      ready?: Promise<void>;
+      updateCallbackDone?: Promise<void>;
+    };
   };
   // A hidden page cannot capture the snapshots a transition needs, so it would only throw.
   if (typeof doc.startViewTransition !== "function" || prefersReducedMotion() || document.hidden) {
@@ -161,9 +165,11 @@ function withPageTransition(update: () => void) {
     return;
   }
   const transition = doc.startViewTransition(() => flushSync(update));
-  // Interrupting a transition (a quick second navigation) rejects this promise. The page has
-  // already changed by then, so swallow it rather than leaving an unhandled rejection.
+  // An interrupted or skipped transition rejects all three of these. The page has already changed
+  // by then, so none of them is an error worth surfacing; leaving any uncaught logs to the console.
   transition?.finished?.catch(() => {});
+  transition?.ready?.catch(() => {});
+  transition?.updateCallbackDone?.catch(() => {});
 }
 
 const NAV_GROUPS: NavGroup[] = ["Daily", "Plan", "Own & owe", "Setup"];
@@ -290,6 +296,8 @@ export default function App() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
+  const [introOpen, setIntroOpen] = useState(false);
+
   // Follows the system light/dark setting until the person picks one on Profile.
   const [theme, setTheme] = useState<Theme>(() => (typeof window === "undefined" ? "light" : storedTheme() ?? systemTheme()));
 
@@ -439,6 +447,28 @@ export default function App() {
     return Number.isFinite(parsed) && parsed >= 1 && parsed <= 100 ? Math.round(parsed) : 30;
   })();
   const activeAccounts = accounts.filter((account) => !account.isArchived);
+
+  // The intro plays once, on a genuinely new install: no accounts yet and never seen before.
+  useEffect(() => {
+    if (loading || error || !bootstrap) return;
+    let seen = true;
+    try {
+      seen = window.localStorage.getItem("finance-intro-seen") === "1";
+    } catch {
+      // Private windows refuse storage; better to stay quiet than to replay every launch.
+    }
+    if (!seen && activeAccounts.length === 0) setIntroOpen(true);
+  }, [loading, error, bootstrap, activeAccounts.length]);
+
+  const closeIntro = useCallback(() => {
+    setIntroOpen(false);
+    try {
+      window.localStorage.setItem("finance-intro-seen", "1");
+    } catch {
+      // Nothing to remember it with; it will simply show again next time.
+    }
+  }, []);
+
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const showAccountFilter =
     activePage !== "accounts" &&
@@ -471,19 +501,23 @@ export default function App() {
 
   if (!bootstrap || activeAccounts.length === 0) {
     return (
-      <SetupPage
+      <>
+        {introOpen && <IntroVideo onClose={closeIntro} />}
+        <SetupPage
         categories={categories}
         onCreated={async () => {
           await refresh();
           navigate("overview");
           showNotice("First account added. Welcome in.");
         }}
-      />
+        />
+      </>
     );
   }
 
   return (
     <div className="app-shell">
+      {introOpen && <IntroVideo onClose={closeIntro} />}
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">₹</div>
@@ -659,6 +693,7 @@ export default function App() {
           {activePage === "faq" && <FaqPage />}
           {activePage === "profile" && (
             <ProfilePage
+              onPlayIntro={() => setIntroOpen(true)}
               profile={profileDraft}
               savedProfile={bootstrap.profile}
               settings={bootstrap.settings}
@@ -6629,6 +6664,7 @@ function AccountImpactCard({ account, transactions }: { account: Account; transa
 }
 
 function ProfilePage({
+  onPlayIntro,
   profile,
   savedProfile,
   settings,
@@ -6641,6 +6677,7 @@ function ProfilePage({
   onSaveCardAlert,
   onThemeToggle
 }: {
+  onPlayIntro: () => void;
   profile: UserProfile;
   savedProfile: UserProfile;
   settings: Record<string, string>;
@@ -6764,6 +6801,12 @@ function ProfilePage({
           <div className="settings-row">
             <span>Currency</span>
             <strong>{settings.currency ?? "INR"}</strong>
+          </div>
+          <div className="settings-row">
+            <span>Intro</span>
+            <button type="button" className="secondary-action" onClick={onPlayIntro}>
+              Watch intro
+            </button>
           </div>
           <div className="settings-row card-alert-row">
             <span>Card utilization alert</span>
@@ -7157,6 +7200,57 @@ function PanelLoader({ label }: { label: string }) {
       <span className="skeleton-line" />
       <span className="skeleton-line" />
       <span className="skeleton-line" />
+    </div>
+  );
+}
+
+/**
+ * A short look at the app, shown once on a new install and replayable from Profile. Muted so the
+ * browser lets it start, and always skippable.
+ */
+function IntroVideo({ onClose }: { onClose: () => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [soundOn, setSoundOn] = useState(false);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="intro-overlay" role="dialog" aria-modal="true" aria-label="What Financial Tracker does">
+      <div className="intro-frame">
+        <video
+          ref={videoRef}
+          className="intro-video"
+          src="/intro.mp4"
+          autoPlay
+          muted={!soundOn}
+          playsInline
+          onEnded={onClose}
+        />
+        <div className="intro-actions">
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => {
+              const video = videoRef.current;
+              if (!video) return;
+              video.muted = soundOn;
+              setSoundOn((value) => !value);
+              void video.play().catch(() => undefined);
+            }}
+          >
+            {soundOn ? "Mute" : "Sound on"}
+          </button>
+          <button type="button" className="primary-action" onClick={onClose}>
+            Skip
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,0 +1,1 @@
+Built a money tracker that never phones home: accounts, cards, budgets, loans and investments, all in rupees, all in one SQLite file on my own laptop. It tells me what's due this week and what last month actually cost. No cloud, no sign-up.

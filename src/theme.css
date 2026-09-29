@@ -2418,3 +2418,48 @@ button.mix-bar-head:hover > span {
   font-size: 0.86rem;
   font-weight: 620;
 }
+
+/* ---------- The intro that plays on a first launch ---------- */
+.intro-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, #05070c 86%, transparent);
+  backdrop-filter: blur(10px);
+  padding: 24px;
+  animation: fade-in 240ms var(--ease-out) both;
+}
+
+.intro-frame {
+  display: grid;
+  gap: 16px;
+  width: min(100%, 1040px);
+  animation: sheet-in 420ms var(--ease-spring) both;
+}
+
+.intro-video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-shell);
+  background: #0b0e14;
+  box-shadow: var(--shadow);
+}
+
+.intro-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .intro-actions {
+    justify-content: stretch;
+  }
+
+  .intro-actions > button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+}
