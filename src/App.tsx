@@ -1034,7 +1034,7 @@ function OverviewPage({
             <TransactionTable transactions={overview.recentTransactions} empty="No transactions yet." compact />
           </Panel>
           <Panel
-            title={`Coming up in ${upcoming?.windowDays ?? 14} days`}
+            title={`Coming up in ${upcoming?.windowDays ?? 7} days`}
             action={<button onClick={() => onNavigate("subscriptions")}>AutoPay</button>}
           >
             <UpcomingPaymentsList upcoming={upcoming} availableCashPaise={overview.summary.availableCashPaise} />
@@ -4014,6 +4014,7 @@ function AccountsPage({
 
   return (
     <div className="two-column">
+      <div className="section-column">
       <Panel title="Accounts & cards">
         {activeAccounts.length === 0 ? (
           <EmptyState text="No active accounts or cards. Add one to keep tracking." />
@@ -4038,6 +4039,8 @@ function AccountsPage({
           Deleting an unused account removes it permanently. Accounts with linked transactions are hidden so reports keep their history.
         </p>
       </Panel>
+
+
       <Panel title="Card utilisation">
         <MixChart
           segments={cardSegments}
@@ -4049,6 +4052,7 @@ function AccountsPage({
           emptyText="No credit card owes anything right now."
         />
       </Panel>
+      </div>
 
       <Panel title="Add account">
         <AccountForm
@@ -4144,6 +4148,7 @@ function LoansPage({
       </section>
 
       <div className="two-column loans-layout">
+        <div className="section-column">
         <Panel title="Loan tracker">
           {activeLoans.length === 0 ? (
             <EmptyState text="No active loans yet." />
@@ -4177,6 +4182,19 @@ function LoansPage({
           )}
         </Panel>
 
+      <Panel title="Outstanding by loan">
+          <MixChart
+            segments={loanSegments}
+            totalPaise={activeOutstanding}
+            ariaLabel="Outstanding by loan"
+            centerLabel="Outstanding"
+            centerValue={formatINRWhole(activeOutstanding)}
+            className="overview-donut-chart"
+            emptyText="Nothing outstanding yet. Add a loan to see the split."
+          />
+        </Panel>
+        </div>
+
         <Panel title={editingLoan ? "Edit loan" : "Add loan"}>
           {loanType ? (
             <LoanForm
@@ -4196,17 +4214,7 @@ function LoansPage({
         </Panel>
       </div>
 
-      <Panel title="Outstanding by loan">
-        <MixChart
-          segments={loanSegments}
-          totalPaise={activeOutstanding}
-          ariaLabel="Outstanding by loan"
-          centerLabel="Outstanding"
-          centerValue={formatINRWhole(activeOutstanding)}
-          className="overview-donut-chart"
-          emptyText="Nothing outstanding yet. Add a loan to see the split."
-        />
-      </Panel>
+
     </div>
   );
 }
@@ -4561,12 +4569,7 @@ function InvestmentsPage({
 
   // Grouped by type by default; picking one type opens up its own holdings.
   const chartType = INVESTMENT_TYPES.find((type) => type.id === chartTypeId) ?? null;
-  const chartSegments = chartType
-    ? investments
-        .filter((item) => item.type === chartType.id && item.currentValuePaise > 0)
-        .map((item) => ({ id: item.id, name: item.name, color: item.color, amountPaise: item.currentValuePaise }))
-        .sort((a, b) => b.amountPaise - a.amountPaise)
-    : investmentTypeSegments(investments);
+  const chartSegments = chartType ? holdingSegments(investments, chartType.id) : investmentTypeSegments(investments);
   const chartTotalPaise = chartSegments.reduce((sum, segment) => sum + segment.amountPaise, 0);
 
   function remove(investment: Investment) {
@@ -4617,6 +4620,7 @@ function InvestmentsPage({
       )}
 
       <div className="two-column loans-layout">
+        <div className="section-column">
         <Panel title="Portfolio">
           {groups.length === 0 ? (
             <EmptyState text="No investments yet. Add your first holding on the right." />
@@ -4635,6 +4639,35 @@ function InvestmentsPage({
           )}
         </Panel>
 
+      <Panel
+          title={chartType ? `${chartType.label} holdings` : "Current value by type"}
+          action={
+            <label className="chart-scope">
+              <span className="visually-hidden">Show</span>
+              <select value={chartTypeId} onChange={(event) => setChartTypeId(event.target.value)}>
+                <option value="all">All types</option>
+                {INVESTMENT_TYPES.filter((type) => investments.some((item) => item.type === type.id)).map((type) => (
+                  <option key={type.id} value={type.id}>
+                    {type.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          }
+        >
+          <MixChart
+            segments={chartSegments}
+            totalPaise={chartTotalPaise}
+            ariaLabel={chartType ? `${chartType.label} holdings` : "Current value by type"}
+            centerLabel={chartType ? chartType.label : "Portfolio"}
+            centerValue={formatINRWhole(chartTotalPaise)}
+            className="overview-donut-chart"
+            emptyText={chartType ? `Nothing held in ${chartType.label} yet.` : "Add a holding to see how your portfolio is split."}
+            onSegmentClick={chartType ? undefined : (segment) => setChartTypeId(segment.id)}
+          />
+        </Panel>
+        </div>
+
         <Panel title={editing ? "Edit investment" : "Add investment"}>
           <InvestmentForm
             key={editing?.id ?? "new-investment"}
@@ -4649,33 +4682,7 @@ function InvestmentsPage({
         </Panel>
       </div>
 
-      <Panel
-        title={chartType ? `${chartType.label} holdings` : "Current value by type"}
-        action={
-          <label className="chart-scope">
-            <span className="visually-hidden">Show</span>
-            <select value={chartTypeId} onChange={(event) => setChartTypeId(event.target.value)}>
-              <option value="all">All types</option>
-              {INVESTMENT_TYPES.filter((type) => investments.some((item) => item.type === type.id)).map((type) => (
-                <option key={type.id} value={type.id}>
-                  {type.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        }
-      >
-        <MixChart
-          segments={chartSegments}
-          totalPaise={chartTotalPaise}
-          ariaLabel={chartType ? `${chartType.label} holdings` : "Current value by type"}
-          centerLabel={chartType ? chartType.label : "Portfolio"}
-          centerValue={formatINRWhole(chartTotalPaise)}
-          className="overview-donut-chart"
-          emptyText={chartType ? `Nothing held in ${chartType.label} yet.` : "Add a holding to see how your portfolio is split."}
-          onSegmentClick={chartType ? undefined : (segment) => setChartTypeId(segment.id)}
-        />
-      </Panel>
+
     </div>
   );
 }
@@ -4840,7 +4847,6 @@ function InvestmentForm({
     investment?.shares != null ? String(investment.shares) : ""
   );
   const [purchaseDate, setPurchaseDate] = useState(investment?.purchaseDate ?? todayISO());
-  const [note, setNote] = useState(investment?.note ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -4862,10 +4868,10 @@ function InvestmentForm({
         currentValuePaise: parseAmountToPaise(currentValue),
         shares,
         purchaseDate: purchaseDate || undefined,
-        note: note.trim() || undefined
       };
       if (investment) {
-        await Api.updateInvestment(investment.id, { ...payload, note: note.trim() });
+        // A note saved before this field was removed is left as it is.
+        await Api.updateInvestment(investment.id, payload);
         await onSaved("Investment updated.");
       } else {
         await Api.createInvestment(payload);
@@ -4874,7 +4880,6 @@ function InvestmentForm({
         setCurrentValue("");
         setSharesInput("");
         setPurchaseDate(todayISO());
-        setNote("");
         await onSaved("Investment added.");
       }
     } catch (err) {
@@ -4932,10 +4937,6 @@ function InvestmentForm({
       <label>
         Date invested
         <input type="date" value={purchaseDate} onChange={(event) => setPurchaseDate(event.target.value)} />
-      </label>
-      <label>
-        Note (optional)
-        <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="e.g. broker, folio, plot size" />
       </label>
       {error && <p className="form-error">{error}</p>}
       <div className="loan-form-actions">
@@ -7090,23 +7091,38 @@ function UpcomingPaymentsList({
       : daysAway === 1
         ? "Due tomorrow"
         : `In ${daysAway} days, ${formatDateWithYear(dueDate).replace(/ \d{4}$/, "")}`;
+  // One block per kind, always in this order, and a kind with nothing due is left out.
+  const groups = [
+    { kind: "autopay" as const, title: "AutoPay", icon: <CalendarClock size={16} /> },
+    { kind: "loan" as const, title: "Loans", icon: <Landmark size={16} /> },
+    { kind: "card" as const, title: "Credit card payments", icon: <CreditCard size={16} /> }
+  ]
+    .map((group) => ({ ...group, items: upcoming.items.filter((item) => item.kind === group.kind) }))
+    .filter((group) => group.items.length > 0);
+
   return (
     <div className="upcoming-list">
-      {upcoming.items.map((item) => (
-        <div className={`upcoming-row${item.daysAway <= 2 ? " soon" : ""}`} key={`${item.kind}-${item.id}`}>
-          <span className="upcoming-icon">
-            {item.kind === "loan" ? <Landmark size={16} /> : item.kind === "card" ? <CreditCard size={16} /> : <CalendarClock size={16} />}
-          </span>
-          <div className="upcoming-main">
-            <strong>{item.name}</strong>
-            <small>
-              {item.kind === "loan" ? "Loan EMI" : item.kind === "card" ? "Card bill" : "AutoPay"} ·{" "}
-              {dueLabel(item.daysAway, item.dueDate)}
-            </small>
-          </div>
-          <strong className="amount-out">{formatINR(item.amountPaise)}</strong>
-        </div>
-      ))}
+      {groups.map((group) => {
+        const groupTotal = group.items.reduce((sum, item) => sum + item.amountPaise, 0);
+        return (
+          <section className="upcoming-group" key={group.kind}>
+            <header className="upcoming-group-head">
+              <h3>{group.title}</h3>
+              <strong>{formatINR(groupTotal)}</strong>
+            </header>
+            {group.items.map((item) => (
+              <div className={`upcoming-row${item.daysAway <= 2 ? " soon" : ""}`} key={`${item.kind}-${item.id}`}>
+                <span className="upcoming-icon">{group.icon}</span>
+                <div className="upcoming-main">
+                  <strong>{item.name}</strong>
+                  <small>{dueLabel(item.daysAway, item.dueDate)}</small>
+                </div>
+                <strong className="amount-out">{formatINR(item.amountPaise)}</strong>
+              </div>
+            ))}
+          </section>
+        );
+      })}
       <div className="upcoming-total">
         <span>Total due</span>
         <strong>{formatINR(upcoming.totalPaise)}</strong>
@@ -7424,6 +7440,22 @@ function isSelfTransfer(transaction: Transaction) {
  * One segment per credit card that owes money: the amount outstanding, carrying the card's limit so
  * the bar view can draw it as utilisation rather than against the biggest card.
  */
+/** Distinct colours for items that would otherwise share one colour, such as holdings of one type. */
+const segmentPalette = ["#3a55b4", "#0f766e", "#b45309", "#9333ea", "#be123c", "#0891b2", "#4d7c0f", "#a21caf"];
+
+/** The holdings of one type, each with its own colour so the slices can be told apart. */
+function holdingSegments(investments: Investment[], typeId: string): DonutSegment[] {
+  return investments
+    .filter((item) => item.type === typeId && item.currentValuePaise > 0)
+    .sort((a, b) => b.currentValuePaise - a.currentValuePaise)
+    .map((item, index) => ({
+      id: item.id,
+      name: item.name,
+      color: segmentPalette[index % segmentPalette.length],
+      amountPaise: item.currentValuePaise
+    }));
+}
+
 /** One segment per investment type that holds something: all stocks together, all funds together. */
 function investmentTypeSegments(investments: Investment[]): DonutSegment[] {
   return INVESTMENT_TYPES.map((type) => ({

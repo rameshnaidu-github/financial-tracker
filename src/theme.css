@@ -2378,3 +2378,43 @@ button.mix-bar-head:hover > span {
   grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
   gap: 10px;
 }
+
+/* ---------- A section's list and its chart share one column ---------- */
+/* Without this the taller add form left dead space beside a short list. */
+.section-column {
+  display: grid;
+  gap: var(--space-5);
+  align-content: start;
+  min-width: 0;
+}
+
+/* ---------- Coming up: one block per kind of payment ---------- */
+.upcoming-group {
+  display: grid;
+  gap: 6px;
+}
+
+.upcoming-group + .upcoming-group {
+  margin-top: 14px;
+}
+
+.upcoming-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.upcoming-group-head h3 {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 640;
+  color: var(--muted);
+}
+
+.upcoming-group-head strong {
+  font-size: 0.86rem;
+  font-weight: 620;
+}

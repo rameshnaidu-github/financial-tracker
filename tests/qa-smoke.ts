@@ -2344,6 +2344,50 @@ test("the account editor payload saves a card's due day", () => {
   );
 });
 
+test("the upcoming window can be narrowed to seven days", () => {
+  const suffix = Date.now().toString().slice(-5);
+  const near = services.createLoan({
+    name: `QA Week Loan ${suffix}`,
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    principalAmountPaise: 1_00_000_00,
+    startingOutstandingPaise: 1_00_000_00,
+    startMonth: "2027-01",
+    annualInterestRateBps: 900,
+    tenureMonths: 24,
+    monthlyEmiPaise: 5_000_00,
+    emiDueDay: 14
+  });
+  const far = services.createLoan({
+    name: `QA Fortnight Loan ${suffix}`,
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    principalAmountPaise: 1_00_000_00,
+    startingOutstandingPaise: 1_00_000_00,
+    startMonth: "2027-01",
+    annualInterestRateBps: 900,
+    tenureMonths: 24,
+    monthlyEmiPaise: 4_000_00,
+    emiDueDay: 20
+  });
+
+  // Ten days out: inside a fortnight, outside a week.
+  const week = services.getUpcomingPayments(7, "2027-05-10");
+  assert(week.windowDays === 7, `The window should be reported as 7, got ${week.windowDays}.`);
+  const inWeek = week.items.find((item) => item.id === near.id);
+  assert(inWeek?.dueDate === "2027-05-14" && inWeek.daysAway === 4, `The near EMI should be listed, got ${inWeek?.dueDate}.`);
+  assert(!week.items.some((item) => item.id === far.id), "An EMI 10 days away must not appear in a 7-day window.");
+  assert(
+    week.totalPaise === week.items.reduce((sum, item) => sum + item.amountPaise, 0),
+    "The total should add up only the listed payments."
+  );
+
+  // The same data over a fortnight still shows both, so only the window changed.
+  const fortnight = services.getUpcomingPayments(14, "2027-05-10");
+  assert(
+    fortnight.items.some((item) => item.id === near.id) && fortnight.items.some((item) => item.id === far.id),
+    "Both EMIs should still be listed over 14 days."
+  );
+});
+
 test("a loan reminds from its EMI due day", () => {
   const suffix = Date.now().toString().slice(-5);
   const loan = services.createLoan({

@@ -318,7 +318,12 @@ app.get("/api/reports/monthly", async (request) => {
 
 app.get("/api/wealth", async () => getWealthSummary());
 
-app.get("/api/upcoming", async () => getUpcomingPayments());
+app.get("/api/upcoming", async (request) => {
+  // The Overview asks for a week; anything else falls back to the fortnight this used to serve.
+  const asked = Number((request.query as { windowDays?: string }).windowDays);
+  const windowDays = Number.isInteger(asked) && asked >= 1 && asked <= 60 ? asked : 14;
+  return getUpcomingPayments(windowDays);
+});
 
 app.get("/api/reports/trends", async (request) => {
   const query = request.query as { accountId?: string; typeId?: string; mode?: string; month?: string };
