@@ -42,6 +42,7 @@ import { Api } from "./api";
 import {
   currentMonth,
   formatINR,
+  formatINRCompact,
   formatINRWhole,
   formatMonth,
   formatShortDate,
@@ -1068,10 +1069,9 @@ function OverviewPage({
           <Panel title="Recent activity" action={<button onClick={() => onNavigate("transactions")}>View all</button>}>
             <TransactionTable transactions={overview.recentTransactions} empty="No transactions yet." compact />
           </Panel>
-          <Panel
-            title={`Coming up in ${upcoming?.windowDays ?? 7} days`}
-            action={<button onClick={() => onNavigate("subscriptions")}>AutoPay</button>}
-          >
+          {/* No action here: the list already groups by AutoPay, loans and cards, and the
+              sidebar is how you get to AutoPay itself. */}
+          <Panel title={`Coming up in ${upcoming?.windowDays ?? 7} days`}>
             <UpcomingPaymentsList upcoming={upcoming} availableCashPaise={overview.summary.availableCashPaise} />
           </Panel>
         </div>
@@ -3105,6 +3105,7 @@ function ReportsPage({
         )}
       </Panel>
 
+      <div className="report-panel-pair">
       <Panel title="Trends">
         <div className="trend-controls">
           <label className="control-field toolbar-control trend-mode-control">
@@ -3251,6 +3252,7 @@ function ReportsPage({
           </>
         )}
       </Panel>
+      </div>
     </div>
   );
 }
@@ -4048,7 +4050,7 @@ function AccountsPage({
   }
 
   return (
-    <div className="two-column">
+    <div className="two-column accounts-page">
       <div className="section-column">
       <Panel title="Accounts & cards">
         {activeAccounts.length === 0 ? (
@@ -7065,7 +7067,9 @@ function SummaryCard({
       <span>{icon}</span>
       <div>
         <p>{label}</p>
-        <strong className={valueClassName}>
+        {/* A money tile shows short scale so a crore figure still fits; the exact amount is
+            the tooltip, and CountUp keeps it as the text a screen reader reads. */}
+        <strong className={valueClassName} title={countPaise === undefined ? undefined : value}>
           {countPaise === undefined ? value : <CountUp paise={countPaise} label={value} />}
         </strong>
         {note}
@@ -7077,7 +7081,7 @@ function SummaryCard({
 /** A money figure that counts up to its value when it first appears or changes. */
 function CountUp({ paise, label }: { paise: number; label: string }) {
   const ref = useRef<HTMLSpanElement>(null);
-  useCountUp(ref, paise, formatINRWhole);
+  useCountUp(ref, paise, formatINRCompact);
   return (
     <>
       <span className="visually-hidden">{label}</span>

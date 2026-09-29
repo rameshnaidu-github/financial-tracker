@@ -597,6 +597,24 @@ a {
   gap: 18px;
 }
 
+/* Add account is a short form next to a list that can be any length. Left to stretch it
+   became a tall empty box, so the column sizes to its own content and follows the list
+   instead of being padded out to match it. */
+.accounts-page {
+  align-items: start;
+}
+
+.accounts-page > .panel {
+  position: sticky;
+  top: 18px;
+}
+
+@media (max-width: 1120px) {
+  .accounts-page > .panel {
+    position: static;
+  }
+}
+
 .overview-report-section {
   display: grid;
 }
@@ -1041,15 +1059,15 @@ a {
 }
 
 .cashflow-summary {
-  --cashflow-result-width: clamp(200px, 18vw, 240px);
-  --cashflow-result-height: 84px;
-  --cashflow-equals-width: 36px;
-  margin: 4px 0 18px;
+  --cashflow-result-width: clamp(176px, 15vw, 212px);
+  --cashflow-result-height: 62px;
+  --cashflow-equals-width: 28px;
+  margin: 4px 0 14px;
   overflow: hidden;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel-soft) 46%, var(--panel));
-  padding: 0 28px;
+  padding: 0 20px;
 }
 
 .cashflow-summary-row,
@@ -1057,13 +1075,13 @@ a {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--cashflow-equals-width) var(--cashflow-result-width);
   align-items: center;
-  gap: 20px;
+  gap: 14px;
   min-width: 0;
 }
 
 .cashflow-section {
   border-bottom: 1px solid var(--line);
-  padding: 28px 0;
+  padding: 12px 0;
 }
 
 .cashflow-section:last-child {
@@ -1075,7 +1093,7 @@ a {
   min-width: 0;
   align-items: center;
   justify-content: flex-start;
-  gap: 20px;
+  gap: 14px;
 }
 
 .cashflow-summary-line,
@@ -1085,8 +1103,8 @@ a {
   height: var(--cashflow-result-height);
   min-width: 0;
   align-content: center;
-  gap: 4px;
-  padding: 16px 18px;
+  gap: 2px;
+  padding: 10px 14px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--panel-soft);
@@ -1098,7 +1116,7 @@ a {
 
 .cashflow-summary-head {
   display: grid;
-  gap: 5px;
+  gap: 2px;
 }
 
 .cashflow-summary-head span {
@@ -1145,13 +1163,13 @@ a {
   display: grid;
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 64px;
+  min-height: 48px;
   align-content: center;
-  gap: 4px;
+  gap: 2px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-soft);
-  padding: 10px 12px;
+  padding: 7px 11px;
 }
 
 .cashflow-equation-part {
@@ -1191,7 +1209,7 @@ a {
 .cashflow-equation-empty {
   display: inline-grid;
   width: 100%;
-  min-height: 66px;
+  min-height: 48px;
   align-content: center;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -3358,11 +3376,31 @@ a {
   font-weight: 850;
 }
 
+/* The outflow mix and the type breakdown read the same month, so they sit side by side
+   on a wide window and fall back to one column when there is no room for both. */
 .report-chart-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
-  margin: 18px 0;
+  margin: 14px 0 0;
+  align-items: start;
+}
+
+/* Trends against Budget vs actual, the same pairing one level up. */
+.report-panel-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+/* Below this the two columns are narrower than a chart's own controls, so they stack.
+   The breakpoint is the content width, not the 1120px one where the sidebar leaves. */
+@media (max-width: 1280px) {
+  .report-chart-grid,
+  .report-panel-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .report-analytics {

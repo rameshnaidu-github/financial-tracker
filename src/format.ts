@@ -15,6 +15,25 @@ export function formatINRWhole(paise: number) {
   }).format(Math.round(paise / 100));
 }
 
+const ONE_LAKH_PAISE = 1_00_000 * 100;
+const ONE_CRORE_PAISE = 1_00_00_000 * 100;
+
+/**
+ * Headline tiles only: Indian short scale from a lakh upward, so a figure fits its tile at
+ * every width instead of being cut off. Anything under a lakh stays an exact rupee figure.
+ * This rounds to two decimals, so every caller must keep the precise amount reachable — the
+ * tile puts it in `title` and in the visually-hidden label a screen reader announces.
+ */
+export function formatINRCompact(paise: number) {
+  const absolute = Math.abs(paise);
+  if (absolute < ONE_LAKH_PAISE) return formatINRWhole(paise);
+  const sign = paise < 0 ? "-" : "";
+  // Rounded before the unit is chosen, so 99.999 lakh reads as ₹1.00 Cr, never ₹100.00 L.
+  const crore = absolute / ONE_CRORE_PAISE;
+  if (Number(crore.toFixed(2)) >= 1) return `${sign}₹${crore.toFixed(2)} Cr`;
+  return `${sign}₹${(absolute / ONE_LAKH_PAISE).toFixed(2)} L`;
+}
+
 export function parseAmountToPaise(value: string) {
   const normalized = value.replace(/[₹,\s]/g, "");
   if (!normalized) return 0;
