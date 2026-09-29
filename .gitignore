@@ -10,4 +10,8 @@ docs/
 *.docx
 .claude/
 tasks/
-brag-output/work/
+# The film's intermediates stay out of the repo; the scripts that build it do not.
+brag-output/work/*
+!brag-output/work/*.mjs
+!brag-output/work/*.html
+!brag-output/work/scene-data.json
