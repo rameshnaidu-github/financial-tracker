@@ -63,6 +63,7 @@ export type AccountRow = {
   type: AccountType;
   starting_balance_paise: number;
   credit_limit_paise: number | null;
+  payment_due_day: number | null;
   is_archived: number;
   created_at: string;
   updated_at: string;
@@ -77,6 +78,7 @@ export type AccountSummary = {
   balancePaise: number;
   outstandingPaise: number;
   availableLimitPaise: number | null;
+  paymentDueDay: number | null;
   isArchived: boolean;
 };
 
@@ -221,6 +223,7 @@ export type LoanRow = {
   annual_interest_rate_bps: number;
   tenure_months: number;
   monthly_emi_paise: number;
+  emi_due_day: number | null;
   is_archived: number;
   created_at: string;
   updated_at: string;
@@ -261,6 +264,7 @@ export type LoanSummary = {
   annualInterestRateBps: number;
   tenureMonths: number;
   monthlyEmiPaise: number;
+  emiDueDay: number | null;
   monthsElapsed: number;
   monthsLeft: number | null;
   closureMonth: string | null;
@@ -282,6 +286,8 @@ type BudgetLineRow = {
 export type BudgetStatus = "safe" | "watch" | "critical" | "over";
 
 export type BudgetScopeSummary = {
+  /** What this category actually cost in the month before the one being planned. */
+  previousActualPaise: number;
   scopeType: BudgetScopeType;
   scopeId: string;
   typeId: string;
@@ -311,6 +317,7 @@ export type BudgetLineSummary = BudgetScopeSummary & {
 
 export type BudgetPlan = {
   month: string;
+  previousMonth: string;
   start: string;
   end: string;
   asOfDate: string;
@@ -397,7 +404,7 @@ export function listLoans(includeArchived = false): LoanSummary[] {
     db
       .prepare(
         `SELECT id, name, subcategory_id, principal_amount_paise, starting_outstanding_paise,
-                start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise,
+                start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day,
                 is_archived, created_at, updated_at
          FROM loans
          ${includeArchived ? "" : "WHERE is_archived = 0"}
@@ -441,8 +448,8 @@ export function createLoan(input: CreateLoanInput): LoanSummary {
   db.prepare(
     `INSERT INTO loans
       (id, name, subcategory_id, principal_amount_paise, starting_outstanding_paise,
-       start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     parsed.name,
@@ -452,7 +459,8 @@ export function createLoan(input: CreateLoanInput): LoanSummary {
     parsed.startMonth,
     parsed.annualInterestRateBps,
     parsed.tenureMonths,
-    parsed.monthlyEmiPaise
+    parsed.monthlyEmiPaise,
+    parsed.emiDueDay ?? null
   );
 
   return requireLoanSummary(id);
@@ -470,6 +478,8 @@ export function updateLoan(id: string, input: UpdateLoanInput): LoanSummary {
     annualInterestRateBps: patch.annualInterestRateBps ?? existing.annual_interest_rate_bps,
     tenureMonths: patch.tenureMonths ?? existing.tenure_months,
     monthlyEmiPaise: patch.monthlyEmiPaise ?? existing.monthly_emi_paise,
+    // `undefined` leaves the stored day alone; an explicit null clears the reminder.
+    emiDueDay: patch.emiDueDay === undefined ? existing.emi_due_day : patch.emiDueDay ?? null,
     isArchived: patch.isArchived ?? Boolean(existing.is_archived)
   };
 
@@ -481,7 +491,8 @@ export function updateLoan(id: string, input: UpdateLoanInput): LoanSummary {
     startMonth: merged.startMonth,
     annualInterestRateBps: merged.annualInterestRateBps,
     tenureMonths: merged.tenureMonths,
-    monthlyEmiPaise: merged.monthlyEmiPaise
+    monthlyEmiPaise: merged.monthlyEmiPaise,
+    emiDueDay: merged.emiDueDay
   });
   validateLoanTerms(parsed);
   requireLoanSubcategory(parsed.subcategoryId);
@@ -491,7 +502,7 @@ export function updateLoan(id: string, input: UpdateLoanInput): LoanSummary {
       `UPDATE loans
        SET name = ?, subcategory_id = ?, principal_amount_paise = ?, starting_outstanding_paise = ?,
            start_month = ?, annual_interest_rate_bps = ?, tenure_months = ?, monthly_emi_paise = ?,
-           is_archived = ?, updated_at = CURRENT_TIMESTAMP
+           emi_due_day = ?, is_archived = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`
     ).run(
       parsed.name,
@@ -502,6 +513,7 @@ export function updateLoan(id: string, input: UpdateLoanInput): LoanSummary {
       parsed.annualInterestRateBps,
       parsed.tenureMonths,
       parsed.monthlyEmiPaise,
+      merged.emiDueDay ?? null,
       merged.isArchived ? 1 : 0,
       id
     );
@@ -1248,13 +1260,14 @@ export function deleteSubcategory(id: string) {
   return { ok: true };
 }
 
-export function listAccounts(): AccountSummary[] {
+export function listAccounts(includeArchived = true): AccountSummary[] {
   const rows = asRecords<AccountRow>(
     db
       .prepare(
-        `SELECT id, name, type, starting_balance_paise, credit_limit_paise,
+        `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day,
                 is_archived, created_at, updated_at
          FROM accounts
+         ${includeArchived ? "" : "WHERE is_archived = 0"}
          ORDER BY is_archived, type, name`
       )
       .all()
@@ -1275,14 +1288,15 @@ export function createAccount(input: CreateAccountInput) {
 
   db.prepare(
     `INSERT INTO accounts
-      (id, name, type, starting_balance_paise, credit_limit_paise)
-     VALUES (?, ?, ?, ?, ?)`
+      (id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day)
+     VALUES (?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     parsed.name,
     parsed.type,
     parsed.startingBalancePaise,
-    parsed.type === "credit_card" ? parsed.creditLimitPaise ?? 0 : null
+    parsed.type === "credit_card" ? parsed.creditLimitPaise ?? 0 : null,
+    parsed.type === "credit_card" ? parsed.paymentDueDay ?? null : null
   );
 
   return getAccount(id);
@@ -1303,6 +1317,13 @@ export function updateAccount(id: string, input: UpdateAccountInput) {
   const isArchived =
     parsed.isArchived === undefined ? existing.is_archived : parsed.isArchived ? 1 : 0;
   const startingBalance = parsed.startingBalancePaise ?? existing.starting_balance_paise;
+  // `undefined` leaves the stored day alone; an explicit null clears the reminder.
+  const paymentDueDay =
+    existing.type === "credit_card"
+      ? parsed.paymentDueDay === undefined
+        ? existing.payment_due_day
+        : parsed.paymentDueDay ?? null
+      : null;
 
   if (isArchived === 0) {
     const activeDuplicate = getActiveAccountByName(name, id);
@@ -1313,10 +1334,10 @@ export function updateAccount(id: string, input: UpdateAccountInput) {
 
   db.prepare(
     `UPDATE accounts
-     SET name = ?, starting_balance_paise = ?, credit_limit_paise = ?, is_archived = ?,
-         updated_at = CURRENT_TIMESTAMP
+     SET name = ?, starting_balance_paise = ?, credit_limit_paise = ?, payment_due_day = ?,
+         is_archived = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`
-  ).run(name, startingBalance, creditLimit, isArchived, id);
+  ).run(name, startingBalance, creditLimit, paymentDueDay, isArchived, id);
 
   return getAccount(id);
 }
@@ -2016,7 +2037,7 @@ export function getWealthSummary(): WealthSummary {
 
 export type UpcomingPayment = {
   id: string;
-  kind: "autopay" | "loan";
+  kind: "autopay" | "loan" | "card";
   name: string;
   dueDate: string;
   daysAway: number;
@@ -2059,7 +2080,8 @@ function nextMonthlyDueDate(
 
 /**
  * Payments expected to leave the user's accounts soon: AutoPay subscriptions (billed monthly on
- * their start-date day until they expire) and loan EMIs (on the day of the most recent linked EMI).
+ * their start-date day until they expire), loan EMIs (on the day of the most recent linked EMI, or
+ * the entered EMI due day) and credit card bills (on the card's payment due day, for what is owed).
  * A month that already has a linked payment is treated as settled.
  */
 export function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): UpcomingPayments {
@@ -2102,10 +2124,11 @@ export function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): 
         )
         .all(loan.id)
     );
-    // Without a recorded EMI there is no reliable due day, so the loan is left out rather than guessed.
-    if (emiDates.length === 0) continue;
+    // The day a real EMI landed beats the entered day; without either there is nothing to remind about.
+    const dueDay = emiDates.length > 0 ? Number(emiDates[0].date.slice(8, 10)) : loan.emiDueDay;
+    if (!dueDay) continue;
     const due = nextMonthlyDueDate(
-      Number(emiDates[0].date.slice(8, 10)),
+      dueDay,
       today,
       windowDays,
       new Set(emiDates.map((row) => row.date.slice(0, 7))),
@@ -2117,6 +2140,33 @@ export function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): 
         kind: "loan",
         name: loan.name,
         amountPaise: Math.min(loan.monthlyEmiPaise, loan.outstandingPaise),
+        ...due
+      });
+    }
+  }
+
+  for (const account of listAccounts(false)) {
+    if (account.type !== "credit_card" || !account.paymentDueDay) continue;
+    // Nothing is owed, so nothing is due.
+    if (account.outstandingPaise <= 0) continue;
+    const paidMonths = new Set(
+      asRecords<{ month: string }>(
+        db
+          .prepare(
+            `SELECT DISTINCT substr(date, 1, 7) AS month
+             FROM transactions
+             WHERE kind = 'card_payment' AND transfer_account_id = ?`
+          )
+          .all(account.id)
+      ).map((row) => row.month)
+    );
+    const due = nextMonthlyDueDate(account.paymentDueDay, today, windowDays, paidMonths, () => true);
+    if (due) {
+      items.push({
+        id: account.id,
+        kind: "card",
+        name: account.name,
+        amountPaise: account.outstandingPaise,
         ...due
       });
     }
@@ -2135,7 +2185,13 @@ export function getBudgetPlan(month = currentMonth(), asOfDate = localIsoDate(ne
   const actuals = budgetActualMaps(report);
   const rows = listBudgetRows(safeMonth);
   const history = rows.length > 0 ? restOfMonthHistory(safeMonth, pace) : [];
-  const lines = rows.map((row) => budgetLineFromRow(row, actuals, pace, history));
+  // What each category cost last month, so a plan can be set against what actually happened.
+  const previousMonth = addMonths(safeMonth, -1);
+  const previousActuals = budgetActualMaps(getMonthlyReport(undefined, previousMonth));
+  const lines = rows.map((row) => ({
+    ...budgetLineFromRow(row, actuals, pace, history),
+    previousActualPaise: scopeActual(previousActuals, row.scope_type, row.scope_id)
+  }));
   const covered = new Set(lines.map((line) => `${line.scopeType}:${line.scopeId}`));
   const coveredTypeIds = new Set(lines.filter((line) => line.scopeType === "type").map((line) => line.typeId));
   const coveredSubcategoryIds = new Set(
@@ -2157,6 +2213,7 @@ export function getBudgetPlan(month = currentMonth(), asOfDate = localIsoDate(ne
 
   return {
     month: safeMonth,
+    previousMonth,
     start,
     end,
     asOfDate: pace.asOfDate,
@@ -2175,9 +2232,12 @@ export function getBudgetPlan(month = currentMonth(), asOfDate = localIsoDate(ne
       unplannedActualPaise
     },
     lines,
-    availableScopes: listBudgetScopes(safeMonth).filter(
-      (scope) => !covered.has(`${scope.scopeType}:${scope.scopeId}`)
-    )
+    availableScopes: listBudgetScopes(safeMonth)
+      .filter((scope) => !covered.has(`${scope.scopeType}:${scope.scopeId}`))
+      .map((scope) => ({
+        ...scope,
+        previousActualPaise: scopeActual(previousActuals, scope.scopeType, scope.scopeId)
+      }))
   };
 }
 
@@ -3128,6 +3188,7 @@ function listBudgetScopes(month: string): BudgetScopeSummary[] {
     }
     if (!typeBudgetIds.has(type.id) && !subcategoryBudgetTypeIds.has(type.id)) {
       scopes.push({
+        previousActualPaise: 0,
         scopeType: "type",
         scopeId: type.id,
         typeId: type.id,
@@ -3145,6 +3206,7 @@ function listBudgetScopes(month: string): BudgetScopeSummary[] {
           continue;
         }
         scopes.push({
+          previousActualPaise: 0,
           scopeType: "subcategory",
           scopeId: subcategory.id,
           typeId: type.id,
@@ -3169,6 +3231,8 @@ function resolveBudgetScope(scopeType: BudgetScopeType, scopeId: string): Budget
       throw badRequest("Selected Type is not available for budgeting.");
     }
     return {
+      // The planner fills this in; a scope on its own has no month to compare against.
+      previousActualPaise: 0,
       scopeType,
       scopeId: type.id,
       typeId: type.id,
@@ -3190,6 +3254,7 @@ function resolveBudgetScope(scopeType: BudgetScopeType, scopeId: string): Budget
     throw badRequest("Selected SubType is not available for budgeting.");
   }
   return {
+    previousActualPaise: 0,
     scopeType,
     scopeId: subcategory.id,
     typeId: type.id,
@@ -3606,7 +3671,7 @@ function requireLoanRow(id: string) {
     db
       .prepare(
         `SELECT id, name, subcategory_id, principal_amount_paise, starting_outstanding_paise,
-                start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise,
+                start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day,
                 is_archived, created_at, updated_at
          FROM loans
          WHERE id = ?`
@@ -3752,6 +3817,7 @@ function mapLoan(row: LoanRow): LoanSummary {
     annualInterestRateBps: row.annual_interest_rate_bps,
     tenureMonths: row.tenure_months,
     monthlyEmiPaise: row.monthly_emi_paise,
+    emiDueDay: row.emi_due_day ?? null,
     monthsElapsed,
     monthsLeft,
     closureMonth,
@@ -4081,7 +4147,7 @@ function getAccountRow(id: string) {
   return asRecord<AccountRow | undefined>(
     db
       .prepare(
-        `SELECT id, name, type, starting_balance_paise, credit_limit_paise,
+        `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day,
                 is_archived, created_at, updated_at
          FROM accounts
          WHERE id = ?`
@@ -4548,7 +4614,7 @@ function buildImportContext(): ImportContext {
   const accounts = asRecords<AccountRow>(
     db
       .prepare(
-        `SELECT id, name, type, starting_balance_paise, credit_limit_paise,
+        `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day,
                 is_archived, created_at, updated_at
          FROM accounts
          WHERE is_archived = 0`
@@ -4622,6 +4688,7 @@ function ensureImportAccount(
     type,
     starting_balance_paise: 0,
     credit_limit_paise: type === "credit_card" ? 0 : null,
+    payment_due_day: null,
     is_archived: 0,
     created_at: now,
     updated_at: now
@@ -4980,6 +5047,7 @@ function mapAccountWithBalance(account: AccountRow): AccountSummary {
       balancePaise: 0,
       outstandingPaise: outstanding,
       availableLimitPaise: Math.max(creditLimit - outstanding, 0),
+      paymentDueDay: account.payment_due_day ?? null,
       isArchived: Boolean(account.is_archived)
     };
   }
@@ -5011,6 +5079,7 @@ function mapAccountWithBalance(account: AccountRow): AccountSummary {
     balancePaise: balance,
     outstandingPaise: 0,
     availableLimitPaise: null,
+    paymentDueDay: account.payment_due_day ?? null,
     isArchived: Boolean(account.is_archived)
   };
 }

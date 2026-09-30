@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <title>Where did it go?</title>
+    <!-- The app's own stylesheets: the panels, rows, donut and chips here are the product's. -->
+    <link rel="stylesheet" href="../../src/styles.css" />
+    <link rel="stylesheet" href="../../src/theme.css" />
+    <script src="scene-data.js"></script>
+    <style>
+      @font-face {
+        font-family: "Geist Variable";
+        src: url("../../node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2") format("woff2-variations");
+        font-weight: 100 900;
+        font-display: block;
+      }
+      html, body { width: 1920px; height: 1080px; margin: 0; overflow: hidden; background: #0b0e14; }
+      body { font-family: "Geist Variable", system-ui, sans-serif; color: #e8ecf4; font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; }
+      #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+      #wash {
+        position: absolute; inset: 0; pointer-events: none;
+        background:
+          radial-gradient(1100px 680px at 8% -12%, rgba(143, 163, 234, 0.18), transparent 62%),
+          radial-gradient(900px 620px at 104% 10%, rgba(76, 195, 138, 0.10), transparent 60%);
+      }
+      /* Faint rule grid, drifting: gives the dark field some structure without noise. */
+      #grid {
+        position: absolute; inset: -80px; pointer-events: none; opacity: 0.5;
+        background-image:
+          linear-gradient(to right, rgba(232, 236, 244, 0.045) 1px, transparent 1px),
+          linear-gradient(to bottom, rgba(232, 236, 244, 0.045) 1px, transparent 1px);
+        background-size: 120px 120px;
+      }
+      .layer { position: absolute; inset: 0; opacity: 0; will-change: transform, opacity; }
+
+      /* Type: left column, never centred. */
+      #typeBlock { position: absolute; left: 140px; bottom: 132px; width: 900px; }
+      #kicker {
+        font-size: 21px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
+        color: #8fa3ea; margin-bottom: 18px;
+      }
+      #caption {
+        font-size: 62px; font-weight: 630; letter-spacing: -0.035em; line-height: 1.06; text-wrap: balance;
+      }
+      #subline { margin-top: 18px; font-size: 26px; font-weight: 540; color: #98a2b4; }
+
+      .bigFigure {
+        position: absolute; left: 140px; top: 300px;
+        font-size: 168px; font-weight: 650; letter-spacing: -0.05em; line-height: 1;
+      }
+      .figureNote { position: absolute; left: 146px; top: 500px; font-size: 26px; font-weight: 560; color: #98a2b4; }
+
+      /* A leaving transaction, styled like a row in the app. */
+      .chip {
+        position: absolute; display: flex; align-items: center; gap: 14px;
+        border: 1px solid var(--line); border-radius: 14px; background: var(--panel);
+        padding: 12px 18px; font-size: 24px; font-weight: 560; white-space: nowrap;
+        box-shadow: 0 20px 44px -26px rgba(0, 0, 0, 0.9);
+      }
+      .chip small { font-size: 20px; font-weight: 620; color: #f0837b; }
+      .chip i { width: 10px; height: 10px; border-radius: 3px; font-style: normal; }
+
+      .stagePanel {
+        position: absolute; width: 920px; padding: 34px 38px;
+        border: 1px solid var(--line); border-radius: 22px; background: var(--panel);
+        box-shadow: 0 60px 120px -60px rgba(0, 0, 0, 0.9);
+      }
+      .stagePanel h2 { margin: 0 0 18px; font-size: 26px; font-weight: 640; letter-spacing: -0.02em; }
+      .ringWrap { position: absolute; left: 690px; top: 170px; width: 490px; height: 490px; }
+      .ringWrap svg { width: 490px; height: 490px; overflow: visible; }
+      .ringCentre { position: absolute; inset: 0; display: grid; place-content: center; }
+      .ringCentre span { display: block; font-size: 22px; color: #98a2b4; font-weight: 560; }
+      .ringCentre strong { display: block; font-size: 54px; font-weight: 650; letter-spacing: -0.03em; }
+
+      .legendRow {
+        position: absolute; left: 1270px; display: grid; grid-template-columns: 15px 300px 150px;
+        align-items: center; gap: 20px; font-size: 28px; font-weight: 550;
+      }
+      .legendRow i { width: 15px; height: 15px; border-radius: 4px; font-style: normal; }
+      .legendRow b { font-weight: 640; justify-self: end; }
+
+      .barRow { position: absolute; left: 700px; width: 900px; }
+      .barRow .barHead { display: flex; justify-content: space-between; font-size: 27px; font-weight: 560; margin-bottom: 12px; }
+      .barRow .barTrack { position: relative; height: 20px; border-radius: 999px; background: rgba(232, 236, 244, 0.07); overflow: hidden; }
+      .barRow .barFill { height: 100%; border-radius: 999px; transform-origin: left center; }
+      .barRow .ghost { position: absolute; right: 0; top: 0; font-size: 20px; color: #98a2b4; font-weight: 540; }
+      /* Where last month landed on the same scale, so the two months read as one line. */
+      .barRow .barMark { position: absolute; top: 0; width: 4px; height: 100%; background: rgba(232, 236, 244, 0.82); }
+
+      /* The app's own upcoming-row, set at title-card size. Structure and classes are the product's;
+         only the scale is ours, the way a component looks blown up on a slide. */
+      .filmScale .upcoming-row {
+        position: absolute; left: 700px; width: 880px; box-sizing: border-box;
+        padding: 14px 22px; border-radius: 16px; background: var(--panel-soft); gap: 18px;
+      }
+      .filmScale .upcoming-icon {
+        width: 46px; height: 46px; border-radius: 13px;
+        background: rgba(143, 163, 234, 0.16); color: #8fa3ea; font-size: 22px; font-weight: 640;
+      }
+      .filmScale .upcoming-main strong { font-size: 25px; font-weight: 600; }
+      .filmScale .upcoming-main small { font-size: 19px; color: #98a2b4; font-weight: 520; }
+      .filmScale .upcoming-row > b { font-size: 25px; font-weight: 640; color: #f0837b; }
+      .filmScale .upcoming-total {
+        position: absolute; left: 700px; width: 880px; box-sizing: border-box;
+        padding-top: 20px; font-size: 24px; color: #98a2b4;
+      }
+      .filmScale .upcoming-total strong { font-size: 46px; font-weight: 650; letter-spacing: -0.03em; color: #e8ecf4; }
+      .groupLabel { position: absolute; left: 700px; font-size: 19px; font-weight: 620; letter-spacing: 0.1em; text-transform: uppercase; color: #8fa3ea; }
+
+      .switchPill {
+        position: absolute; display: inline-flex; gap: 4px; padding: 5px;
+        border: 1px solid var(--line); border-radius: 999px; background: var(--panel-soft);
+        font-size: 20px; font-weight: 560; color: #98a2b4;
+      }
+      .switchPill span { padding: 7px 20px; border-radius: 999px; }
+      .switchPill span.on { background: var(--panel); color: #e8ecf4; box-shadow: inset 0 0 0 1px var(--line); }
+
+      /* filmMetric, not metric: the app already owns .metric and it is a bordered flex row. */
+      .filmMetric { position: absolute; }
+      .filmMetric span { display: block; font-size: 22px; color: #98a2b4; font-weight: 560; margin-bottom: 8px; }
+      .filmMetric strong { display: block; font-size: 58px; font-weight: 650; letter-spacing: -0.035em; }
+
+      .mark {
+        position: absolute; width: 132px; height: 132px; border-radius: 36px; display: grid; place-items: center;
+        background: #e8ecf4; color: #0b0e14; font-size: 74px; font-weight: 640;
+      }
+      .wordmark { position: absolute; font-size: 78px; font-weight: 650; letter-spacing: -0.04em; }
+      #vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(125% 85% at 55% 45%, transparent 52%, rgba(3, 5, 9, 0.62) 100%); }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <div id="wash"></div>
+      <div id="grid"></div>
+      <div id="layers"></div>
+      <div id="typeBlock">
+        <div id="kicker"></div>
+        <div id="caption"></div>
+        <div id="subline"></div>
+      </div>
+      <div id="vignette"></div>
+    </div>
+
+    <script>
+      // Every frame is a pure function of time. Nothing animates on its own; __render(t) sets styles.
+      const DATA = window.__SCENE_DATA;
+      const STORY = window.__STORY;
+      const BAR = STORY.barSeconds;
+      const layers = document.getElementById("layers");
+      const rupees = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
+      const money = (paise) => rupees.format(Math.round(paise / 100));
+
+      const clamp01 = (v) => Math.max(0, Math.min(1, v));
+      const easeOut = (p) => 1 - Math.pow(1 - clamp01(p), 3);
+      const easeExpo = (p) => (p >= 1 ? 1 : 1 - Math.pow(2, -10 * clamp01(p)));
+      const easeInOut = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+      // A settling overshoot, the CSS spring this house style asks for, written as a function of time.
+      const spring = (p) => {
+        const x = clamp01(p);
+        return 1 - Math.pow(2, -9 * x) * Math.cos(x * Math.PI * 2.1);
+      };
+      const el = (tag, className, parent, text) => {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        (parent ?? layers).appendChild(node);
+        return node;
+      };
+      const layer = (id) => {
+        const node = el("div", "layer");
+        node.dataset.id = id;
+        return node;
+      };
+
+      // ---------- Act 1: a salary lands, then leaves in pieces ----------
+      const actOne = layer("actOne");
+      const figure = el("div", "bigFigure", actOne, money(0));
+      const figureNote = el("div", "figureNote", actOne, "Salary, HDFC Salary account");
+      const chips = DATA.chips.map((chip, index) => {
+        const node = el("div", "chip", actOne);
+        const swatch = el("i", null, node);
+        swatch.style.background = DATA.categories[index % DATA.categories.length].color;
+        el("span", null, node, chip.label);
+        el("small", null, node, "-" + money(chip.amountPaise));
+        // Deterministic scatter: each chip gets its own lane and spin.
+        node.dataset.dx = String(760 + (index % 3) * 240);
+        node.dataset.dy = String(210 + index * 118);
+        node.dataset.spin = String((index % 2 === 0 ? 1 : -1) * (5 + index * 2.5));
+        return node;
+      });
+
+      // ---------- Act 2: the app catches every piece ----------
+      const actTwo = layer("actTwo");
+      const ringWrap = el("div", "ringWrap", actTwo);
+      const RADIUS = 150;
+      const CIRC = 2 * Math.PI * RADIUS;
+      const total = DATA.categories.reduce((sum, c) => sum + c.amountPaise, 0);
+      const svgNs = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(svgNs, "svg");
+      svg.setAttribute("viewBox", "0 0 420 420");
+      svg.setAttribute("class", "donut-chart");
+      ringWrap.appendChild(svg);
+      const track = document.createElementNS(svgNs, "circle");
+      track.setAttribute("class", "donut-track");
+      track.setAttribute("cx", "210"); track.setAttribute("cy", "210"); track.setAttribute("r", String(RADIUS));
+      track.setAttribute("fill", "none"); track.setAttribute("stroke", "rgba(232,236,244,0.07)"); track.setAttribute("stroke-width", "46");
+      svg.appendChild(track);
+      let cursor = 0;
+      const arcs = DATA.categories.map((category) => {
+        const share = category.amountPaise / total;
+        const arc = document.createElementNS(svgNs, "circle");
+        arc.setAttribute("class", "donut-segment");
+        arc.setAttribute("cx", "210"); arc.setAttribute("cy", "210"); arc.setAttribute("r", String(RADIUS));
+        arc.setAttribute("fill", "none");
+        arc.setAttribute("stroke", category.color);
+        arc.setAttribute("stroke-width", "46");
+        arc.setAttribute("transform", "rotate(-90 210 210)");
+        svg.appendChild(arc);
+        const entry = { arc, share, offset: cursor };
+        cursor += share;
+        return entry;
+      });
+      const ringCentre = el("div", "ringCentre", ringWrap);
+      el("span", null, ringCentre, "Spent");
+      const ringTotal = el("strong", null, ringCentre, money(total));
+      const legendRows = DATA.categories.map((category, index) => {
+        const row = el("div", "legendRow", actTwo);
+        row.style.top = 214 + index * 72 + "px";
+        const swatch = el("i", null, row);
+        swatch.style.background = category.color;
+        el("span", null, row, category.name);
+        el("b", null, row, money(category.amountPaise));
+        return row;
+      });
+
+      // Bars: the app's other view of the same figures.
+      const actBars = layer("actBars");
+      const biggest = Math.max(...DATA.categories.map((c) => c.amountPaise));
+      const bars = DATA.categories.map((category, index) => {
+        const row = el("div", "barRow", actBars);
+        row.style.top = 232 + index * 96 + "px";
+        const head = el("div", "barHead", row);
+        el("span", null, head, category.name);
+        el("b", null, head, money(category.amountPaise));
+        const trackNode = el("div", "barTrack", row);
+        const fill = el("div", "barFill", trackNode);
+        fill.style.background = category.color;
+        return { row, fill, share: category.amountPaise / biggest };
+      });
+      const switchPill = el("div", "switchPill", actBars);
+      switchPill.style.left = "1408px";
+      switchPill.style.top = "168px";
+      el("span", null, switchPill, "Pie");
+      el("span", "on", switchPill, "Bar");
+
+      // ---------- Act 2b: what is due next ----------
+      // Built from the app's Coming up list: upcoming-row, upcoming-icon, upcoming-main, upcoming-total.
+      const actDue = layer("actDue");
+      actDue.classList.add("filmScale");
+      const dueList = el("div", "upcoming-list", actDue);
+      const dueGroups = [
+        { kind: "loan", label: "Loans", glyph: "L" },
+        { kind: "autopay", label: "AutoPay", glyph: "A" },
+        { kind: "card", label: "Credit cards", glyph: "C" }
+      ];
+      let dueTop = 156;
+      const dueNodes = [];
+      for (const group of dueGroups) {
+        const items = DATA.upcoming.filter((item) => item.kind === group.kind);
+        if (!items.length) continue;
+        const label = el("div", "groupLabel", dueList, group.label);
+        label.style.top = dueTop + "px";
+        dueNodes.push({ node: label, order: dueNodes.length });
+        dueTop += 32;
+        for (const item of items) {
+          const row = el("div", "upcoming-row" + (item.daysAway <= 3 ? " soon" : ""), dueList);
+          row.style.top = dueTop + "px";
+          el("div", "upcoming-icon", row, group.glyph);
+          const main = el("div", "upcoming-main", row);
+          el("strong", null, main, item.name);
+          el("small", null, main, "in " + item.daysAway + " days");
+          el("b", null, row, money(item.amountPaise));
+          dueNodes.push({ node: row, order: dueNodes.length });
+          dueTop += 94;
+        }
+      }
+      const dueTotal = el("div", "upcoming-total", dueList);
+      dueTotal.style.top = dueTop + 10 + "px";
+      el("span", null, dueTotal, "Due in the next 7 days");
+      const dueTotalValue = el("strong", null, dueTotal, money(0));
+
+      // ---------- Act 2c: this month against last month ----------
+      const actBudget = layer("actBudget");
+      const budgetRows = DATA.budgets.map((budget, index) => {
+        const row = el("div", "barRow", actBudget);
+        row.style.top = 268 + index * 158 + "px";
+        const head = el("div", "barHead", row);
+        el("span", null, head, budget.name);
+        el("b", null, head, money(budget.actualPaise) + " of " + money(budget.planPaise));
+        const trackNode = el("div", "barTrack", row);
+        trackNode.style.height = "26px";
+        const ceiling = Math.max(budget.actualPaise, budget.planPaise, budget.lastMonthPaise);
+        const fill = el("div", "barFill", trackNode);
+        fill.style.background = budget.actualPaise > budget.planPaise ? "#f0837b" : "#4cc38a";
+        const marker = el("div", "barMark", trackNode);
+        marker.style.left = (budget.lastMonthPaise / ceiling) * 100 + "%";
+        const note = el("div", "ghost", row, "Last month " + money(budget.lastMonthPaise));
+        note.style.top = "-38px";
+        return { row, marker, fill, note, actual: budget.actualPaise / ceiling };
+      });
+
+      // ---------- Act 3: the month, resolved ----------
+      const actEnd = layer("actEnd");
+      const cashPanel = el("div", "panel stagePanel", actEnd);
+      cashPanel.style.left = "840px";
+      cashPanel.style.top = "270px";
+      el("h2", null, cashPanel, "Cashflow, September");
+      const cashGrid = el("div", null, cashPanel);
+      cashGrid.style.display = "grid";
+      cashGrid.style.gridTemplateColumns = "repeat(2, minmax(0, 1fr))";
+      cashGrid.style.gap = "26px 30px";
+      const cashCells = [
+        { label: "Inflow", paise: DATA.figures.salaryPaise.value, tone: "#4cc38a" },
+        { label: "Outflow", paise: DATA.figures.outflowPaise.value, tone: "#f0837b" },
+        { label: "Saved", paise: DATA.figures.savedPaise.value, tone: "#4cc38a" },
+        { label: "Savings rate", percent: DATA.figures.savingsRatePercent.value, tone: "#4cc38a" }
+      ].map((cell) => {
+        const box = el("div", null, cashGrid);
+        box.style.transformOrigin = "left center";
+        const label = el("span", null, box, cell.label);
+        label.style.display = "block";
+        label.style.fontSize = "21px";
+        label.style.color = "#98a2b4";
+        label.style.fontWeight = "560";
+        const value = el("strong", null, box, "");
+        value.style.display = "block";
+        value.style.fontSize = "44px";
+        value.style.fontWeight = "650";
+        value.style.letterSpacing = "-0.03em";
+        value.style.color = cell.tone;
+        return { ...cell, box, value };
+      });
+
+      const savedBig = el("div", "filmMetric", actEnd);
+      savedBig.style.left = "140px";
+      savedBig.style.top = "330px";
+      const savedLabel = el("span", null, savedBig, "Saved in September");
+      savedLabel.style.fontSize = "26px";
+      const savedValue = el("strong", null, savedBig, money(0));
+      savedValue.style.fontSize = "132px";
+      savedValue.style.color = "#4cc38a";
+      savedValue.style.letterSpacing = "-0.05em";
+      const savedRate = el("div", "figureNote", actEnd, "");
+      savedRate.style.top = "560px";
+      savedRate.style.fontSize = "34px";
+
+      const closing = layer("closing");
+      const mark = el("div", "mark", closing, "₹");
+      mark.style.left = "140px";
+      mark.style.top = "330px";
+      const wordmark = el("div", "wordmark", closing, "Financial Tracker");
+      wordmark.style.left = "140px";
+      wordmark.style.top = "506px";
+
+      // ==== PER-FRAME REGION ==== everything below here runs once per rendered frame,
+      // so it may only touch transform, opacity, filter and colour. Nothing above this
+      // line runs again after the page is built.
+      const show = (node, value) => { node.style.opacity = String(clamp01(value)); };
+      /**
+       * A cut on the bar: the outgoing layer holds all the way to the downbeat and
+       * clears in two frames, so no frame of the film is a muddy double exposure.
+       */
+      const cut = (t, start, end, fadeIn = 0.14, fadeOut = 0.07) =>
+        clamp01(Math.min(easeOut((t - start) / fadeIn), 1 - easeOut((t - (end - fadeOut)) / fadeOut)));
+
+      const scenes = Object.fromEntries(STORY.scenes.map((scene) => [scene.id, scene]));
+      const at = (id) => scenes[id];
+      const local = (t, id) => (t - at(id).start) / (at(id).end - at(id).start);
+      const kicker = document.getElementById("kicker");
+      const caption = document.getElementById("caption");
+      const subline = document.getElementById("subline");
+      const typeBlock = document.getElementById("typeBlock");
+      const grid = document.getElementById("grid");
+
+      function renderType(t) {
+        // The caption on screen is the last one to have started, not whichever scene we are in:
+        // a line is allowed to run past its own bar, and the next line takes over when it starts.
+        let scene = STORY.scenes[0];
+        for (const candidate of STORY.scenes) {
+          if (t >= candidate.caption.start) scene = candidate;
+        }
+        // The closing card carries the wordmark itself, so its kicker is empty and collapses.
+        kicker.textContent = scene.kicker;
+        caption.textContent = scene.caption.text;
+        subline.textContent = scene.subline ?? "";
+        const inP = easeOut((t - scene.caption.start) / 0.42);
+        const outP = 1 - easeOut((t - (scene.caption.end - 0.16)) / 0.16);
+        const shown = Math.min(inP, Math.max(outP, 0));
+        typeBlock.style.opacity = String(clamp01(shown));
+        typeBlock.style.transform = `translateY(${(1 - clamp01(inP)) * 26}px)`;
+      }
+
+      window.__render = (t) => {
+        // Background: the grid drifts a little, so a static frame still feels alive.
+        grid.style.transform = `translate3d(${-(t * 9) % 120}px, ${-(t * 5) % 120}px, 0)`;
+
+        // --- Act 1 ---
+        const salary = at("salary");
+        const leaks = at("leaks");
+        const question = at("question");
+        const actOneShown = t < question.end;
+        show(actOne, actOneShown ? cut(t, salary.start, question.end, 0.5) : 0);
+        if (actOneShown) {
+          const countUp = easeExpo(local(t, "salary") * 1.15);
+          const salaryPaise = DATA.figures.salaryPaise.value;
+          const savedPaise = DATA.figures.savedPaise.value;
+          const drain = t < leaks.start ? 0 : easeInOut(clamp01((t - leaks.start) / (question.start + 1.2 - leaks.start)));
+          const value = t < leaks.start ? salaryPaise * countUp : salaryPaise - (salaryPaise - savedPaise) * drain;
+          figure.textContent = money(value);
+          const settle = spring(clamp01(t / 0.75));
+          figure.style.transform = `translateY(${(1 - settle) * 40}px) scale(${0.96 + 0.04 * settle})`;
+          show(figureNote, easeOut((t - 0.45) / 0.5) * (1 - easeOut((t - leaks.start) / 0.5)));
+          figure.style.filter = t > question.start ? `blur(${easeInOut(local(t, "question")) * 7}px)` : "blur(0px)";
+          figure.style.color = t > question.start ? "#7c8598" : "#e8ecf4";
+
+          chips.forEach((chip, index) => {
+            const launch = leaks.start + index * 0.16;
+            const p = clamp01((t - launch) / 1.5);
+            const e = easeOut(p);
+            const dx = Number(chip.dataset.dx);
+            const dy = Number(chip.dataset.dy);
+            const spin = Number(chip.dataset.spin);
+            // Each piece leaves the figure and tumbles off to the right.
+            const x = 250 + e * dx;
+            const y = 430 + e * (dy - 430) - Math.sin(e * Math.PI) * 90;
+            const drift = t > question.start ? easeInOut(local(t, "question")) : 0;
+            chip.style.transform = `translate3d(${x + drift * 420}px, ${y - drift * 40}px, 0) rotate(${spin * e + drift * spin}deg) scale(${0.9 + 0.1 * e})`;
+            show(chip, Math.min(e * 1.6, 1) * (1 - drift * 0.85));
+          });
+        }
+
+        // --- Act 2: the catch, the ring, the legend ---
+        const c = at("catch");
+        const legend = at("legend");
+        const views = at("views");
+        // The ring holds to the toggle on bar 6, then clears before the bars arrive.
+        const ringOut = views.start + 0.12;
+        const inTwo = t >= c.start && t < ringOut;
+        show(actTwo, inTwo ? cut(t, c.start, ringOut, 0.2, 0.12) : 0);
+        if (inTwo) {
+          // The arcs sweep in one after another, like the app drawing its own chart.
+          arcs.forEach((entry, index) => {
+            const start = c.start + 0.12 + index * 0.11;
+            const p = easeOut((t - start) / 0.85);
+            const length = entry.share * CIRC * p;
+            entry.arc.setAttribute("stroke-dasharray", `${Math.max(length - 3, 0.5)} ${CIRC}`);
+            entry.arc.setAttribute("stroke-dashoffset", String(-entry.offset * CIRC));
+          });
+          const ringIn = spring(clamp01((t - c.start) / 0.9));
+          // On the toggle the ring shrinks away, so the bars are not laid over it.
+          const leaving = easeInOut(clamp01((t - views.start) / 0.12));
+          ringWrap.style.transform = `translate3d(0, ${(1 - ringIn) * 40}px, 0) scale(${(0.9 + 0.1 * ringIn) * (1 - 0.18 * leaving)})`;
+          const totalP = easeExpo(clamp01((t - c.start - 0.25) / 1.1));
+          ringTotal.textContent = money(total * totalP);
+          legendRows.forEach((row, index) => {
+            const p = easeOut((t - (legend.start - 0.35 + index * 0.1)) / 0.5);
+            show(row, p);
+            row.style.transform = `translate3d(${(1 - p) * 46}px, 0, 0)`;
+          });
+        }
+
+        // --- Act 2: the same figures as bars ---
+        const barsIn = views.start + 0.06;
+        const inBars = t >= barsIn && t < views.end;
+        show(actBars, inBars ? cut(t, barsIn, views.end, 0.16) : 0);
+        if (inBars) {
+          bars.forEach((bar, index) => {
+            const p = spring(clamp01((t - (barsIn + 0.06 + index * 0.07)) / 0.85));
+            bar.fill.style.transform = `scaleX(${clamp01(bar.share * p)})`;
+            const rowIn = easeOut((t - (barsIn + index * 0.06)) / 0.3);
+            show(bar.row, rowIn);
+            bar.row.style.transform = `translate3d(${(1 - rowIn) * 40}px, 0, 0)`;
+          });
+          const pillIn = spring(clamp01((t - barsIn - 0.1) / 0.6));
+          show(switchPill, easeOut((t - barsIn) / 0.3));
+          switchPill.style.transform = `translate3d(0, ${(1 - pillIn) * 20}px, 0)`;
+        }
+
+        // --- Act 2: what is due next ---
+        const due = at("upcoming");
+        const inDue = t >= due.start && t < due.end;
+        show(actDue, inDue ? cut(t, due.start, due.end) : 0);
+        if (inDue) {
+          for (const entry of dueNodes) {
+            const p = spring(clamp01((t - (due.start + 0.05 + entry.order * 0.09)) / 0.8));
+            show(entry.node, easeOut((t - (due.start + entry.order * 0.08)) / 0.35));
+            entry.node.style.transform = `translate3d(${(1 - p) * 70}px, 0, 0)`;
+          }
+          const totalP = easeExpo(clamp01((t - due.start - 0.55) / 1.0));
+          dueTotalValue.textContent = money(DATA.figures.upcomingTotalPaise.value * totalP);
+          show(dueTotal, easeOut((t - due.start - 0.5) / 0.4));
+        }
+
+        // --- Act 2: this month against last month ---
+        const budget = at("budget");
+        const inBudget = t >= budget.start && t < budget.end;
+        show(actBudget, inBudget ? cut(t, budget.start, budget.end) : 0);
+        if (inBudget) {
+          budgetRows.forEach((row, index) => {
+            const base = budget.start + 0.06 + index * 0.12;
+            const fillP = spring(clamp01((t - base - 0.14) / 0.9));
+            const markP = spring(clamp01((t - base - 0.5) / 0.6));
+            row.fill.style.transform = `scaleX(${clamp01(row.actual * fillP)})`;
+            row.marker.style.transform = `scaleY(${clamp01(markP)})`;
+            const rowIn = easeOut((t - base) / 0.4);
+            show(row.row, rowIn);
+            row.row.style.transform = `translate3d(${(1 - rowIn) * 36}px, 0, 0)`;
+            show(row.note, easeOut((t - base - 0.35) / 0.4));
+          });
+        }
+
+        // --- Act 3: the month resolved ---
+        const settle = at("settle");
+        const saved = at("saved");
+        const inEnd = t >= settle.start && t < saved.end;
+        show(actEnd, inEnd ? cut(t, settle.start, saved.end) : 0);
+        if (inEnd) {
+          const panelIn = spring(clamp01((t - settle.start) / 0.9));
+          cashPanel.style.transform = `translate3d(${(1 - panelIn) * 60}px, 0, 0) scale(${0.97 + 0.03 * panelIn})`;
+          show(cashPanel, easeOut((t - settle.start) / 0.4));
+          const countP = easeExpo(clamp01((t - settle.start - 0.2) / 1.2));
+          // On the last bar the panel stays, but everything except Saved falls back,
+          // so the hero number on the left reads as that cell pulled out and magnified.
+          const focus = easeInOut(clamp01((t - saved.start) / 0.5));
+          for (const cell of cashCells) {
+            cell.value.textContent = cell.percent === undefined ? money(cell.paise * countP) : Math.round(cell.percent * countP) + "%";
+            const hero = cell.label === "Saved";
+            show(cell.box, hero ? 1 : 1 - 0.7 * focus);
+            cell.box.style.transform = hero ? `scale(${1 + 0.06 * focus})` : "scale(1)";
+          }
+          const savedP = easeExpo(clamp01((t - saved.start - 0.15) / 1.0));
+          savedValue.textContent = "+" + money(DATA.figures.savedPaise.value * savedP);
+          savedRate.textContent = DATA.figures.savingsRatePercent.value + "% of what came in";
+          show(savedBig, easeOut((t - saved.start) / 0.4));
+          const savedIn = spring(clamp01((t - saved.start) / 0.85));
+          savedBig.style.transform = `translate3d(0, ${(1 - savedIn) * 34}px, 0)`;
+          show(savedRate, easeOut((t - saved.start - 0.5) / 0.45));
+        }
+
+        // --- Act 3: the close ---
+        const close = at("close");
+        const inClose = t >= close.start;
+        show(closing, inClose ? easeOut((t - close.start) / 0.3) : 0);
+        if (inClose) {
+          const markIn = spring(clamp01((t - close.start) / 0.8));
+          mark.style.transform = `translate3d(0, ${(1 - markIn) * 26}px, 0) scale(${0.88 + 0.12 * markIn})`;
+          const wordIn = easeOut((t - close.start - 0.2) / 0.5);
+          show(wordmark, wordIn);
+          wordmark.style.transform = `translate3d(${(1 - wordIn) * 26}px, 0, 0)`;
+        }
+
+        renderType(t);
+      };
+
+      window.__ready = false;
+      Promise.all([document.fonts.ready]).then(() => {
+        window.__render(0);
+        window.__ready = true;
+      });
+    </script>
+  </body>
+</html>

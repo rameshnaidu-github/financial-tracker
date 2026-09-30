@@ -1,0 +1,264 @@
+{
+  "title": "Where did it go?",
+  "bpm": 120,
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "durationSeconds": 22,
+  "barSeconds": 2,
+  "question": "Where did it go?",
+  "answer": "Month end, nothing missing. Now you know.",
+  "acts": [
+    {
+      "id": "problem",
+      "title": "A salary lands and disappears",
+      "startBar": 1,
+      "endBar": 3
+    },
+    {
+      "id": "catch",
+      "title": "The app catches every piece",
+      "startBar": 4,
+      "endBar": 8
+    },
+    {
+      "id": "resolution",
+      "title": "The month ends known, and private",
+      "startBar": 9,
+      "endBar": 11
+    }
+  ],
+  "scenes": [
+    {
+      "id": "salary",
+      "act": "problem",
+      "bar": 1,
+      "start": 0,
+      "end": 2,
+      "kind": "dom",
+      "kicker": "1 September",
+      "caption": {
+        "text": "A salary lands.",
+        "start": 0.5,
+        "end": 2.3
+      }
+    },
+    {
+      "id": "leaks",
+      "act": "problem",
+      "bar": 2,
+      "start": 2,
+      "end": 4,
+      "kind": "dom",
+      "kicker": "The month",
+      "caption": {
+        "text": "Then it leaves.",
+        "start": 2.3,
+        "end": 4.6
+      }
+    },
+    {
+      "id": "question",
+      "act": "problem",
+      "bar": 3,
+      "start": 4,
+      "end": 6,
+      "kind": "dom",
+      "kicker": "30 September",
+      "caption": {
+        "text": "Where did it go?",
+        "start": 4.6,
+        "end": 6.5
+      }
+    },
+    {
+      "id": "catch",
+      "act": "catch",
+      "bar": 4,
+      "start": 6,
+      "end": 8,
+      "kind": "dom",
+      "kicker": "Spending mix",
+      "caption": {
+        "text": "Every rupee lands somewhere.",
+        "start": 6.5,
+        "end": 8.4
+      }
+    },
+    {
+      "id": "legend",
+      "act": "catch",
+      "bar": 5,
+      "start": 8,
+      "end": 10,
+      "kind": "dom",
+      "kicker": "Spending mix",
+      "caption": {
+        "text": "Named and counted.",
+        "start": 8.4,
+        "end": 10.3
+      }
+    },
+    {
+      "id": "views",
+      "act": "catch",
+      "bar": 6,
+      "start": 10,
+      "end": 12,
+      "kind": "dom",
+      "kicker": "Two views",
+      "caption": {
+        "text": "Ring, or bars.",
+        "start": 10.3,
+        "end": 12.3
+      }
+    },
+    {
+      "id": "upcoming",
+      "act": "catch",
+      "bar": 7,
+      "start": 12,
+      "end": 14,
+      "kind": "dom",
+      "kicker": "Coming up in 7 days",
+      "caption": {
+        "text": "It warns you what's due.",
+        "start": 12.3,
+        "end": 14.3
+      }
+    },
+    {
+      "id": "budget",
+      "act": "catch",
+      "bar": 8,
+      "start": 14,
+      "end": 16,
+      "kind": "dom",
+      "kicker": "Budget planner",
+      "caption": {
+        "text": "Against last month.",
+        "start": 14.3,
+        "end": 16.3
+      }
+    },
+    {
+      "id": "settle",
+      "act": "resolution",
+      "bar": 9,
+      "start": 16,
+      "end": 18,
+      "kind": "dom",
+      "kicker": "Cashflow",
+      "caption": {
+        "text": "Month end, nothing missing.",
+        "start": 16.3,
+        "end": 18.4
+      }
+    },
+    {
+      "id": "saved",
+      "act": "resolution",
+      "bar": 10,
+      "start": 18,
+      "end": 20,
+      "kind": "dom",
+      "kicker": "September saved",
+      "caption": {
+        "text": "Now you know.",
+        "start": 18.4,
+        "end": 20
+      }
+    },
+    {
+      "id": "close",
+      "act": "resolution",
+      "bar": 11,
+      "start": 20,
+      "end": 22,
+      "kind": "dom",
+      "kicker": "",
+      "caption": {
+        "text": "All on your machine.",
+        "start": 20,
+        "end": 22
+      },
+      "subline": "No cloud, no sign-up."
+    }
+  ],
+  "music": {
+    "key": "D minor",
+    "sections": [
+      {
+        "bars": [
+          1,
+          2
+        ],
+        "name": "question",
+        "energy": "low",
+        "parts": [
+          "kick",
+          "bass",
+          "hat"
+        ]
+      },
+      {
+        "bars": [
+          3,
+          3
+        ],
+        "name": "riser",
+        "energy": "building",
+        "parts": [
+          "kick",
+          "bass",
+          "hat",
+          "riser",
+          "snareRoll"
+        ]
+      },
+      {
+        "bars": [
+          4,
+          8
+        ],
+        "name": "drop",
+        "energy": "high",
+        "parts": [
+          "kick",
+          "bass",
+          "hat",
+          "clap",
+          "arp",
+          "lead"
+        ]
+      },
+      {
+        "bars": [
+          9,
+          9
+        ],
+        "name": "break",
+        "energy": "low",
+        "parts": [
+          "pad",
+          "shimmer"
+        ]
+      },
+      {
+        "bars": [
+          10,
+          11
+        ],
+        "name": "resolve",
+        "energy": "medium",
+        "parts": [
+          "kick",
+          "bass",
+          "pad",
+          "arp",
+          "hit"
+        ]
+      }
+    ]
+  }
+}

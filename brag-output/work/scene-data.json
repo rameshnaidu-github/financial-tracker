@@ -1,0 +1,156 @@
+{
+  "source": "http://127.0.0.1:4502 (the app running against the seeded demo database), read 2026-09-29",
+  "month": "2026-09",
+  "figures": {
+    "salaryPaise": {
+      "value": 15200000,
+      "from": "/api/overview summary.totalInflowPaise"
+    },
+    "outflowPaise": {
+      "value": 7904000,
+      "from": "/api/overview summary.totalOutflowPaise"
+    },
+    "savedPaise": {
+      "value": 7296000,
+      "from": "inflow minus outflow, as the Cashflow panel shows it"
+    },
+    "savingsRatePercent": {
+      "value": 48,
+      "from": "saved over inflow"
+    },
+    "upcomingTotalPaise": {
+      "value": 7165500,
+      "from": "/api/upcoming?windowDays=7 totalPaise"
+    }
+  },
+  "chips": [
+    {
+      "label": "Park",
+      "amountPaise": 4000,
+      "from": "/api/overview recentTransactions"
+    },
+    {
+      "label": "Fuel",
+      "amountPaise": 420000,
+      "from": "/api/overview recentTransactions"
+    },
+    {
+      "label": "Reliance Smart",
+      "amountPaise": 1890000,
+      "from": "/api/overview recentTransactions"
+    },
+    {
+      "label": "Swiggy",
+      "amountPaise": 340000,
+      "from": "/api/overview recentTransactions"
+    },
+    {
+      "label": "Croma TV",
+      "amountPaise": 2450000,
+      "from": "/api/overview recentTransactions"
+    }
+  ],
+  "categories": [
+    {
+      "name": "Rent",
+      "amountPaise": 2800000,
+      "color": "#0f766e",
+      "from": "/api/overview categoryReport"
+    },
+    {
+      "name": "Shopping",
+      "amountPaise": 2450000,
+      "color": "#db2777",
+      "from": "/api/overview categoryReport"
+    },
+    {
+      "name": "Groceries",
+      "amountPaise": 1890000,
+      "color": "#16a34a",
+      "from": "/api/overview categoryReport"
+    },
+    {
+      "name": "Transport",
+      "amountPaise": 420000,
+      "color": "#2563eb",
+      "from": "/api/overview categoryReport"
+    },
+    {
+      "name": "Dining/Food",
+      "amountPaise": 340000,
+      "color": "#f97316",
+      "from": "/api/overview categoryReport"
+    },
+    {
+      "name": "Health",
+      "amountPaise": 4000,
+      "color": "#10b981",
+      "from": "/api/overview categoryReport"
+    }
+  ],
+  "upcoming": [
+    {
+      "kind": "loan",
+      "name": "Car Loan",
+      "amountPaise": 1660700,
+      "dueDate": "2026-10-01",
+      "daysAway": 2,
+      "from": "/api/upcoming?windowDays=7 items"
+    },
+    {
+      "kind": "autopay",
+      "name": "Cult.fit",
+      "amountPaise": 199900,
+      "dueDate": "2026-10-02",
+      "daysAway": 3,
+      "from": "/api/upcoming?windowDays=7 items"
+    },
+    {
+      "kind": "card",
+      "name": "Yes Bank",
+      "amountPaise": 3110000,
+      "dueDate": "2026-10-03",
+      "daysAway": 4,
+      "from": "/api/upcoming?windowDays=7 items"
+    },
+    {
+      "kind": "autopay",
+      "name": "Netflix",
+      "amountPaise": 64900,
+      "dueDate": "2026-10-04",
+      "daysAway": 5,
+      "from": "/api/upcoming?windowDays=7 items"
+    },
+    {
+      "kind": "card",
+      "name": "ICICI Amazon",
+      "amountPaise": 2130000,
+      "dueDate": "2026-10-05",
+      "daysAway": 6,
+      "from": "/api/upcoming?windowDays=7 items"
+    }
+  ],
+  "budgets": [
+    {
+      "name": "Transport",
+      "planPaise": 300000,
+      "actualPaise": 420000,
+      "lastMonthPaise": 240000,
+      "from": "/api/budgets lines"
+    },
+    {
+      "name": "Groceries",
+      "planPaise": 1400000,
+      "actualPaise": 1890000,
+      "lastMonthPaise": 1200000,
+      "from": "/api/budgets lines"
+    },
+    {
+      "name": "Dining/Food",
+      "planPaise": 400000,
+      "actualPaise": 340000,
+      "lastMonthPaise": 320000,
+      "from": "/api/budgets lines"
+    }
+  ]
+}

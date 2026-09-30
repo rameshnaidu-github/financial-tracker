@@ -63,7 +63,8 @@ export const Api = {
   updateSettings: (body: { cardUtilizationAlertPercent: number }) =>
     api<Record<string, string>>("/api/settings", { method: "PATCH", body }),
   wealth: () => api<WealthSummary>("/api/wealth"),
-  upcoming: () => api<UpcomingPayments>("/api/upcoming"),
+  upcoming: (windowDays = 7) =>
+    api<UpcomingPayments>(`/api/upcoming?${new URLSearchParams({ windowDays: String(windowDays) })}`),
   overview: (accountId?: string, month?: string) => {
     const params = new URLSearchParams();
     if (accountId) params.set("accountId", accountId);
@@ -76,10 +77,17 @@ export const Api = {
     type: "bank" | "credit_card" | "food_card";
     startingBalancePaise: number;
     creditLimitPaise?: number;
+    paymentDueDay?: number | null;
   }) => api<Account>("/api/accounts", { method: "POST", body }),
   updateAccount: (
     id: string,
-    body: { name?: string; startingBalancePaise?: number; creditLimitPaise?: number; isArchived?: boolean }
+    body: {
+      name?: string;
+      startingBalancePaise?: number;
+      creditLimitPaise?: number;
+      paymentDueDay?: number | null;
+      isArchived?: boolean;
+    }
   ) =>
     api<Account>(`/api/accounts/${id}`, { method: "PATCH", body }),
   deleteAccount: (id: string) =>
@@ -102,6 +110,7 @@ export const Api = {
     annualInterestRateBps: number;
     tenureMonths: number;
     monthlyEmiPaise: number;
+    emiDueDay?: number | null;
   }) => api<Loan>("/api/loans", { method: "POST", body }),
   updateLoan: (id: string, body: Partial<{
     name: string;
@@ -112,6 +121,7 @@ export const Api = {
     annualInterestRateBps: number;
     tenureMonths: number;
     monthlyEmiPaise: number;
+    emiDueDay: number | null;
     isArchived: boolean;
   }>) => api<Loan>(`/api/loans/${id}`, { method: "PATCH", body }),
   archiveLoan: (id: string) =>

@@ -30,6 +30,7 @@ export type Account = {
   balancePaise: number;
   outstandingPaise: number;
   availableLimitPaise: number | null;
+  paymentDueDay: number | null;
   isArchived: boolean;
 };
 
@@ -170,6 +171,7 @@ export type Loan = {
   annualInterestRateBps: number;
   tenureMonths: number;
   monthlyEmiPaise: number;
+  emiDueDay: number | null;
   monthsElapsed: number;
   monthsLeft: number | null;
   closureMonth: string | null;
@@ -239,7 +241,7 @@ export type Overview = {
 
 export type UpcomingPayment = {
   id: string;
-  kind: "autopay" | "loan";
+  kind: "autopay" | "loan" | "card";
   name: string;
   dueDate: string;
   daysAway: number;
@@ -376,6 +378,8 @@ export type PaymentHistory = { source: string; id: string; year: number; months:
 export type BudgetStatus = "safe" | "watch" | "critical" | "over";
 
 export type BudgetScope = {
+  /** What this category actually cost in the month before the one being planned. */
+  previousActualPaise: number;
   scopeType: BudgetScopeType;
   scopeId: string;
   typeId: string;
@@ -405,6 +409,7 @@ export type BudgetLine = BudgetScope & {
 
 export type BudgetPlan = {
   month: string;
+  previousMonth: string;
   start: string;
   end: string;
   asOfDate: string;

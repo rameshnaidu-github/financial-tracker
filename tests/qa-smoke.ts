@@ -2253,6 +2253,305 @@ test("upcoming payments list AutoPay and EMIs due soon, skipping months already 
   );
 });
 
+test("the budget plan reports last month's spend per category", () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = services.createAccount({ name: `QA Budget Bank ${suffix}`, type: "bank", startingBalancePaise: 5_00_000_00 });
+  const spend = (date: string, amountPaise: number, subcategory: string) =>
+    services.createTransaction({
+      date,
+      accountId: bank.id,
+      method: "upi",
+      merchant: "QA budget spend",
+      typeId: typeId("Expense"),
+      subcategoryId: subcategoryId("Expense", subcategory),
+      amountPaise,
+      direction: "outflow",
+      kind: "expense"
+    });
+
+  // Two months of groceries, one month of dining.
+  spend("2028-01-06", 4_000_00, "Groceries");
+  spend("2028-01-20", 2_500_00, "Groceries");
+  spend("2028-01-11", 1_200_00, "Dining/Food");
+  spend("2028-02-04", 900_00, "Groceries");
+
+  const groceries = subcategoryId("Expense", "Groceries");
+  services.createBudgetLine({ month: "2028-02", scopeType: "subcategory", scopeId: groceries, amountPaise: 7_000_00 });
+
+  const plan = services.getBudgetPlan("2028-02", "2028-02-10");
+  assert(plan.previousMonth === "2028-01", `The plan should name the previous month, got ${plan.previousMonth}.`);
+  const line = plan.lines.find((item) => item.scopeId === groceries);
+  assert(line, "The groceries line should be planned.");
+  assert(
+    line.previousActualPaise === 6_500_00,
+    `Groceries cost 6,500 last month, the plan says ${line.previousActualPaise}.`
+  );
+  assert(line.actualPaise === 900_00, `This month's spend should stay separate, got ${line.actualPaise}.`);
+
+  // A category with no plan yet still carries last month's figure, which is the point of the feature.
+  const dining = plan.availableScopes.find((scope) => scope.scopeId === subcategoryId("Expense", "Dining/Food"));
+  assert(dining, "Dining should be offered as a scope to plan.");
+  assert(
+    dining.previousActualPaise === 1_200_00,
+    `Dining cost 1,200 last month, the plan says ${dining.previousActualPaise}.`
+  );
+  const untouched = plan.availableScopes.find((scope) => scope.scopeId === subcategoryId("Expense", "Health"));
+  assert(untouched?.previousActualPaise === 0, "A category with no spend last month should report zero.");
+});
+
+test("the account editor payload saves a card's due day", () => {
+  const suffix = Date.now().toString().slice(-5);
+  const card = services.createAccount({
+    name: `QA Editor Card ${suffix}`,
+    type: "credit_card",
+    startingBalancePaise: 2_000_00,
+    creditLimitPaise: 1_00_000_00
+  });
+  services.createTransaction({
+    date: "2027-04-02",
+    accountId: card.id,
+    method: "credit_card",
+    merchant: "QA editor spend",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Shopping"),
+    amountPaise: 3_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  // Exactly what the inline editor sends: every field at once, including the due day.
+  services.updateAccount(card.id, {
+    name: `QA Editor Card ${suffix}`,
+    startingBalancePaise: 2_000_00,
+    creditLimitPaise: 1_00_000_00,
+    paymentDueDay: 21
+  });
+  const saved = services.listAccounts().find((item) => item.id === card.id);
+  assert(saved?.paymentDueDay === 21, `The editor should store the due day, got ${saved?.paymentDueDay}.`);
+  assert(saved.outstandingPaise === 5_000_00, `Saving the editor must not disturb the balance, got ${saved.outstandingPaise}.`);
+
+  const due = services.getUpcomingPayments(14, "2027-04-15").items.find((item) => item.id === card.id);
+  assert(due?.dueDate === "2027-04-21", `The saved day should drive the reminder, got ${due?.dueDate}.`);
+
+  // Editing again without mentioning the day keeps it; clearing it explicitly removes the reminder.
+  services.updateAccount(card.id, { name: `QA Editor Card ${suffix} renamed` });
+  assert(services.listAccounts().find((item) => item.id === card.id)?.paymentDueDay === 21, "An unrelated edit must keep the day.");
+  services.updateAccount(card.id, { paymentDueDay: null });
+  assert(services.listAccounts().find((item) => item.id === card.id)?.paymentDueDay === null, "Clearing the day should be possible from the editor.");
+  assert(
+    !services.getUpcomingPayments(14, "2027-04-15").items.some((item) => item.id === card.id),
+    "A card with no due day must not be listed."
+  );
+});
+
+test("the upcoming window can be narrowed to seven days", () => {
+  const suffix = Date.now().toString().slice(-5);
+  const near = services.createLoan({
+    name: `QA Week Loan ${suffix}`,
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    principalAmountPaise: 1_00_000_00,
+    startingOutstandingPaise: 1_00_000_00,
+    startMonth: "2027-01",
+    annualInterestRateBps: 900,
+    tenureMonths: 24,
+    monthlyEmiPaise: 5_000_00,
+    emiDueDay: 14
+  });
+  const far = services.createLoan({
+    name: `QA Fortnight Loan ${suffix}`,
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    principalAmountPaise: 1_00_000_00,
+    startingOutstandingPaise: 1_00_000_00,
+    startMonth: "2027-01",
+    annualInterestRateBps: 900,
+    tenureMonths: 24,
+    monthlyEmiPaise: 4_000_00,
+    emiDueDay: 20
+  });
+
+  // Ten days out: inside a fortnight, outside a week.
+  const week = services.getUpcomingPayments(7, "2027-05-10");
+  assert(week.windowDays === 7, `The window should be reported as 7, got ${week.windowDays}.`);
+  const inWeek = week.items.find((item) => item.id === near.id);
+  assert(inWeek?.dueDate === "2027-05-14" && inWeek.daysAway === 4, `The near EMI should be listed, got ${inWeek?.dueDate}.`);
+  assert(!week.items.some((item) => item.id === far.id), "An EMI 10 days away must not appear in a 7-day window.");
+  assert(
+    week.totalPaise === week.items.reduce((sum, item) => sum + item.amountPaise, 0),
+    "The total should add up only the listed payments."
+  );
+
+  // The same data over a fortnight still shows both, so only the window changed.
+  const fortnight = services.getUpcomingPayments(14, "2027-05-10");
+  assert(
+    fortnight.items.some((item) => item.id === near.id) && fortnight.items.some((item) => item.id === far.id),
+    "Both EMIs should still be listed over 14 days."
+  );
+});
+
+test("a loan reminds from its EMI due day", () => {
+  const suffix = Date.now().toString().slice(-5);
+  const loan = services.createLoan({
+    name: `QA Due Day Loan ${suffix}`,
+    subcategoryId: subcategoryId("Loan", "Vehicle"),
+    principalAmountPaise: 5_00_000_00,
+    startingOutstandingPaise: 5_00_000_00,
+    startMonth: "2027-01",
+    annualInterestRateBps: 900,
+    tenureMonths: 60,
+    monthlyEmiPaise: 11_000_00,
+    emiDueDay: 12
+  });
+  assert(services.listLoans(true).find((item) => item.id === loan.id)?.emiDueDay === 12, "The EMI due day should be stored.");
+
+  // No EMI has ever been recorded, so before this change the loan could not remind at all.
+  const soon = services.getUpcomingPayments(14, "2027-03-05").items.find((item) => item.id === loan.id);
+  assert(soon?.dueDate === "2027-03-12" && soon.daysAway === 7, `The EMI should be due on the 12th, got ${soon?.dueDate}.`);
+  assert(soon.kind === "loan" && soon.amountPaise === 11_000_00, "The reminder should carry the EMI amount.");
+
+  // Outside the window it stays quiet, and a short month clamps to its last day.
+  assert(
+    !services.getUpcomingPayments(3, "2027-03-05").items.some((item) => item.id === loan.id),
+    "A due day beyond the window must not be listed."
+  );
+  const endOfMonth = services.createLoan({
+    name: `QA Month End Loan ${suffix}`,
+    subcategoryId: subcategoryId("Loan", "Vehicle"),
+    principalAmountPaise: 1_00_000_00,
+    startingOutstandingPaise: 1_00_000_00,
+    startMonth: "2027-01",
+    annualInterestRateBps: 900,
+    tenureMonths: 24,
+    monthlyEmiPaise: 5_000_00,
+    emiDueDay: 31
+  });
+  const clamped = services.getUpcomingPayments(14, "2027-02-20").items.find((item) => item.id === endOfMonth.id);
+  assert(clamped?.dueDate === "2027-02-28", `A 31st due day should fall on the last day of February, got ${clamped?.dueDate}.`);
+
+  // Recording the month's EMI settles it.
+  services.createTransaction({
+    date: "2027-03-12",
+    accountId: state.bankId!,
+    method: "bank_transfer",
+    typeId: typeId("Loan"),
+    subcategoryId: subcategoryId("Loan", "Vehicle"),
+    amountPaise: 11_000_00,
+    direction: "outflow",
+    kind: "emi",
+    loanId: loan.id,
+    loanPaymentType: "emi"
+  });
+  assert(
+    !services.getUpcomingPayments(14, "2027-03-05").items.some((item) => item.id === loan.id),
+    "A month whose EMI is recorded must not still be listed as due."
+  );
+
+  let rejected = false;
+  try {
+    services.createLoan({
+      name: `QA Bad Due Day ${suffix}`,
+      subcategoryId: subcategoryId("Loan", "Vehicle"),
+      principalAmountPaise: 1_00_000_00,
+      startingOutstandingPaise: 1_00_000_00,
+      startMonth: "2027-01",
+      annualInterestRateBps: 900,
+      tenureMonths: 24,
+      monthlyEmiPaise: 5_000_00,
+      emiDueDay: 32
+    });
+  } catch {
+    rejected = true;
+  }
+  assert(rejected, "A due day outside 1-31 should be rejected.");
+});
+
+test("a credit card reminds from its payment due day", () => {
+  const suffix = Date.now().toString().slice(-5);
+  const card = services.createAccount({
+    name: `QA Due Card ${suffix}`,
+    type: "credit_card",
+    startingBalancePaise: 0,
+    creditLimitPaise: 2_00_000_00,
+    paymentDueDay: 18
+  });
+  assert(services.listAccounts().find((item) => item.id === card.id)?.paymentDueDay === 18, "The payment due day should be stored.");
+
+  // Nothing owed yet, so nothing is due.
+  assert(
+    !services.getUpcomingPayments(14, "2027-03-10").items.some((item) => item.id === card.id),
+    "A card with no outstanding balance must not be listed."
+  );
+
+  services.createTransaction({
+    date: "2027-03-02",
+    accountId: card.id,
+    method: "credit_card",
+    merchant: "QA card spend",
+    typeId: typeId("Expense"),
+    subcategoryId: subcategoryId("Expense", "Shopping"),
+    amountPaise: 7_500_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+  const due = services.getUpcomingPayments(14, "2027-03-10").items.find((item) => item.id === card.id);
+  assert(due?.kind === "card", "A card bill should be its own kind of reminder.");
+  assert(due.dueDate === "2027-03-18" && due.daysAway === 8, `The card should be due on the 18th, got ${due.dueDate}.`);
+  assert(due.amountPaise === 7_500_00, `The reminder should carry what is owed, got ${due.amountPaise}.`);
+
+  // Paying the bill settles this month.
+  services.createTransaction({
+    date: "2027-03-15",
+    accountId: state.bankId!,
+    method: "bank_transfer",
+    merchant: "QA card bill",
+    typeId: typeId("Credit Card Payment"),
+    transferAccountId: card.id,
+    amountPaise: 7_500_00,
+    direction: "outflow",
+    kind: "card_payment"
+  });
+  assert(
+    !services.getUpcomingPayments(14, "2027-03-10").items.some((item) => item.id === card.id),
+    "A card paid this month must not still be listed as due."
+  );
+});
+
+test("due days are optional and survive unrelated edits", () => {
+  const suffix = Date.now().toString().slice(-5);
+  const loan = services.createLoan({
+    name: `QA No Due Day ${suffix}`,
+    subcategoryId: subcategoryId("Loan", "Personal"),
+    principalAmountPaise: 1_00_000_00,
+    startingOutstandingPaise: 1_00_000_00,
+    startMonth: "2027-01",
+    annualInterestRateBps: 900,
+    tenureMonths: 24,
+    monthlyEmiPaise: 5_000_00
+  });
+  assert(services.listLoans(true).find((item) => item.id === loan.id)?.emiDueDay === null, "A loan without a due day should store none.");
+  assert(
+    !services.getUpcomingPayments(14, "2027-03-10").items.some((item) => item.id === loan.id),
+    "A loan with no due day and no recorded EMI stays quiet, as before."
+  );
+
+  // Renaming must not wipe a due day that was set earlier.
+  services.updateLoan(loan.id, { emiDueDay: 9 });
+  services.updateLoan(loan.id, { name: `QA Renamed Loan ${suffix}` });
+  assert(services.listLoans(true).find((item) => item.id === loan.id)?.emiDueDay === 9, "An unrelated loan edit must keep the due day.");
+  services.updateLoan(loan.id, { emiDueDay: null });
+  assert(services.listLoans(true).find((item) => item.id === loan.id)?.emiDueDay === null, "Clearing the due day should be possible.");
+
+  const card = services.createAccount({
+    name: `QA Plain Card ${suffix}`,
+    type: "credit_card",
+    startingBalancePaise: 5_000_00,
+    creditLimitPaise: 1_00_000_00
+  });
+  assert(services.listAccounts().find((item) => item.id === card.id)?.paymentDueDay === null, "A card without a due day should store none.");
+  services.updateAccount(card.id, { paymentDueDay: 5 });
+  services.updateAccount(card.id, { name: `QA Renamed Card ${suffix}` });
+  assert(services.listAccounts().find((item) => item.id === card.id)?.paymentDueDay === 5, "An unrelated card edit must keep the due day.");
+});
+
 test("the overview compares a past month against the whole previous month", async () => {
   const suffix = Date.now().toString().slice(-5);
   const bank = services.createAccount({

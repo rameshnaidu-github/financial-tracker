@@ -261,12 +261,16 @@ const optionalIdSchema = z
   .transform((value) => (value === "" ? undefined : value))
   .refine((value) => value === undefined || value.length > 0, "Invalid id.");
 
+/** A day of the month a payment falls on. 31 means "the last day" in a short month. */
+export const dueDaySchema = z.number().int().min(1).max(31);
+
 export const createAccountSchema = z
   .object({
     name: z.string().trim().min(2).max(80),
     type: accountTypeSchema,
     startingBalancePaise: paiseSchema,
-    creditLimitPaise: paiseSchema.optional()
+    creditLimitPaise: paiseSchema.optional(),
+    paymentDueDay: dueDaySchema.nullish()
   })
   .superRefine((value, ctx) => {
     if (value.type === "credit_card" && value.creditLimitPaise === undefined) {
@@ -291,6 +295,7 @@ export const updateAccountSchema = z
     // Correcting the opening balance is how a user reconciles with their bank statement.
     startingBalancePaise: paiseSchema.optional(),
     creditLimitPaise: paiseSchema.optional(),
+    paymentDueDay: dueDaySchema.nullish(),
     isArchived: z.boolean().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "No account changes provided.");
@@ -318,7 +323,8 @@ export const createLoanSchema = z
     startMonth: monthSchema,
     annualInterestRateBps: z.number().int().min(0).max(100_000),
     tenureMonths: z.number().int().positive().max(600),
-    monthlyEmiPaise: positivePaiseSchema
+    monthlyEmiPaise: positivePaiseSchema,
+    emiDueDay: dueDaySchema.nullish()
   })
   .superRefine((value, ctx) => {
     if (value.startingOutstandingPaise > value.principalAmountPaise) {
@@ -340,6 +346,7 @@ export const updateLoanSchema = z
     annualInterestRateBps: z.number().int().min(0).max(100_000).optional(),
     tenureMonths: z.number().int().positive().max(600).optional(),
     monthlyEmiPaise: positivePaiseSchema.optional(),
+    emiDueDay: dueDaySchema.nullish(),
     isArchived: z.boolean().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "No loan changes provided.");

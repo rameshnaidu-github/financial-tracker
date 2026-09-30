@@ -1,0 +1,1 @@
+A salary lands, and by the 30th you have no idea where it went. I built the thing that answers that: accounts, cards, budgets, loans and investments, in rupees, in one SQLite file on my own laptop. It tells me what's due this week and what last month actually cost — no cloud, no sign-up.

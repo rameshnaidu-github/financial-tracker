@@ -42,6 +42,7 @@ import { Api } from "./api";
 import {
   currentMonth,
   formatINR,
+  formatINRCompact,
   formatINRWhole,
   formatMonth,
   formatShortDate,
@@ -108,6 +109,8 @@ type DonutSegment = {
   color: string;
   amountPaise: number;
   labelShare?: number;
+  /** A ceiling this figure is measured against, such as a credit card's limit. */
+  maxPaise?: number;
 };
 type NoticeAction = { label: string; onClick: () => void };
 type NoticeOptions = { action?: NoticeAction; durationMs?: number };
@@ -151,7 +154,11 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home; group?: Na
  */
 function withPageTransition(update: () => void) {
   const doc = document as Document & {
-    startViewTransition?: (callback: () => void) => { finished?: Promise<void> };
+    startViewTransition?: (callback: () => void) => {
+      finished?: Promise<void>;
+      ready?: Promise<void>;
+      updateCallbackDone?: Promise<void>;
+    };
   };
   // A hidden page cannot capture the snapshots a transition needs, so it would only throw.
   if (typeof doc.startViewTransition !== "function" || prefersReducedMotion() || document.hidden) {
@@ -159,13 +166,16 @@ function withPageTransition(update: () => void) {
     return;
   }
   const transition = doc.startViewTransition(() => flushSync(update));
-  // Interrupting a transition (a quick second navigation) rejects this promise. The page has
-  // already changed by then, so swallow it rather than leaving an unhandled rejection.
+  // An interrupted or skipped transition rejects all three of these. The page has already changed
+  // by then, so none of them is an error worth surfacing; leaving any uncaught logs to the console.
   transition?.finished?.catch(() => {});
+  transition?.ready?.catch(() => {});
+  transition?.updateCallbackDone?.catch(() => {});
 }
 
 const NAV_GROUPS: NavGroup[] = ["Daily", "Plan", "Own & owe", "Setup"];
 const THEME_KEY = "finance-theme";
+const INTRO_ON_LAUNCH_KEY = "finance-intro-on-launch";
 
 function storedTheme(): Theme | null {
   try {
@@ -179,6 +189,19 @@ function storedTheme(): Theme | null {
 function systemTheme(): Theme {
   if (typeof window.matchMedia !== "function") return "light";
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+/**
+ * Whether opening the app should play the intro. On by default, so a browser that refuses
+ * storage still gets the film rather than silently losing it; "0" is the only way off.
+ */
+function shouldPlayIntroOnLaunch(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(INTRO_ON_LAUNCH_KEY) !== "0";
+  } catch {
+    return true;
+  }
 }
 
 // The phone bar keeps the four daily destinations; everything else lives under "More".
@@ -288,6 +311,12 @@ export default function App() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
+  // The intro plays on every open of the app, whatever page was asked for. Decided here,
+  // synchronously at mount, so it is the first thing painted rather than something that
+  // waits for the app's data; the owner can turn it off in Profile.
+  const [introOnLaunch, setIntroOnLaunch] = useState(shouldPlayIntroOnLaunch);
+  const [introOpen, setIntroOpen] = useState(() => shouldPlayIntroOnLaunch());
+
   // Follows the system light/dark setting until the person picks one on Profile.
   const [theme, setTheme] = useState<Theme>(() => (typeof window === "undefined" ? "light" : storedTheme() ?? systemTheme()));
 
@@ -437,6 +466,28 @@ export default function App() {
     return Number.isFinite(parsed) && parsed >= 1 && parsed <= 100 ? Math.round(parsed) : 30;
   })();
   const activeAccounts = accounts.filter((account) => !account.isArchived);
+
+  // A failed boot must not sit behind a film: if the app cannot load, show why at once.
+  useEffect(() => {
+    if (error) setIntroOpen(false);
+  }, [error]);
+
+  const closeIntro = useCallback(() => {
+    setIntroOpen(false);
+  }, []);
+
+  const toggleIntroOnLaunch = useCallback(() => {
+    setIntroOnLaunch((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(INTRO_ON_LAUNCH_KEY, next ? "1" : "0");
+      } catch {
+        // Nothing to remember it with; the preference lasts for this session only.
+      }
+      return next;
+    });
+  }, []);
+
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const showAccountFilter =
     activePage !== "accounts" &&
@@ -459,29 +510,46 @@ export default function App() {
     }
   }, [activeAccounts, selectedAccountId]);
 
+  // The film covers the boot, so the data loads behind it and there is nothing to wait for
+  // when it ends. A spinner under the overlay would only be a flash on the handoff, so the
+  // loading screen stands down while the intro is up.
   if (loading) {
-    return <FullScreenState icon={<Loader2 className="spin" />} title="Loading Financial Tracker" />;
+    return (
+      <>
+        {introOpen && <IntroVideo onClose={closeIntro} />}
+        {!introOpen && <FullScreenState icon={<Loader2 className="spin" />} title="Loading Financial Tracker" />}
+      </>
+    );
   }
 
   if (error) {
-    return <FullScreenState icon={<CircleAlert />} title="Could not load app" detail={error} />;
+    return (
+      <>
+        {introOpen && <IntroVideo onClose={closeIntro} />}
+        <FullScreenState icon={<CircleAlert />} title="Could not load app" detail={error} />
+      </>
+    );
   }
 
   if (!bootstrap || activeAccounts.length === 0) {
     return (
-      <SetupPage
+      <>
+        {introOpen && <IntroVideo onClose={closeIntro} />}
+        <SetupPage
         categories={categories}
         onCreated={async () => {
           await refresh();
           navigate("overview");
           showNotice("First account added. Welcome in.");
         }}
-      />
+        />
+      </>
     );
   }
 
   return (
     <div className="app-shell">
+      {introOpen && <IntroVideo onClose={closeIntro} />}
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">₹</div>
@@ -554,7 +622,6 @@ export default function App() {
             <OverviewPage
               selectedAccountId={selectedAccountId}
               selectedAccount={selectedAccount}
-              cardAlertPercent={cardAlertPercent}
               refreshKey={refreshKey}
               onNavigate={navigate}
             />
@@ -658,7 +725,11 @@ export default function App() {
           {activePage === "faq" && <FaqPage />}
           {activePage === "profile" && (
             <ProfilePage
+              onPlayIntro={() => setIntroOpen(true)}
+              introOnLaunch={introOnLaunch}
+              onToggleIntroOnLaunch={toggleIntroOnLaunch}
               profile={profileDraft}
+              savedProfile={bootstrap.profile}
               settings={bootstrap.settings}
               backupStatus={backupStatus}
               theme={theme}
@@ -817,13 +888,11 @@ function SetupPage({
 function OverviewPage({
   selectedAccountId,
   selectedAccount,
-  cardAlertPercent,
   refreshKey,
   onNavigate
 }: {
   selectedAccountId: string;
   selectedAccount?: Account;
-  cardAlertPercent: number;
   refreshKey: number;
   onNavigate: Navigate;
 }) {
@@ -919,6 +988,8 @@ function OverviewPage({
     }))
   );
   const allocationTotal = wealth ? wealth.allocation.reduce((sum, segment) => sum + segment.valuePaise, 0) : 0;
+  const cardSegments = cardUtilisationSegments(overview.accounts);
+  const cardOutstandingPaise = cardSegments.reduce((sum, segment) => sum + segment.amountPaise, 0);
   return (
     <div className="page-grid overview-page">
       {overview.summary.uncategorizedCount > 0 && (
@@ -1031,10 +1102,9 @@ function OverviewPage({
           <Panel title="Recent activity" action={<button onClick={() => onNavigate("transactions")}>View all</button>}>
             <TransactionTable transactions={overview.recentTransactions} empty="No transactions yet." compact />
           </Panel>
-          <Panel
-            title={`Coming up in ${upcoming?.windowDays ?? 14} days`}
-            action={<button onClick={() => onNavigate("subscriptions")}>AutoPay</button>}
-          >
+          {/* No action here: the list already groups by AutoPay, loans and cards, and the
+              sidebar is how you get to AutoPay itself. */}
+          <Panel title={`Coming up in ${upcoming?.windowDays ?? 7} days`}>
             <UpcomingPaymentsList upcoming={upcoming} availableCashPaise={overview.summary.availableCashPaise} />
           </Panel>
         </div>
@@ -1065,12 +1135,16 @@ function OverviewPage({
             )}
           </Panel>
         </div>
-        <Panel title="Account snapshot" action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
-          <div className="account-stack">
-            {overview.accounts.map((account) => (
-              <OverviewAccountLine key={account.id} account={account} alertPercent={cardAlertPercent} />
-            ))}
-          </div>
+        <Panel title="Card utilisation" action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
+          <MixChart
+            segments={cardSegments}
+            totalPaise={cardOutstandingPaise}
+            ariaLabel="Credit card utilisation"
+            centerLabel="Card debt"
+            centerValue={formatINRWhole(cardOutstandingPaise)}
+            className="overview-donut-chart"
+            emptyText="No credit card owes anything right now."
+          />
         </Panel>
       </OverviewBand>
     </div>
@@ -3064,6 +3138,7 @@ function ReportsPage({
         )}
       </Panel>
 
+      <div className="report-panel-pair">
       <Panel title="Trends">
         <div className="trend-controls">
           <label className="control-field toolbar-control trend-mode-control">
@@ -3131,6 +3206,9 @@ function ReportsPage({
                   ? `${new Date().getFullYear()}, January to date`
                   : "by year"}
             </p>
+            {/* Budget vs actual carries a legend here; this holds the same row open so the
+                two charts start on the same line. */}
+            <div className="trend-legend-slot" aria-hidden="true" />
             <TrendChart points={trend.points} variant={trendStyle} color={trend.color} />
           </>
         )}
@@ -3210,6 +3288,7 @@ function ReportsPage({
           </>
         )}
       </Panel>
+      </div>
     </div>
   );
 }
@@ -3244,7 +3323,7 @@ function BudgetTrendChart({
   const withinColor = "#16a34a";
   const overColor = "#dc2626";
   const width = 760;
-  const height = 300;
+  const height = 360;
   const pad = { top: 30, right: 14, bottom: 32, left: 52 };
   const innerWidth = width - pad.left - pad.right;
   const innerHeight = height - pad.top - pad.bottom;
@@ -3407,7 +3486,7 @@ function TrendChart({
   color: string;
 }) {
   const width = 760;
-  const height = 300;
+  const height = 360;
   const pad = { top: 30, right: 14, bottom: 32, left: 14 };
   const innerWidth = width - pad.left - pad.right;
   const innerHeight = height - pad.top - pad.bottom;
@@ -3593,6 +3672,10 @@ function BudgetPlannerPage({
   const [editAmount, setEditAmount] = useState("");
 
   // Budgets are planned per Expense SubType only (no whole-Type budgets).
+  const selectedScope = useMemo(
+    () => (plan?.availableScopes ?? []).find((scope) => budgetScopeKey(scope) === subKey) ?? null,
+    [plan, subKey]
+  );
   const subScopes = useMemo(
     () =>
       (plan?.availableScopes ?? []).filter(
@@ -3769,6 +3852,25 @@ function BudgetPlannerPage({
                 <Plus size={17} />
                 Add
               </button>
+              {/* Its own row: inside a field this note made that column taller and the row went ragged. */}
+              {selectedScope && (
+                <p className="budget-last-month budget-add-note">
+                  {selectedScope.previousActualPaise > 0 ? (
+                    <>
+                      {formatMonth(plan.previousMonth)}: <strong>{formatINR(selectedScope.previousActualPaise)}</strong>
+                      <button
+                        type="button"
+                        className="text-action"
+                        onClick={() => setAmount(String(Math.round(selectedScope.previousActualPaise / 100)))}
+                      >
+                        Use this
+                      </button>
+                    </>
+                  ) : (
+                    <>Nothing spent here in {formatMonth(plan.previousMonth)}</>
+                  )}
+                </p>
+              )}
             </form>
 
             {plan.lines.length === 0 ? (
@@ -3859,6 +3961,25 @@ function BudgetLineCard({
         </div>
       </div>
 
+      <p className="budget-last-month">
+        {line.previousActualPaise > 0 ? (
+          <>
+            Last month: <strong>{formatINR(line.previousActualPaise)}</strong>
+            {line.amountPaise > 0 && (
+              <span className={gainToneClass(line.previousActualPaise - line.amountPaise)}>
+                {line.amountPaise > line.previousActualPaise
+                  ? ` (planning ${formatINR(line.amountPaise - line.previousActualPaise)} more)`
+                  : line.amountPaise < line.previousActualPaise
+                    ? ` (planning ${formatINR(line.previousActualPaise - line.amountPaise)} less)`
+                    : " (same as planned)"}
+              </span>
+            )}
+          </>
+        ) : (
+          <>Nothing spent here last month</>
+        )}
+      </p>
+
       <div className="budget-progress">
         <div>
           <span>{line.usedPercent}% used</span>
@@ -3943,6 +4064,8 @@ function AccountsPage({
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
   const activeAccounts = accounts.filter((account) => !account.isArchived);
+  const cardSegments = cardUtilisationSegments(activeAccounts);
+  const cardOutstandingPaise = cardSegments.reduce((sum, segment) => sum + segment.amountPaise, 0);
 
   async function remove(account: Account) {
     requestConfirm({
@@ -3963,7 +4086,8 @@ function AccountsPage({
   }
 
   return (
-    <div className="two-column">
+    <div className="two-column accounts-page">
+      <div className="section-column">
       <Panel title="Accounts & cards">
         {activeAccounts.length === 0 ? (
           <EmptyState text="No active accounts or cards. Add one to keep tracking." />
@@ -3988,6 +4112,21 @@ function AccountsPage({
           Deleting an unused account removes it permanently. Accounts with linked transactions are hidden so reports keep their history.
         </p>
       </Panel>
+
+
+      <Panel title="Card utilisation">
+        <MixChart
+          segments={cardSegments}
+          totalPaise={cardOutstandingPaise}
+          ariaLabel="Credit card utilisation"
+          centerLabel="Card debt"
+          centerValue={formatINRWhole(cardOutstandingPaise)}
+          className="overview-donut-chart"
+          emptyText="No credit card owes anything right now."
+        />
+      </Panel>
+      </div>
+
       <Panel title="Add account">
         <AccountForm
           onCreated={async () => {
@@ -4043,6 +4182,17 @@ function LoansPage({
     });
   }
 
+  // Biggest first, so the ring and the bars read in the same order.
+  const loanSegments = activeLoans
+    .filter((loan) => loan.outstandingPaise > 0)
+    .map((loan) => ({
+      id: loan.id,
+      name: loan.name,
+      color: loan.subcategoryColor,
+      amountPaise: loan.outstandingPaise
+    }))
+    .sort((a, b) => b.amountPaise - a.amountPaise);
+
   async function restore(loan: Loan) {
     try {
       await Api.updateLoan(loan.id, { isArchived: false });
@@ -4071,6 +4221,7 @@ function LoansPage({
       </section>
 
       <div className="two-column loans-layout">
+        <div className="section-column">
         <Panel title="Loan tracker">
           {activeLoans.length === 0 ? (
             <EmptyState text="No active loans yet." />
@@ -4104,6 +4255,19 @@ function LoansPage({
           )}
         </Panel>
 
+      <Panel title="Outstanding by loan">
+          <MixChart
+            segments={loanSegments}
+            totalPaise={activeOutstanding}
+            ariaLabel="Outstanding by loan"
+            centerLabel="Outstanding"
+            centerValue={formatINRWhole(activeOutstanding)}
+            className="overview-donut-chart"
+            emptyText="Nothing outstanding yet. Add a loan to see the split."
+          />
+        </Panel>
+        </div>
+
         <Panel title={editingLoan ? "Edit loan" : "Add loan"}>
           {loanType ? (
             <LoanForm
@@ -4122,6 +4286,8 @@ function LoansPage({
           )}
         </Panel>
       </div>
+
+
     </div>
   );
 }
@@ -4147,6 +4313,7 @@ function LoanForm({
   const [interestRate, setInterestRate] = useState(loan ? rateInputFromBps(loan.annualInterestRateBps) : "");
   const [tenureMonths, setTenureMonths] = useState(loan ? String(loan.tenureMonths) : "");
   const [monthlyEmi, setMonthlyEmi] = useState(loan ? amountInputFromPaise(loan.monthlyEmiPaise) : "");
+  const [emiDueDay, setEmiDueDay] = useState(loan?.emiDueDay ? String(loan.emiDueDay) : "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   // Your bank's EMI is the source of truth; this is the textbook figure for the terms entered.
@@ -4190,7 +4357,9 @@ function LoanForm({
         startMonth,
         annualInterestRateBps: parseRateToBps(interestRate),
         tenureMonths: Number.parseInt(tenureMonths, 10),
-        monthlyEmiPaise: parseAmountToPaise(monthlyEmi)
+        monthlyEmiPaise: parseAmountToPaise(monthlyEmi),
+        // Left blank means no reminder; clearing it on an existing loan turns the reminder off.
+        emiDueDay: emiDueDay.trim() ? Number.parseInt(emiDueDay, 10) : null
       };
 
       if (loan) {
@@ -4207,6 +4376,7 @@ function LoanForm({
         setInterestRate("");
         setTenureMonths("");
         setMonthlyEmi("");
+        setEmiDueDay("");
         await onSaved("Loan added.");
       }
     } catch (err) {
@@ -4218,6 +4388,7 @@ function LoanForm({
 
   return (
     <form className="stack-form loan-form" onSubmit={submit}>
+      <div className="form-pair form-pair-tight">
       <label>
         Loan name
         <input value={name} onChange={(event) => setName(event.target.value)} placeholder="HDFC home loan" required />
@@ -4233,6 +4404,7 @@ function LoanForm({
           <option value="__custom__">Add custom loan type</option>
         </select>
       </label>
+      </div>
       {subcategoryChoice === "__custom__" && (
         <label>
           Custom loan type
@@ -4244,27 +4416,49 @@ function LoanForm({
           />
         </label>
       )}
-      <label>
-        Principal amount
-        <input value={principal} onChange={(event) => setPrincipal(event.target.value)} placeholder="₹0" inputMode="decimal" required />
-      </label>
-      <label>
-        Current outstanding
-        <input value={outstanding} onChange={(event) => setOutstanding(event.target.value)} placeholder="₹0" inputMode="decimal" required />
-        <small className="field-hint">Planning to add past EMIs too? Enter the outstanding before the earliest one.</small>
-      </label>
-      <label>
-        Month and year taken
-        <input type="month" value={startMonth} onChange={(event) => setStartMonth(event.target.value)} required />
-      </label>
-      <label>
-        Interest rate
-        <input value={interestRate} onChange={(event) => setInterestRate(event.target.value)} placeholder="8.5%" inputMode="decimal" required />
-      </label>
-      <label>
-        Tenure in months
-        <input value={tenureMonths} onChange={(event) => setTenureMonths(event.target.value)} placeholder="240" inputMode="numeric" required />
-      </label>
+      {/* Paired so the whole form fits on one screen: the due day used to sit far below the fold. */}
+      <div className="form-pair form-pair-tight">
+        <label>
+          Principal amount
+          <input value={principal} onChange={(event) => setPrincipal(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+        </label>
+        <label>
+          Current outstanding
+          <input value={outstanding} onChange={(event) => setOutstanding(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+        </label>
+      </div>
+      <small className="field-hint">Planning to add past EMIs too? Enter the outstanding before the earliest one.</small>
+      <div className="form-pair form-pair-tight">
+        <label>
+          Month and year taken
+          <input type="month" value={startMonth} onChange={(event) => setStartMonth(event.target.value)} required />
+        </label>
+        <label>
+          Interest rate
+          <input value={interestRate} onChange={(event) => setInterestRate(event.target.value)} placeholder="8.5%" inputMode="decimal" required />
+        </label>
+      </div>
+      <div className="form-pair form-pair-tight">
+        <label>
+          Tenure in months
+          <input value={tenureMonths} onChange={(event) => setTenureMonths(event.target.value)} placeholder="240" inputMode="numeric" required />
+        </label>
+        <label>
+          EMI due day
+          <input
+            value={emiDueDay}
+            onChange={(event) => setEmiDueDay(event.target.value)}
+            placeholder="5"
+            inputMode="numeric"
+            min={1}
+            max={31}
+            type="number"
+          />
+        </label>
+      </div>
+      <small className="field-hint">
+        The EMI due day is the day of the month it leaves your account. Set it and the Overview reminds you before it is due.
+      </small>
       <label>
         Monthly EMI
         <input value={monthlyEmi} onChange={(event) => setMonthlyEmi(event.target.value)} placeholder="₹0" inputMode="decimal" required />
@@ -4432,6 +4626,7 @@ function InvestmentsPage({
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
   const [editing, setEditing] = useState<Investment | null>(null);
+  const [chartTypeId, setChartTypeId] = useState<string>("all");
   const totalInvested = investments.reduce((sum, item) => sum + item.investedPaise, 0);
   const totalCurrent = investments.reduce((sum, item) => sum + item.currentValuePaise, 0);
   const totalGain = totalCurrent - totalInvested;
@@ -4444,6 +4639,11 @@ function InvestmentsPage({
     (latest, item) => (item.updatedAt > latest ? item.updatedAt : latest),
     ""
   );
+
+  // Grouped by type by default; picking one type opens up its own holdings.
+  const chartType = INVESTMENT_TYPES.find((type) => type.id === chartTypeId) ?? null;
+  const chartSegments = chartType ? holdingSegments(investments, chartType.id) : investmentTypeSegments(investments);
+  const chartTotalPaise = chartSegments.reduce((sum, segment) => sum + segment.amountPaise, 0);
 
   function remove(investment: Investment) {
     requestConfirm({
@@ -4473,13 +4673,13 @@ function InvestmentsPage({
           label="Total gain"
           value={signedImpact(totalGain)}
           icon={<TrendingUp />}
-          tone={totalGain >= 0 ? "good" : "warning"}
+          valueClassName={gainToneClass(totalGain)}
         />
         <SummaryCard
           label="Return"
-          value={`${returnPercent >= 0 ? "+" : ""}${returnPercent}%`}
+          value={`${returnPercent > 0 ? "+" : ""}${returnPercent}%`}
           icon={<ArrowDownUp />}
-          tone={totalGain >= 0 ? "good" : "warning"}
+          valueClassName={gainToneClass(totalGain)}
         />
       </section>
 
@@ -4493,6 +4693,7 @@ function InvestmentsPage({
       )}
 
       <div className="two-column loans-layout">
+        <div className="section-column">
         <Panel title="Portfolio">
           {groups.length === 0 ? (
             <EmptyState text="No investments yet. Add your first holding on the right." />
@@ -4511,6 +4712,35 @@ function InvestmentsPage({
           )}
         </Panel>
 
+      <Panel
+          title={chartType ? `${chartType.label} holdings` : "Current value by type"}
+          action={
+            <label className="chart-scope">
+              <span className="visually-hidden">Show</span>
+              <select value={chartTypeId} onChange={(event) => setChartTypeId(event.target.value)}>
+                <option value="all">All types</option>
+                {INVESTMENT_TYPES.filter((type) => investments.some((item) => item.type === type.id)).map((type) => (
+                  <option key={type.id} value={type.id}>
+                    {type.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          }
+        >
+          <MixChart
+            segments={chartSegments}
+            totalPaise={chartTotalPaise}
+            ariaLabel={chartType ? `${chartType.label} holdings` : "Current value by type"}
+            centerLabel={chartType ? chartType.label : "Portfolio"}
+            centerValue={formatINRWhole(chartTotalPaise)}
+            className="overview-donut-chart"
+            emptyText={chartType ? `Nothing held in ${chartType.label} yet.` : "Add a holding to see how your portfolio is split."}
+            onSegmentClick={chartType ? undefined : (segment) => setChartTypeId(segment.id)}
+          />
+        </Panel>
+        </div>
+
         <Panel title={editing ? "Edit investment" : "Add investment"}>
           <InvestmentForm
             key={editing?.id ?? "new-investment"}
@@ -4524,6 +4754,8 @@ function InvestmentsPage({
           />
         </Panel>
       </div>
+
+
     </div>
   );
 }
@@ -4537,7 +4769,8 @@ function InvestmentCard({
   onEdit: (investment: Investment) => void;
   onDelete: (investment: Investment) => void;
 }) {
-  const positive = investment.gainPaise >= 0;
+  const tone = gainToneClass(investment.gainPaise);
+  const positive = investment.gainPaise > 0;
   return (
     <article className="loan-card investment-card">
       <div className="loan-card-header">
@@ -4555,7 +4788,7 @@ function InvestmentCard({
             </span>
           </div>
         </div>
-        <span className={`investment-gain-badge ${positive ? "up" : "down"}`}>
+        <span className={`investment-gain-badge ${tone}`}>
           {positive ? "+" : ""}
           {investment.gainPercent}%
         </span>
@@ -4572,7 +4805,7 @@ function InvestmentCard({
         </div>
         <div>
           <span>Gain / loss</span>
-          <strong className={positive ? "amount-in" : "amount-out"}>{signedImpact(investment.gainPaise)}</strong>
+          <strong className={tone}>{signedImpact(investment.gainPaise)}</strong>
         </div>
       </div>
 
@@ -4621,7 +4854,8 @@ function InvestmentGroup({
   const current = items.reduce((sum, item) => sum + item.currentValuePaise, 0);
   const gain = current - invested;
   const gainPercent = invested > 0 ? Math.round((gain / invested) * 100) : 0;
-  const positive = gain >= 0;
+  const tone = gainToneClass(gain);
+  const positive = gain > 0;
 
   return (
     <div className={`investment-group ${expanded ? "expanded" : ""}`}>
@@ -4646,9 +4880,9 @@ function InvestmentGroup({
             <strong>{formatINR(current)}</strong>
           </div>
           <div>
-            <span>Net {positive ? "gain" : "loss"}</span>
-            <strong className={positive ? "amount-in" : "amount-out"}>
-              {signedImpact(gain)} ({gainPercent >= 0 ? "+" : ""}
+            <span>Net {gain < 0 ? "loss" : "gain"}</span>
+            <strong className={tone}>
+              {signedImpact(gain)} ({gainPercent > 0 ? "+" : ""}
               {gainPercent}%)
             </strong>
           </div>
@@ -4686,7 +4920,6 @@ function InvestmentForm({
     investment?.shares != null ? String(investment.shares) : ""
   );
   const [purchaseDate, setPurchaseDate] = useState(investment?.purchaseDate ?? todayISO());
-  const [note, setNote] = useState(investment?.note ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -4708,10 +4941,10 @@ function InvestmentForm({
         currentValuePaise: parseAmountToPaise(currentValue),
         shares,
         purchaseDate: purchaseDate || undefined,
-        note: note.trim() || undefined
       };
       if (investment) {
-        await Api.updateInvestment(investment.id, { ...payload, note: note.trim() });
+        // A note saved before this field was removed is left as it is.
+        await Api.updateInvestment(investment.id, payload);
         await onSaved("Investment updated.");
       } else {
         await Api.createInvestment(payload);
@@ -4720,7 +4953,6 @@ function InvestmentForm({
         setCurrentValue("");
         setSharesInput("");
         setPurchaseDate(todayISO());
-        setNote("");
         await onSaved("Investment added.");
       }
     } catch (err) {
@@ -4778,10 +5010,6 @@ function InvestmentForm({
       <label>
         Date invested
         <input type="date" value={purchaseDate} onChange={(event) => setPurchaseDate(event.target.value)} />
-      </label>
-      <label>
-        Note (optional)
-        <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="e.g. broker, folio, plot size" />
       </label>
       {error && <p className="form-error">{error}</p>}
       <div className="loan-form-actions">
@@ -5611,6 +5839,7 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
   const [name, setName] = useState("");
   const [starting, setStarting] = useState("");
   const [limit, setLimit] = useState("");
+  const [dueDay, setDueDay] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -5624,11 +5853,13 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
         name,
         type,
         startingBalancePaise: parseAmountToPaise(starting),
-        creditLimitPaise: type === "credit_card" ? parseAmountToPaise(limit) : undefined
+        creditLimitPaise: type === "credit_card" ? parseAmountToPaise(limit) : undefined,
+        paymentDueDay: type === "credit_card" && dueDay.trim() ? Number.parseInt(dueDay, 10) : null
       });
       setName("");
       setStarting("");
       setLimit("");
+      setDueDay("");
       await onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add account.");
@@ -5656,10 +5887,27 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
         <input value={starting} onChange={(event) => setStarting(event.target.value)} placeholder="₹0" inputMode="decimal" />
       </label>
       {type === "credit_card" && (
-        <label>
-          Credit limit
-          <input value={limit} onChange={(event) => setLimit(event.target.value)} placeholder="₹1,50,000" inputMode="decimal" required />
-        </label>
+        <>
+          <label>
+            Credit limit
+            <input value={limit} onChange={(event) => setLimit(event.target.value)} placeholder="₹1,50,000" inputMode="decimal" required />
+          </label>
+          <label>
+            Payment due day
+            <input
+              value={dueDay}
+              onChange={(event) => setDueDay(event.target.value)}
+              placeholder="18"
+              inputMode="numeric"
+              min={1}
+              max={31}
+              type="number"
+            />
+            <small className="field-hint">
+              The day the bill is due each month. Set it and the Overview reminds you while the card still owes money.
+            </small>
+          </label>
+        </>
       )}
       {error && <p className="form-error">{error}</p>}
       <button className="primary-action" disabled={saving}>
@@ -5913,20 +6161,23 @@ function ReportTypeAnalytics({
       <div className="report-chart-header">
         <div>
           <span>SubType mix</span>
-          <strong>{selected.name}</strong>
+          {/* The chosen filter is already lit in the ribbon beside this, so repeating its
+              name here said nothing. Its total does. */}
+          <strong>{formatINR(selected.amountPaise)}</strong>
         </div>
-      </div>
-      <div className="type-filter-chips">
-        {types.map((type) => (
-          <button
-            key={type.typeId}
-            className={selected.typeId === type.typeId ? "active" : ""}
-            onClick={() => onSelect(type.typeId)}
-            type="button"
-          >
-            <CategoryBadge category={typeToCategory(type)} compact />
-          </button>
-        ))}
+        <div className="type-filter-chips">
+          {types.map((type) => (
+            <button
+              key={type.typeId}
+              className={selected.typeId === type.typeId ? "active" : ""}
+              onClick={() => onSelect(type.typeId)}
+              type="button"
+              aria-pressed={selected.typeId === type.typeId}
+            >
+              <CategoryBadge category={typeToCategory(type)} compact />
+            </button>
+          ))}
+        </div>
       </div>
       <div className="pie-panel">
         <div className="pie-chart">
@@ -6072,6 +6323,104 @@ function DonutChart({
   );
 }
 
+/**
+ * One chart, two readings of the same figures: a ring for the split and bars for side-by-side
+ * comparison. A segment may carry its own `maxPaise` (a credit card's limit), and the bar view then
+ * draws it against that instead of against the biggest segment.
+ */
+function MixChart({
+  segments,
+  totalPaise,
+  ariaLabel,
+  centerLabel,
+  centerValue,
+  className = "",
+  emptyText,
+  onSegmentClick
+}: {
+  segments: DonutSegment[];
+  totalPaise: number;
+  ariaLabel: string;
+  centerLabel: string;
+  centerValue: string;
+  className?: string;
+  emptyText: string;
+  onSegmentClick?: (segment: DonutSegment) => void;
+}) {
+  const [mode, setMode] = useState<"pie" | "bar">("pie");
+
+  if (segments.length === 0 || totalPaise <= 0) {
+    return <EmptyState text={emptyText} />;
+  }
+
+  const largest = segments.reduce((max, segment) => Math.max(max, segment.amountPaise), 0);
+  return (
+    <div className="mix-chart">
+      <div className="mix-switch" role="group" aria-label={`${ariaLabel} view`}>
+        {(["pie", "bar"] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            aria-pressed={mode === option}
+            onClick={() => setMode(option)}
+          >
+            {option === "pie" ? "Pie" : "Bar"}
+          </button>
+        ))}
+      </div>
+      {mode === "pie" ? (
+        <DonutChart
+          segments={segments}
+          totalPaise={totalPaise}
+          ariaLabel={ariaLabel}
+          centerLabel={centerLabel}
+          centerValue={centerValue}
+          className={className}
+          onSegmentClick={onSegmentClick}
+        />
+      ) : (
+        <ul className="mix-bars" aria-label={ariaLabel}>
+          {segments.map((segment) => {
+            const ceiling = segment.maxPaise ?? largest;
+            const share = ceiling > 0 ? Math.min((segment.amountPaise / ceiling) * 100, 100) : 0;
+            const drillable = Boolean(onSegmentClick) && isDrillableId(segment.id);
+            const head = (
+              <>
+                <span>{segment.name}</span>
+                <strong>{formatINR(segment.amountPaise)}</strong>
+              </>
+            );
+            return (
+              <li className="mix-bar-row" key={segment.id}>
+                {drillable ? (
+                  <button
+                    type="button"
+                    className="mix-bar-head"
+                    aria-label={`Show ${segment.name}`}
+                    onClick={() => onSegmentClick?.(segment)}
+                  >
+                    {head}
+                  </button>
+                ) : (
+                  <div className="mix-bar-head">{head}</div>
+                )}
+                <div className="mix-bar-track">
+                  <span className="mix-bar-fill" style={{ width: `${share}%`, background: segment.color }} />
+                </div>
+                <small className="mix-bar-note">
+                  {segment.maxPaise
+                    ? `${formatShare(share)} of ${formatINR(segment.maxPaise)}`
+                    : formatShare((segment.amountPaise / totalPaise) * 100)}
+                </small>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function consolidateDonutSegments(segments: DonutSegment[], maxSegments = 8): DonutSegment[] {
   const sorted = [...segments].sort((a, b) => b.amountPaise - a.amountPaise);
   if (sorted.length <= maxSegments) return sorted;
@@ -6205,40 +6554,6 @@ function categoryFromTransaction(transaction: Transaction): Category {
     isLocked: false,
     sortOrder: 0
   };
-}
-
-function OverviewAccountLine({ account, alertPercent }: { account: Account; alertPercent: number }) {
-  const isCard = account.type === "credit_card";
-  const limit = account.creditLimitPaise ?? 0;
-  const usage = isCard && limit > 0 ? Math.min(Math.max(Math.round((account.outstandingPaise / limit) * 100), 0), 100) : 0;
-  const highUsage = isCard && usage > alertPercent;
-
-  return (
-    <div className="account-line overview-account-line">
-      <div className="account-leading">
-        <span className={`account-icon ${accountIconTone(account.type)}`}>
-          {accountIconForType(account.type, 21)}
-        </span>
-        <div>
-          <strong>{account.name}</strong>
-          <span>{accountTypeLabel(account.type)}</span>
-        </div>
-      </div>
-      <div className="account-values">
-        {isCard ? (
-          <>
-            <strong className={highUsage ? "utilization-danger" : ""}>{usage}%</strong>
-            <span>Utilized</span>
-          </>
-        ) : (
-          <>
-            <strong>{formatINR(account.balancePaise)}</strong>
-            <span>Balance</span>
-          </>
-        )}
-      </div>
-    </div>
-  );
 }
 
 const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
@@ -6390,7 +6705,11 @@ function AccountImpactCard({ account, transactions }: { account: Account; transa
 }
 
 function ProfilePage({
+  onPlayIntro,
+  introOnLaunch,
+  onToggleIntroOnLaunch,
   profile,
+  savedProfile,
   settings,
   backupStatus,
   theme,
@@ -6401,20 +6720,30 @@ function ProfilePage({
   onSaveCardAlert,
   onThemeToggle
 }: {
+  onPlayIntro: () => void;
+  introOnLaunch: boolean;
+  onToggleIntroOnLaunch: () => void;
   profile: UserProfile;
+  savedProfile: UserProfile;
   settings: Record<string, string>;
   backupStatus: BackupStatus | null;
   theme: Theme;
   saving: boolean;
   cardAlertPercent: number;
   onProfileChange: (profile: UserProfile) => void;
-  onSaveProfile: () => void;
+  onSaveProfile: () => Promise<void> | void;
   onSaveCardAlert: (percent: number) => Promise<void> | void;
   onThemeToggle: () => void;
 }) {
   const displayName = profile.name || "Your profile";
   const displayEmail = profile.email || "Local profile";
+  const [editing, setEditing] = useState(false);
   const [cardAlertDraft, setCardAlertDraft] = useState(String(cardAlertPercent));
+  // Only a real difference counts as unsaved: opening the editor changes nothing by itself.
+  const profileDirty =
+    profile.name !== savedProfile.name ||
+    profile.email !== savedProfile.email ||
+    profile.age !== savedProfile.age;
 
   useEffect(() => {
     setCardAlertDraft(String(cardAlertPercent));
@@ -6450,6 +6779,7 @@ function ProfilePage({
               value={profile.name}
               onChange={(event) => onProfileChange({ ...profile, name: event.target.value })}
               placeholder="Add your name"
+              readOnly={!editing}
             />
           </label>
           <label>
@@ -6458,6 +6788,7 @@ function ProfilePage({
               value={profile.email}
               onChange={(event) => onProfileChange({ ...profile, email: event.target.value })}
               placeholder="name@example.com"
+              readOnly={!editing}
             />
           </label>
           <label>
@@ -6467,17 +6798,47 @@ function ProfilePage({
               inputMode="numeric"
               onChange={(event) => onProfileChange({ ...profile, age: event.target.value })}
               placeholder="Add age"
+              readOnly={!editing}
             />
           </label>
-          <button
-            className={`profile-save-button ${profileCanSave ? "" : "blurred"}`}
-            onClick={onSaveProfile}
-            disabled={saving || !profileCanSave}
-            title={profileCanSave ? "Save profile" : "Enter a valid name, email, and age"}
-          >
-            <Check size={16} />
-            {saving ? "Saving..." : "Save profile"}
-          </button>
+          {editing ? (
+            <div className="profile-edit-actions">
+              <button
+                className={`profile-save-button ${profileCanSave ? "" : "blurred"} ${profileDirty ? "is-dirty" : ""}`}
+                onClick={async () => {
+                  await onSaveProfile();
+                  setEditing(false);
+                }}
+                disabled={saving || !profileCanSave || !profileDirty}
+                title={
+                  !profileDirty
+                    ? "Nothing to save yet"
+                    : profileCanSave
+                      ? "Save profile"
+                      : "Enter a valid name, email, and age"
+                }
+              >
+                <Check size={16} />
+                {saving ? "Saving..." : profileDirty ? "Save changes" : "Save profile"}
+              </button>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => {
+                  onProfileChange(savedProfile);
+                  setEditing(false);
+                }}
+                disabled={saving}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button type="button" className="secondary-action profile-edit-button" onClick={() => setEditing(true)}>
+              <Pencil size={16} />
+              Edit
+            </button>
+          )}
         </div>
 
         <div className="profile-settings" aria-label="Settings">
@@ -6485,6 +6846,26 @@ function ProfilePage({
           <div className="settings-row">
             <span>Currency</span>
             <strong>{settings.currency ?? "INR"}</strong>
+          </div>
+          <div className="settings-row intro-row">
+            <span>Intro</span>
+            <div className="intro-row-controls">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={introOnLaunch}
+                className="switch-control"
+                onClick={onToggleIntroOnLaunch}
+              >
+                <span className="switch-track" aria-hidden="true">
+                  <span className="switch-thumb" />
+                </span>
+                Play on launch
+              </button>
+              <button type="button" className="secondary-action" onClick={onPlayIntro}>
+                Watch intro
+              </button>
+            </div>
           </div>
           <div className="settings-row card-alert-row">
             <span>Card utilization alert</span>
@@ -6539,13 +6920,14 @@ function AccountManagerLine({
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [draft, setDraft] = useState({ name: "", opening: "", limit: "" });
+  const [draft, setDraft] = useState({ name: "", opening: "", limit: "", dueDay: "" });
 
   function startEdit() {
     setDraft({
       name: account.name,
       opening: amountInputFromPaise(account.startingBalancePaise),
-      limit: account.creditLimitPaise === null ? "" : amountInputFromPaise(account.creditLimitPaise)
+      limit: account.creditLimitPaise === null ? "" : amountInputFromPaise(account.creditLimitPaise),
+      dueDay: account.paymentDueDay ? String(account.paymentDueDay) : ""
     });
     setEditing(true);
   }
@@ -6562,12 +6944,18 @@ function AccountManagerLine({
       onError?.("Amounts can't be negative.");
       return;
     }
+    const typedDueDay = draft.dueDay.trim();
+    const dueDay = typedDueDay ? Number.parseInt(typedDueDay, 10) : null;
+    if (typedDueDay && (!Number.isInteger(dueDay) || dueDay! < 1 || dueDay! > 31)) {
+      onError?.("Payment due day must be a day of the month, 1 to 31.");
+      return;
+    }
     setSaving(true);
     try {
       await Api.updateAccount(account.id, {
         name: draft.name.trim(),
         startingBalancePaise: openingPaise,
-        ...(limitPaise !== undefined ? { creditLimitPaise: limitPaise } : {})
+        ...(limitPaise !== undefined ? { creditLimitPaise: limitPaise, paymentDueDay: dueDay } : {})
       });
       const shift = openingPaise - account.startingBalancePaise;
       setEditing(false);
@@ -6620,40 +7008,58 @@ function AccountManagerLine({
       {expanded && <>
         {isCard && <CardLimitSummary account={account} alertPercent={alertPercent} />}
         {editing ? (
-          <form className="account-edit-form" onSubmit={save}>
-            <label className="control-field">
-              <span className="control-label">Name</span>
+          <form className="stack-form account-edit-form" onSubmit={save}>
+            <label>
+              Name
               <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
             </label>
-            <label className="control-field">
-              <span className="control-label">{isCard ? "Opening outstanding" : "Opening balance"}</span>
+            <label>
+              {isCard ? "Opening outstanding" : "Opening balance"}
               <input
                 inputMode="decimal"
                 value={draft.opening}
                 onChange={(event) => setDraft({ ...draft, opening: event.target.value })}
               />
+              <small className="field-hint">
+                {isCard
+                  ? "What you owed on this card before your first transaction here. Change it to match your statement."
+                  : "The balance before your first transaction here. Change it if the app doesn't match your bank."}
+              </small>
             </label>
             {isCard && (
-              <label className="control-field">
-                <span className="control-label">Credit limit</span>
-                <input
-                  inputMode="decimal"
-                  value={draft.limit}
-                  onChange={(event) => setDraft({ ...draft, limit: event.target.value })}
-                />
-              </label>
+              <>
+                <label>
+                  Credit limit
+                  <input
+                    inputMode="decimal"
+                    value={draft.limit}
+                    onChange={(event) => setDraft({ ...draft, limit: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Payment due day
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={31}
+                    value={draft.dueDay}
+                    onChange={(event) => setDraft({ ...draft, dueDay: event.target.value })}
+                    placeholder="18"
+                  />
+                  <small className="field-hint">
+                    The day the bill is due each month. Leave it blank for no reminder.
+                  </small>
+                </label>
+              </>
             )}
-            <p className="helper-text account-edit-hint">
-              {isCard
-                ? "What you owed on this card before your first transaction here. Change it to match your statement."
-                : "The balance before your first transaction here. Change it if the app doesn't match your bank."}
-            </p>
-            <div className="account-actions">
-              <button type="submit" className="primary-action" disabled={saving}>
-                {saving ? "Saving..." : "Save"}
-              </button>
-              <button type="button" className="secondary-action" onClick={() => setEditing(false)}>
+            <div className="loan-form-actions">
+              <button type="button" className="secondary-action" onClick={() => setEditing(false)} disabled={saving}>
                 Cancel
+              </button>
+              <button type="submit" className="primary-action" disabled={saving}>
+                <Check size={16} />
+                {saving ? "Saving..." : "Save"}
               </button>
             </div>
           </form>
@@ -6700,7 +7106,8 @@ function SummaryCard({
   icon,
   tone = "neutral",
   note,
-  countPaise
+  countPaise,
+  valueClassName
 }: {
   label: string;
   value: string;
@@ -6709,13 +7116,19 @@ function SummaryCard({
   note?: React.ReactNode;
   /** When given, the figure counts up to this amount (the formatted `value` stays the accessible text). */
   countPaise?: number;
+  /** Colours the figure itself, for cards whose meaning follows the sign of the number. */
+  valueClassName?: string;
 }) {
   return (
     <div className={`summary-card ${tone}`}>
       <span>{icon}</span>
       <div>
         <p>{label}</p>
-        <strong>{countPaise === undefined ? value : <CountUp paise={countPaise} label={value} />}</strong>
+        {/* A money tile shows short scale so a crore figure still fits; the exact amount is
+            the tooltip, and CountUp keeps it as the text a screen reader reads. */}
+        <strong className={valueClassName} title={countPaise === undefined ? undefined : value}>
+          {countPaise === undefined ? value : <CountUp paise={countPaise} label={value} />}
+        </strong>
         {note}
       </div>
     </div>
@@ -6725,7 +7138,7 @@ function SummaryCard({
 /** A money figure that counts up to its value when it first appears or changes. */
 function CountUp({ paise, label }: { paise: number; label: string }) {
   const ref = useRef<HTMLSpanElement>(null);
-  useCountUp(ref, paise, formatINRWhole);
+  useCountUp(ref, paise, formatINRCompact);
   return (
     <>
       <span className="visually-hidden">{label}</span>
@@ -6774,7 +7187,7 @@ function UpcomingPaymentsList({
     return <PanelLoader label="Checking what's due" />;
   }
   if (upcoming.items.length === 0) {
-    return <EmptyState text="Nothing due soon. AutoPay renewals and loan EMIs appear here before they're charged." />;
+    return <EmptyState text="Nothing due soon. AutoPay renewals, loan EMIs and card bills appear here before they're charged." />;
   }
   const dueLabel = (daysAway: number, dueDate: string) =>
     daysAway === 0
@@ -6782,20 +7195,38 @@ function UpcomingPaymentsList({
       : daysAway === 1
         ? "Due tomorrow"
         : `In ${daysAway} days, ${formatDateWithYear(dueDate).replace(/ \d{4}$/, "")}`;
+  // One block per kind, always in this order, and a kind with nothing due is left out.
+  const groups = [
+    { kind: "autopay" as const, title: "AutoPay", icon: <CalendarClock size={16} /> },
+    { kind: "loan" as const, title: "Loans", icon: <Landmark size={16} /> },
+    { kind: "card" as const, title: "Credit card payments", icon: <CreditCard size={16} /> }
+  ]
+    .map((group) => ({ ...group, items: upcoming.items.filter((item) => item.kind === group.kind) }))
+    .filter((group) => group.items.length > 0);
+
   return (
     <div className="upcoming-list">
-      {upcoming.items.map((item) => (
-        <div className={`upcoming-row${item.daysAway <= 2 ? " soon" : ""}`} key={`${item.kind}-${item.id}`}>
-          <span className="upcoming-icon">{item.kind === "loan" ? <Landmark size={16} /> : <CalendarClock size={16} />}</span>
-          <div className="upcoming-main">
-            <strong>{item.name}</strong>
-            <small>
-              {item.kind === "loan" ? "Loan EMI" : "AutoPay"} · {dueLabel(item.daysAway, item.dueDate)}
-            </small>
-          </div>
-          <strong className="amount-out">{formatINR(item.amountPaise)}</strong>
-        </div>
-      ))}
+      {groups.map((group) => {
+        const groupTotal = group.items.reduce((sum, item) => sum + item.amountPaise, 0);
+        return (
+          <section className="upcoming-group" key={group.kind}>
+            <header className="upcoming-group-head">
+              <h3>{group.title}</h3>
+              <strong>{formatINR(groupTotal)}</strong>
+            </header>
+            {group.items.map((item) => (
+              <div className={`upcoming-row${item.daysAway <= 2 ? " soon" : ""}`} key={`${item.kind}-${item.id}`}>
+                <span className="upcoming-icon">{group.icon}</span>
+                <div className="upcoming-main">
+                  <strong>{item.name}</strong>
+                  <small>{dueLabel(item.daysAway, item.dueDate)}</small>
+                </div>
+                <strong className="amount-out">{formatINR(item.amountPaise)}</strong>
+              </div>
+            ))}
+          </section>
+        );
+      })}
       <div className="upcoming-total">
         <span>Total due</span>
         <strong>{formatINR(upcoming.totalPaise)}</strong>
@@ -6830,6 +7261,89 @@ function PanelLoader({ label }: { label: string }) {
       <span className="skeleton-line" />
       <span className="skeleton-line" />
       <span className="skeleton-line" />
+    </div>
+  );
+}
+
+/**
+ * A short look at the app, shown once on a new install and replayable from Profile. Muted so the
+ * browser lets it start, and always skippable.
+ */
+function IntroVideo({ onClose }: { onClose: () => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [soundOn, setSoundOn] = useState(false);
+  // Closing is a handoff, not an unmount: the overlay plays itself out and then goes.
+  const [leaving, setLeaving] = useState(false);
+  const leave = useCallback(() => setLeaving(true), []);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") leave();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [leave]);
+
+  // The film now plays on every open, so it must never be the thing standing in the way.
+  // If it cannot start within a few seconds -- blocked request, decode failure, a stalled
+  // network -- it hands off by itself rather than leaving a dark rectangle on screen.
+  useEffect(() => {
+    const watchdog = window.setTimeout(() => {
+      const video = videoRef.current;
+      if (!video || video.readyState < 3 || (video.paused && video.currentTime === 0)) leave();
+    }, 4000);
+    return () => window.clearTimeout(watchdog);
+  }, [leave]);
+
+  // Belt and braces: if the leaving animation never reports back, close anyway.
+  useEffect(() => {
+    if (!leaving) return;
+    const fallback = window.setTimeout(onClose, 900);
+    return () => window.clearTimeout(fallback);
+  }, [leaving, onClose]);
+
+  return (
+    <div
+      className={`intro-overlay${leaving ? " is-leaving" : ""}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label="What Financial Tracker does"
+      onAnimationEnd={(event) => {
+        if (leaving && event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="intro-frame">
+        <video
+          ref={videoRef}
+          className="intro-video"
+          src="/intro.mp4"
+          autoPlay
+          muted={!soundOn}
+          playsInline
+          preload="auto"
+          onEnded={leave}
+          onError={leave}
+          onStalled={leave}
+        />
+        <div className="intro-actions">
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => {
+              const video = videoRef.current;
+              if (!video) return;
+              video.muted = soundOn;
+              setSoundOn((value) => !value);
+              void video.play().catch(() => undefined);
+            }}
+          >
+            {soundOn ? "Mute" : "Sound on"}
+          </button>
+          <button type="button" className="primary-action" onClick={leave}>
+            Skip
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -7106,6 +7620,61 @@ function selfTransferTargetAccounts(accounts: Account[], sourceAccountId: string
 
 function isSelfTransfer(transaction: Transaction) {
   return transaction.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID && Boolean(transaction.transferAccountId);
+}
+
+/** Up is good, down is danger, exactly unchanged is ordinary text (white would vanish in light mode). */
+/**
+ * One segment per credit card that owes money: the amount outstanding, carrying the card's limit so
+ * the bar view can draw it as utilisation rather than against the biggest card.
+ */
+/** Distinct colours for items that would otherwise share one colour, such as holdings of one type. */
+const segmentPalette = ["#3a55b4", "#0f766e", "#b45309", "#9333ea", "#be123c", "#0891b2", "#4d7c0f", "#a21caf"];
+
+/** The holdings of one type, each with its own colour so the slices can be told apart. */
+function holdingSegments(investments: Investment[], typeId: string): DonutSegment[] {
+  return investments
+    .filter((item) => item.type === typeId && item.currentValuePaise > 0)
+    .sort((a, b) => b.currentValuePaise - a.currentValuePaise)
+    .map((item, index) => ({
+      id: item.id,
+      name: item.name,
+      color: segmentPalette[index % segmentPalette.length],
+      amountPaise: item.currentValuePaise
+    }));
+}
+
+/** One segment per investment type that holds something: all stocks together, all funds together. */
+function investmentTypeSegments(investments: Investment[]): DonutSegment[] {
+  return INVESTMENT_TYPES.map((type) => ({
+    id: type.id,
+    name: type.label,
+    color: type.color,
+    amountPaise: investments
+      .filter((item) => item.type === type.id)
+      .reduce((sum, item) => sum + item.currentValuePaise, 0)
+  }))
+    .filter((segment) => segment.amountPaise > 0)
+    .sort((a, b) => b.amountPaise - a.amountPaise);
+}
+
+function cardUtilisationSegments(accounts: Account[]): DonutSegment[] {
+  const palette = ["#3a55b4", "#b45309", "#0f766e", "#9333ea", "#be123c", "#15803d"];
+  return accounts
+    .filter((account) => account.type === "credit_card" && account.outstandingPaise > 0)
+    .sort((a, b) => b.outstandingPaise - a.outstandingPaise)
+    .map((account, index) => ({
+      id: account.id,
+      name: account.name,
+      color: palette[index % palette.length],
+      amountPaise: account.outstandingPaise,
+      maxPaise: account.creditLimitPaise ?? undefined
+    }));
+}
+
+function gainToneClass(paise: number) {
+  if (paise > 0) return "amount-in";
+  if (paise < 0) return "amount-out";
+  return "amount-flat";
 }
 
 function signedImpact(paise: number) {

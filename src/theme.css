@@ -1845,7 +1845,10 @@ body::after {
 .donut-figure.report-donut-chart {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  /* Top, not centre. Centred, a ring next to a long legend is pushed down by half the
+     difference, which walks it out of line with the ring in the card beside it. */
+  align-items: flex-start;
+  align-content: flex-start;
   justify-content: center;
   gap: 20px 28px;
   width: 100%;
@@ -1857,17 +1860,22 @@ body::after {
   aspect-ratio: auto;
 }
 
+/* One size for every donut, so a pair of them can never drift apart. Bigger than it was:
+   at 188px the ring floated in the middle of a 500px card with the space around it doing
+   nothing. The ribbon moving into the heading pays for the extra height. */
 .donut-figure .donut-chart {
   flex: 0 0 auto;
-  width: 188px;
-  height: 188px;
+  width: 228px;
+  height: 228px;
   overflow: visible;
 }
 
 .donut-figure .donut-segment,
 .donut-figure .donut-track,
 .donut-figure .donut-empty {
-  stroke-width: 26;
+  /* Kept in proportion with the larger ring, so it reads as the same chart drawn bigger
+     rather than a fatter one. */
+  stroke-width: 24;
 }
 
 .donut-figure .donut-segment {
@@ -1889,6 +1897,13 @@ body::after {
   font-size: 19px;
   font-weight: 650;
   letter-spacing: -0.02em;
+}
+
+/* A 240px basis pushed the legend underneath the larger ring, which made the card taller
+   rather than fuller. A smaller basis keeps the two side by side; the legend still grows
+   into whatever the ring leaves, so on a wide card it is wider than its basis. */
+.report-donut-chart .donut-legend {
+  flex-basis: 180px;
 }
 
 .donut-legend {
@@ -2141,5 +2156,383 @@ body::before {
   .ledger-row .row-actions {
     min-width: 185px;
     justify-content: flex-end;
+  }
+}
+
+/* ---------- Chart with a pie/bar switch ---------- */
+.mix-chart {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.mix-switch {
+  display: inline-flex;
+  gap: 2px;
+  width: fit-content;
+  justify-self: end;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  padding: 3px;
+}
+
+.mix-switch button {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  padding: 5px 14px;
+  font-size: 0.84rem;
+  font-weight: 560;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.mix-switch button[aria-pressed="true"] {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.mix-bars {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mix-bar-row {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mix-bar-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+}
+
+.mix-bar-head > span {
+  overflow: hidden;
+  font-weight: 540;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mix-bar-head > strong {
+  white-space: nowrap;
+}
+
+button.mix-bar-head {
+  cursor: pointer;
+}
+
+button.mix-bar-head:hover > span {
+  color: var(--accent);
+}
+
+.mix-bar-track {
+  overflow: hidden;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--panel-soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.mix-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transform-origin: left center;
+  animation: grow-x 900ms var(--ease-out) backwards;
+}
+
+.mix-bar-note {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+/* ---------- Figures that take their colour from their sign ---------- */
+/* A figure that has not moved stays ordinary text: "white" would disappear on a light page. */
+.amount-flat {
+  color: var(--text) !important;
+}
+
+.investment-gain-badge.amount-in {
+  background: var(--good-soft);
+  color: var(--good) !important;
+}
+
+.investment-gain-badge.amount-out {
+  background: var(--danger-soft);
+  color: var(--danger) !important;
+}
+
+.investment-gain-badge.amount-flat {
+  background: var(--panel-soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+/* ---------- The scope picker that sits in a chart panel's header ---------- */
+.chart-scope select {
+  min-height: 38px;
+  border-radius: 999px;
+  padding: 0 34px 0 14px;
+  font-size: 0.86rem;
+  font-weight: 560;
+}
+
+/* ---------- Budget planner: what this category actually cost last month ---------- */
+.budget-last-month {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.budget-last-month strong {
+  color: var(--text);
+  font-weight: 620;
+}
+
+.budget-last-month .text-action {
+  font-size: 0.8rem;
+}
+
+/* ---------- Profile: read-only until Edit, and Save says when there is something to save ---------- */
+.profile-edit-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.profile-edit-actions > .profile-save-button {
+  flex: 1 1 auto;
+}
+
+.profile-edit-button {
+  justify-content: center;
+  width: 100%;
+}
+
+/* Unsaved changes: the button lifts out of its resting state instead of only changing wording. */
+.profile-save-button.is-dirty {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent),
+    0 10px 20px -12px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.profile-fields input[readonly] {
+  border-color: transparent;
+  background: var(--panel-soft);
+  cursor: default;
+}
+
+/* ---------- Weekly Entry: the action sits under the middle of its form ---------- */
+.entry-form .add-button {
+  grid-column: 1 / -1;
+  justify-self: center;
+  min-width: 220px;
+  margin-top: 4px;
+}
+
+@media (max-width: 720px) {
+  /* A phone has no room for a centred island: the action takes the full width. */
+  .entry-form .add-button {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* ---------- Budget add row: two fields and a button on one line ---------- */
+/* Scoped above phone width so the base stylesheet keeps its own stacked phone layout. */
+@media (min-width: 721px) {
+  /* Three tracks, not four: the button hugs its label instead of stretching a spare column. */
+  .budget-add-form {
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto;
+    align-items: end;
+  }
+}
+
+.budget-add-note {
+  grid-column: 1 / -1;
+  margin-top: -4px;
+}
+
+/* ---------- The account editor reads like the loan and AutoPay editors ---------- */
+/* One column of labelled fields: the old three-across grid squeezed every input. */
+.account-edit-form.stack-form {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.account-edit-form.stack-form .loan-form-actions {
+  justify-content: flex-end;
+}
+
+/* The add/edit panel is a narrow column, so these paired fields need a lower threshold to sit side
+   by side. Without it the loan form runs past a laptop screen and the due day hides. Only the loan
+   form opts in: a date input cannot shrink this far, as the vacation form showed. */
+.form-pair-tight {
+  grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+  gap: 10px;
+}
+
+/* ---------- A section's list and its chart share one column ---------- */
+/* Without this the taller add form left dead space beside a short list. */
+.section-column {
+  display: grid;
+  gap: var(--space-5);
+  align-content: start;
+  min-width: 0;
+}
+
+/* ---------- Coming up: one block per kind of payment ---------- */
+.upcoming-group {
+  display: grid;
+  gap: 6px;
+}
+
+.upcoming-group + .upcoming-group {
+  margin-top: 14px;
+}
+
+.upcoming-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.upcoming-group-head h3 {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 640;
+  color: var(--muted);
+}
+
+.upcoming-group-head strong {
+  font-size: 0.86rem;
+  font-weight: 620;
+}
+
+/* ---------- The intro that plays on a first launch ---------- */
+.intro-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, #05070c 86%, transparent);
+  backdrop-filter: blur(10px);
+  padding: 24px;
+  animation: fade-in 240ms var(--ease-out) both;
+}
+
+.intro-frame {
+  display: grid;
+  gap: 16px;
+  width: min(100%, 1040px);
+  animation: sheet-in 420ms var(--ease-spring) both;
+}
+
+.intro-video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-shell);
+  background: #0b0e14;
+  box-shadow: var(--shadow);
+}
+
+.intro-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* The handoff: the scrim fades and the frame lifts away, so the page underneath is
+   revealed rather than replacing the film between one frame and the next. Both animate
+   transform and opacity only, so the whole move stays on the compositor. */
+.intro-overlay.is-leaving {
+  /* --ease-out is expo-like and would dump most of the fade in the first third, which
+     reads as a cut. The spring curve spends its time in the middle, so the page arrives. */
+  animation: intro-overlay-out 520ms var(--ease-spring) both;
+  pointer-events: none;
+}
+
+.intro-overlay.is-leaving .intro-frame {
+  animation: intro-frame-out 460ms var(--ease-spring) both;
+}
+
+@keyframes intro-overlay-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.02);
+  }
+}
+
+@keyframes intro-frame-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-18px) scale(0.96);
+  }
+}
+
+@keyframes intro-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Asked for less motion: the same handoff, quickly, with nothing moving. */
+@media (prefers-reduced-motion: reduce) {
+  .intro-overlay,
+  .intro-frame {
+    animation: none;
+  }
+
+  .intro-overlay.is-leaving,
+  .intro-overlay.is-leaving .intro-frame {
+    animation: intro-fade-out 140ms var(--ease-out) both;
+  }
+}
+
+@media (max-width: 720px) {
+  .intro-actions {
+    justify-content: stretch;
+  }
+
+  .intro-actions > button {
+    flex: 1 1 auto;
+    justify-content: center;
   }
 }

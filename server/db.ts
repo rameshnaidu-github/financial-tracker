@@ -215,6 +215,7 @@ export function initDatabase() {
   ensureLoanIndexes();
   ensureAutopayIndexes();
   ensureBudgetIndexes();
+  ensureDueDayColumns();
   ensureInvestmentColumns();
   migrateInvestmentTypes();
   ensureInvestmentIndexes();
@@ -771,6 +772,15 @@ function addColumnIfMissing(table: string, column: string, definition: string) {
     return;
   }
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+}
+
+/**
+ * Due days are optional and were added later, so the columns are appended in place. Existing rows
+ * keep NULL, which means "no reminder", exactly how they behaved before.
+ */
+function ensureDueDayColumns() {
+  addColumnIfMissing("loans", "emi_due_day", "INTEGER");
+  addColumnIfMissing("accounts", "payment_due_day", "INTEGER");
 }
 
 function createMigrationBackup(label: string) {
