@@ -981,7 +981,7 @@ function OverviewPage({
 
   const spendingSegments = consolidateDonutSegments(
     overview.categoryReport.map((category) => ({
-      id: category.subcategoryId ?? category.categoryId ?? category.name,
+      id: category.subcategoryId ?? category.name,
       name: category.name,
       color: category.color,
       amountPaise: category.amountPaise
@@ -1423,7 +1423,7 @@ function WeeklyEntryPage({
     .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
   const uncategorizedCount = transactions.filter((transaction) => transaction.status === "uncategorized").length;
   const visibleTransactions = weeklyCategoryFilterId
-    ? transactions.filter((transaction) => transaction.categoryId === weeklyCategoryFilterId)
+    ? transactions.filter((transaction) => transaction.subcategoryId === weeklyCategoryFilterId)
     : transactions;
 
   async function submit(event: FormEvent) {
@@ -6534,7 +6534,7 @@ function categoryFromTransaction(transaction: Transaction): Category {
   }
 
   return {
-    id: transaction.subcategoryId ?? transaction.typeId ?? transaction.categoryId ?? "",
+    id: transaction.subcategoryId ?? transaction.typeId ?? "",
     name:
       transaction.subcategoryName ??
       transaction.typeName ??

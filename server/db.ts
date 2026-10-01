@@ -40,17 +40,6 @@ export function initDatabase() {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
-    CREATE TABLE IF NOT EXISTS categories (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-      icon TEXT NOT NULL,
-      color TEXT NOT NULL,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      is_locked INTEGER NOT NULL DEFAULT 0,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
     CREATE TABLE IF NOT EXISTS entry_batches (
       id TEXT PRIMARY KEY,
       week_start TEXT NOT NULL,
@@ -68,7 +57,6 @@ export function initDatabase() {
       method TEXT NOT NULL CHECK (method IN ('upi', 'credit_card', 'bank_transfer', 'cash', 'other')),
       merchant TEXT,
       note TEXT,
-      category_id TEXT REFERENCES categories(id) ON DELETE RESTRICT,
       amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
       direction TEXT NOT NULL CHECK (direction IN ('inflow', 'outflow')),
       kind TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'refund', 'transfer', 'card_payment', 'reversal', 'investment', 'emi')),
@@ -82,7 +70,6 @@ export function initDatabase() {
     CREATE TABLE IF NOT EXISTS transaction_splits (
       id TEXT PRIMARY KEY,
       transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
-      category_id TEXT REFERENCES categories(id) ON DELETE RESTRICT,
       amount_paise INTEGER NOT NULL CHECK (amount_paise > 0)
     );
 
@@ -210,6 +197,7 @@ export function initDatabase() {
   ensureTaxonomySchema();
   seedTaxonomy();
   migrateLegacyCategoriesToTaxonomy();
+  dropLegacyCategories();
   ensureAccountIndexes();
   ensureTransactionIndexes();
   ensureLoanIndexes();
@@ -223,6 +211,50 @@ export function initDatabase() {
   ensureTaxonomyIndexes();
   seedSettings();
   pruneBackupFiles();
+}
+
+/**
+ * Removes the legacy categories storage, but only once the database proves it holds nothing
+ * in it. migrateLegacyCategoriesToTaxonomy runs first and has already had its chance to move
+ * anything across; if a value survived that, something is unaccounted for and dropping the
+ * column would destroy it. In that case this leaves every column and every row alone.
+ */
+function dropLegacyCategories() {
+  const hasTable = tableExists("categories");
+  const onTransactions = columnExists("transactions", "category_id");
+  const onSplits = columnExists("transaction_splits", "category_id");
+  if (!hasTable && !onTransactions && !onSplits) {
+    return;
+  }
+
+  const stranded =
+    (onTransactions
+      ? (db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE category_id IS NOT NULL").get() as { n: number }).n
+      : 0) +
+    (onSplits
+      ? (db.prepare("SELECT COUNT(*) AS n FROM transaction_splits WHERE category_id IS NOT NULL").get() as { n: number }).n
+      : 0);
+
+  if (stranded > 0) {
+    console.warn(
+      `[db] ${stranded} row(s) still reference a legacy category, so the legacy columns were kept. ` +
+        "Recategorise them under a SubType and restart to complete the cleanup."
+    );
+    return;
+  }
+
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    transaction(() => {
+      // SQLite refuses to drop a column an index still references.
+      db.exec("DROP INDEX IF EXISTS idx_transactions_category;");
+      if (onTransactions) db.exec("ALTER TABLE transactions DROP COLUMN category_id;");
+      if (onSplits) db.exec("ALTER TABLE transaction_splits DROP COLUMN category_id;");
+      if (hasTable) db.exec("DROP TABLE categories;");
+    });
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
 }
 
 function ensureLoanIndexes() {
@@ -510,7 +542,6 @@ function ensureTransactionIndexes() {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
     CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id);
-    CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_subcategory ON transactions(subcategory_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_batch ON transactions(batch_id);
@@ -658,6 +689,13 @@ function seedTaxonomy() {
 
 function migrateLegacyCategoriesToTaxonomy() {
   if (getSetting("taxonomy_migration_v1") === "complete") {
+    return;
+  }
+
+  // A database created after the legacy table was removed has nothing to migrate from, and
+  // every statement below joins it. Record the migration as done and leave.
+  if (!tableExists("categories")) {
+    setSetting("taxonomy_migration_v1", "complete");
     return;
   }
 

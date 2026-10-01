@@ -148,7 +148,6 @@ export type TransactionRow = {
   method: string;
   merchant: string | null;
   note: string | null;
-  category_id: string | null;
   type_id: string | null;
   subcategory_id: string | null;
   amount_paise: number;
@@ -171,7 +170,6 @@ export type TransactionSummary = {
   method: string;
   merchant: string | null;
   note: string | null;
-  categoryId: string | null;
   categoryName: string | null;
   categoryIcon: string | null;
   categoryColor: string | null;
@@ -341,7 +339,6 @@ export type BudgetPlan = {
 
 type TransactionQuery = {
   accountId?: string;
-  categoryId?: string;
   typeId?: string;
   subcategoryId?: string;
   status?: string;
@@ -1422,14 +1419,14 @@ function buildTransactionFilters(query: TransactionQuery) {
     filters.push("t.account_id = ?");
     params.push(query.accountId);
   }
-  if (query.categoryId) {
+  if (query.subcategoryId) {
     filters.push(
-      `(t.subcategory_id = ? OR t.category_id = ? OR EXISTS (
+      `(t.subcategory_id = ? OR EXISTS (
         SELECT 1 FROM transaction_splits s
-        WHERE s.transaction_id = t.id AND (s.subcategory_id = ? OR s.category_id = ?)
+        WHERE s.transaction_id = t.id AND s.subcategory_id = ?
       ))`
     );
-    params.push(query.categoryId, query.categoryId, query.categoryId, query.categoryId);
+    params.push(query.subcategoryId, query.subcategoryId);
   }
   if (query.typeId) {
     filters.push(
@@ -1525,7 +1522,6 @@ export function listTransactions(query: TransactionQuery = {}): TransactionSumma
         `SELECT ${transactionSelectFields}
          FROM transactions t
          JOIN accounts a ON a.id = t.account_id
-         LEFT JOIN categories c ON c.id = t.category_id
          LEFT JOIN category_types ct ON ct.id = t.type_id
          LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
          LEFT JOIN accounts ta ON ta.id = t.transfer_account_id
@@ -1554,7 +1550,6 @@ export function getTransaction(id: string) {
         `SELECT ${transactionSelectFields}
          FROM transactions t
          JOIN accounts a ON a.id = t.account_id
-         LEFT JOIN categories c ON c.id = t.category_id
          LEFT JOIN category_types ct ON ct.id = t.type_id
          LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
          LEFT JOIN accounts ta ON ta.id = t.transfer_account_id
@@ -1605,10 +1600,10 @@ function insertValidatedTransaction(parsed: CreateTransactionInput) {
 
   db.prepare(
       `INSERT INTO transactions
-        (id, batch_id, date, account_id, method, merchant, note, category_id,
+        (id, batch_id, date, account_id, method, merchant, note,
          type_id, subcategory_id, amount_paise, direction, kind, status,
          transfer_account_id, linked_transaction_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
       id,
       parsed.batchId ?? null,
@@ -1617,7 +1612,6 @@ function insertValidatedTransaction(parsed: CreateTransactionInput) {
       parsed.method,
       parsed.merchant ?? null,
       parsed.note ?? null,
-      taxonomy.legacyCategoryId,
       taxonomy.typeId,
       taxonomy.subcategoryId,
       parsed.amountPaise,
@@ -1740,7 +1734,7 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
     method: existing.method,
     merchant: existing.merchant ?? undefined,
     note: existing.note ?? undefined,
-    categoryId: existing.category_id ?? undefined,
+
     typeId: existing.type_id ?? undefined,
     subcategoryId: existing.subcategory_id ?? undefined,
     amountPaise: existing.amount_paise,
@@ -1782,7 +1776,7 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
     db.prepare(
       `UPDATE transactions
        SET batch_id = ?, date = ?, account_id = ?, method = ?, merchant = ?, note = ?,
-           category_id = ?, type_id = ?, subcategory_id = ?,
+           type_id = ?, subcategory_id = ?,
            amount_paise = ?, direction = ?, kind = ?, status = ?,
            transfer_account_id = ?, linked_transaction_id = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`
@@ -1793,7 +1787,6 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
       merged.method,
       merged.merchant ?? null,
       merged.note ?? null,
-      taxonomy.legacyCategoryId,
       taxonomy.typeId,
       taxonomy.subcategoryId,
       merged.amountPaise,
@@ -2761,7 +2754,6 @@ export function getMonthlyReport(
     loanPaise: totals.loan ?? 0,
     investmentPaise: totals.investment ?? 0,
     categories: categoryRows.map((row) => ({
-      categoryId: row.subcategoryId,
       subcategoryId: row.subcategoryId,
       typeId: row.typeId,
       name: row.name,
@@ -4263,18 +4255,6 @@ function listSubcategoriesForType(typeId: string) {
   ).map(mapSubcategory);
 }
 
-function getCategoryRow(id: string) {
-  return asRecord<CategoryRow | undefined>(
-    db
-      .prepare(
-        `SELECT id, name, icon, color, is_system, is_locked, sort_order, created_at
-         FROM categories
-         WHERE id = ?`
-      )
-      .get(id)
-  );
-}
-
 function getTransactionRow(id: string) {
   return asRecord<TransactionRow | undefined>(
     db.prepare("SELECT * FROM transactions WHERE id = ?").get(id)
@@ -4292,32 +4272,18 @@ function requireAccount(id: string) {
   return account;
 }
 
-function requireCategory(id: string) {
-  const category = getCategoryRow(id);
-  if (!category) {
-    throw badRequest("Selected category does not exist.");
-  }
-  return category;
-}
-
 function resolveTransactionTaxonomy(input: CreateTransactionInput) {
   let typeId = input.typeId;
-  let subcategoryId = input.subcategoryId ?? input.categoryId;
-  let legacyCategoryId = input.categoryId ?? null;
+  const subcategoryId = input.subcategoryId;
   let type: CategoryTypeRow | undefined;
   let subcategory: SubcategoryRow | undefined;
 
   if (subcategoryId) {
     subcategory = getSubcategoryRow(subcategoryId);
-    if (subcategory) {
-      typeId = typeId ?? subcategory.type_id;
-      legacyCategoryId = null;
-    } else if (input.categoryId) {
-      requireCategory(input.categoryId);
-      subcategoryId = undefined;
-    } else {
+    if (!subcategory) {
       throw badRequest("Selected SubType does not exist.");
     }
+    typeId = typeId ?? subcategory.type_id;
   }
 
   if (typeId) {
@@ -4337,8 +4303,7 @@ function resolveTransactionTaxonomy(input: CreateTransactionInput) {
 
   return {
     typeId: type?.id ?? null,
-    subcategoryId: subcategory?.id ?? null,
-    legacyCategoryId
+    subcategoryId: subcategory?.id ?? null
   };
 }
 
@@ -4386,32 +4351,23 @@ function insertSplits(
   splits: NonNullable<CreateTransactionInput["splits"]>
 ) {
   const insert = db.prepare(
-    `INSERT INTO transaction_splits (id, transaction_id, category_id, subcategory_id, amount_paise)
-     VALUES (?, ?, ?, ?, ?)`
+    `INSERT INTO transaction_splits (id, transaction_id, subcategory_id, amount_paise)
+     VALUES (?, ?, ?, ?)`
   );
 
   for (const split of splits) {
-    const subcategoryId = split.subcategoryId ?? split.categoryId;
-    let legacyCategoryId = split.categoryId ?? null;
-    if (!subcategoryId) {
-      throw badRequest("Split must choose a SubType.");
-    }
-    const subcategory = getSubcategoryRow(subcategoryId);
-    if (subcategory) {
-      legacyCategoryId = null;
-    } else if (split.categoryId) {
-      requireCategory(split.categoryId);
-    } else {
+    const subcategory = getSubcategoryRow(split.subcategoryId);
+    if (!subcategory) {
       throw badRequest("Selected split SubType does not exist.");
     }
-    insert.run(randomUUID(), transactionId, legacyCategoryId, subcategory?.id ?? null, split.amountPaise);
+    insert.run(randomUUID(), transactionId, subcategory.id, split.amountPaise);
   }
 }
 
 function getTransactionSplits(transactionId: string): NonNullable<CreateTransactionInput["splits"]> {
-  const rows = asRecords<{ category_id: string | null; subcategory_id: string | null; amount_paise: number }>(
+  const rows = asRecords<{ subcategory_id: string | null; amount_paise: number }>(
     db.prepare(
-      `SELECT category_id, subcategory_id, amount_paise
+      `SELECT subcategory_id, amount_paise
        FROM transaction_splits
        WHERE transaction_id = ?
        ORDER BY rowid ASC`
@@ -4419,8 +4375,7 @@ function getTransactionSplits(transactionId: string): NonNullable<CreateTransact
   );
 
   return rows.map((row) => ({
-    categoryId: row.category_id ?? undefined,
-    subcategoryId: row.subcategory_id ?? undefined,
+    subcategoryId: row.subcategory_id ?? "",
     amountPaise: row.amount_paise
   }));
 }
@@ -4991,7 +4946,6 @@ function findDuplicateCandidates(input: {
         `SELECT ${transactionSelectFields}
          FROM transactions t
          JOIN accounts a ON a.id = t.account_id
-         LEFT JOIN categories c ON c.id = t.category_id
          LEFT JOIN category_types ct ON ct.id = t.type_id
          LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
          LEFT JOIN accounts ta ON ta.id = t.transfer_account_id
@@ -5146,7 +5100,6 @@ const transactionSelectFields = `
   t.method,
   t.merchant,
   t.note,
-  t.category_id,
   t.type_id,
   t.subcategory_id,
   t.amount_paise,
@@ -5161,9 +5114,6 @@ const transactionSelectFields = `
   t.updated_at,
   a.name AS account_name,
   a.type AS account_type,
-  c.name AS category_name,
-  c.icon AS category_icon,
-  c.color AS category_color,
   ct.name AS type_name,
   ct.behavior AS type_behavior,
   ct.icon AS type_icon,
@@ -5196,10 +5146,9 @@ function mapTransaction(row: TransactionRow & JoinedFields): TransactionSummary 
     method: row.method,
     merchant: row.merchant,
     note: row.note,
-    categoryId: row.subcategory_id ?? row.category_id,
-    categoryName: row.subcategory_name ?? row.category_name,
-    categoryIcon: row.subcategory_icon ?? row.category_icon,
-    categoryColor: row.subcategory_color ?? row.category_color,
+    categoryName: row.subcategory_name,
+    categoryIcon: row.subcategory_icon,
+    categoryColor: row.subcategory_color,
     typeId: row.type_id,
     typeName: row.type_name,
     typeIcon: row.type_icon,

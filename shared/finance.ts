@@ -449,12 +449,8 @@ export const updateProfileSchema = z.object({
 });
 
 export const transactionSplitSchema = z.object({
-  categoryId: idSchema.optional(),
-  subcategoryId: idSchema.optional(),
+  subcategoryId: idSchema,
   amountPaise: positivePaiseSchema
-}).refine((value) => value.categoryId || value.subcategoryId, {
-  message: "Split must choose a SubType.",
-  path: ["subcategoryId"]
 });
 
 const transactionObjectSchema = z.object({
@@ -464,7 +460,6 @@ const transactionObjectSchema = z.object({
     method: paymentMethodSchema,
     merchant: optionalTextSchema,
     note: optionalTextSchema,
-    categoryId: idSchema.optional(),
     typeId: idSchema.optional(),
     subcategoryId: idSchema.optional(),
     amountPaise: positivePaiseSchema,
@@ -579,7 +574,6 @@ export const createTransactionSchema = transactionObjectSchema.superRefine((valu
 const clearableIdSchema = z.union([idSchema, z.literal("")]).optional().transform((value) => value || undefined);
 
 export const updateTransactionSchema = transactionObjectSchema.partial().extend({
-  categoryId: clearableIdSchema,
   typeId: clearableIdSchema,
   subcategoryId: clearableIdSchema,
   transferAccountId: clearableIdSchema,

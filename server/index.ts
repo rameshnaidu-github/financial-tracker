@@ -254,7 +254,6 @@ app.get("/api/transactions/totals", async (request) => {
   const query = request.query as Record<string, string | undefined>;
   return summarizeTransactions({
     accountId: blankToUndefined(query.accountId),
-    categoryId: blankToUndefined(query.categoryId),
     typeId: blankToUndefined(query.typeId),
     subcategoryId: blankToUndefined(query.subcategoryId),
     status: blankToUndefined(query.status),
@@ -267,7 +266,6 @@ app.get("/api/transactions/totals", async (request) => {
 app.get("/api/transactions", async (request) => {
   const query = request.query as {
     accountId?: string;
-    categoryId?: string;
     typeId?: string;
     subcategoryId?: string;
     status?: string;
@@ -279,7 +277,6 @@ app.get("/api/transactions", async (request) => {
   };
   return listTransactions({
     accountId: blankToUndefined(query.accountId),
-    categoryId: blankToUndefined(query.categoryId),
     typeId: blankToUndefined(query.typeId),
     subcategoryId: blankToUndefined(query.subcategoryId),
     status: blankToUndefined(query.status),
