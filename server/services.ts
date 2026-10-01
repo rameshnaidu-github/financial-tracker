@@ -54,7 +54,7 @@ import {
   type UpdateTransactionInput,
   type UpdateVacationInput
 } from "../shared/finance.ts";
-import { asRecord, asRecords, db, transaction } from "./db.ts";
+import { asRecord, asRecords, currentUserId, db, isPerPersonSetting, setOwnerEmail, transaction } from "./db.ts";
 import { ensureBackupDir, pruneBackupFiles } from "./backup-files.ts";
 
 export type AccountRow = {
@@ -355,9 +355,20 @@ const BUDGETABLE_BEHAVIORS = new Set<TaxonomyBehavior>(["expense", "loan", "inve
 const AUTO_BACKUP_INTERVAL_MS = 30 * 60 * 1000;
 let autoBackupTimer: ReturnType<typeof setInterval> | undefined;
 
+/**
+ * The settings the app reads as one map, drawn from both halves of the D2 split: what belongs to
+ * this person, and what belongs to the installation they are using.
+ */
 export function getSettings() {
   const rows = asRecords<{ key: string; value: string }>(
-    db.prepare("SELECT key, value FROM settings ORDER BY key").all()
+    db
+      .prepare(
+        `SELECT key, value FROM app_settings
+         UNION ALL
+         SELECT key, value FROM user_settings WHERE user_id = ?
+         ORDER BY key`
+      )
+      .all(currentUserId())
   );
 
   return Object.fromEntries(rows.map((row) => [row.key, row.value]));
@@ -391,6 +402,8 @@ export function updateProfile(input: UpdateProfileInput): UserProfile {
     setSetting("profile_name", next.name);
     setSetting("profile_email", next.email);
     setSetting("profile_age", next.age);
+    // The stored profile is what identifies the owner, so the two cannot drift apart.
+    setOwnerEmail(next.email);
   });
 
   return getProfile();
@@ -445,8 +458,8 @@ export function createLoan(input: CreateLoanInput): LoanSummary {
   db.prepare(
     `INSERT INTO loans
       (id, name, subcategory_id, principal_amount_paise, starting_outstanding_paise,
-       start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     parsed.name,
@@ -457,7 +470,8 @@ export function createLoan(input: CreateLoanInput): LoanSummary {
     parsed.annualInterestRateBps,
     parsed.tenureMonths,
     parsed.monthlyEmiPaise,
-    parsed.emiDueDay ?? null
+    parsed.emiDueDay ?? null,
+    currentUserId()
   );
 
   return requireLoanSummary(id);
@@ -578,9 +592,9 @@ export function createAutopaySubscription(input: CreateAutopaySubscriptionInput)
 
   db.prepare(
     `INSERT INTO autopay_subscriptions
-      (id, name, amount_paise, start_date, duration_months)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(id, parsed.name, parsed.amountPaise, parsed.startDate, parsed.durationMonths);
+      (id, name, amount_paise, start_date, duration_months, user_id)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, parsed.name, parsed.amountPaise, parsed.startDate, parsed.durationMonths, currentUserId());
 
   return requireAutopaySummary(id);
 }
@@ -693,8 +707,9 @@ export function createInvestment(input: CreateInvestmentInput): InvestmentSummar
   const id = randomUUID();
   db.prepare(
     `INSERT INTO investments
-       (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, invested_as_of, value_as_of)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, invested_as_of,
+        value_as_of, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     parsed.type,
@@ -705,7 +720,8 @@ export function createInvestment(input: CreateInvestmentInput): InvestmentSummar
     parsed.purchaseDate ?? null,
     parsed.note ?? null,
     currentIsoDate(),
-    currentIsoDate()
+    currentIsoDate(),
+    currentUserId()
   );
   return requireInvestmentSummary(id);
 }
@@ -992,9 +1008,17 @@ export function createVacation(input: CreateVacationInput): VacationSummary {
   }
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO vacations (id, name, start_date, end_date, budget_paise, note)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, parsed.name, parsed.startDate ?? null, parsed.endDate ?? null, parsed.budgetPaise ?? null, parsed.note ?? null);
+    `INSERT INTO vacations (id, name, start_date, end_date, budget_paise, note, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    parsed.name,
+    parsed.startDate ?? null,
+    parsed.endDate ?? null,
+    parsed.budgetPaise ?? null,
+    parsed.note ?? null,
+    currentUserId()
+  );
   return requireVacationSummary(id);
 }
 
@@ -1056,9 +1080,9 @@ function syncVacationExpenseForTransaction(transactionId: string, input: CreateT
   }
   const vacation = requireVacationRow(input.vacationId);
   db.prepare(
-    `INSERT INTO vacation_expenses (id, vacation_id, transaction_id)
-     VALUES (?, ?, ?)`
-  ).run(randomUUID(), vacation.id, transactionId);
+    `INSERT INTO vacation_expenses (id, vacation_id, transaction_id, user_id)
+     VALUES (?, ?, ?, ?)`
+  ).run(randomUUID(), vacation.id, transactionId, currentUserId());
 }
 
 export function getBackupStatus() {
@@ -1145,9 +1169,9 @@ export function createCategoryType(input: CreateCategoryTypeInput) {
 
   db.prepare(
     `INSERT INTO category_types
-      (id, name, behavior, icon, color, is_system, is_locked, sort_order)
-     VALUES (?, ?, ?, ?, ?, 0, 0, ?)`
-  ).run(id, parsed.name, parsed.behavior, parsed.icon, parsed.color, (maxSort.max_sort ?? 0) + 1);
+      (id, name, behavior, icon, color, is_system, is_locked, sort_order, user_id)
+     VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)`
+  ).run(id, parsed.name, parsed.behavior, parsed.icon, parsed.color, (maxSort.max_sort ?? 0) + 1, currentUserId());
 
   return getCategoryType(id);
 }
@@ -1172,9 +1196,9 @@ export function createSubcategory(input: CreateSubcategoryInput) {
 
   db.prepare(
     `INSERT INTO subcategories
-      (id, type_id, name, icon, color, is_system, is_locked, sort_order)
-     VALUES (?, ?, ?, ?, ?, 0, 0, ?)`
-  ).run(id, parsed.typeId, parsed.name, parsed.icon, parsed.color, (maxSort.max_sort ?? 0) + 1);
+      (id, type_id, name, icon, color, is_system, is_locked, sort_order, user_id)
+     VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)`
+  ).run(id, parsed.typeId, parsed.name, parsed.icon, parsed.color, (maxSort.max_sort ?? 0) + 1, currentUserId());
 
   return getSubcategory(id);
 }
@@ -1285,15 +1309,16 @@ export function createAccount(input: CreateAccountInput) {
 
   db.prepare(
     `INSERT INTO accounts
-      (id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day)
-     VALUES (?, ?, ?, ?, ?, ?)`
+      (id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     parsed.name,
     parsed.type,
     parsed.startingBalancePaise,
     parsed.type === "credit_card" ? parsed.creditLimitPaise ?? 0 : null,
-    parsed.type === "credit_card" ? parsed.paymentDueDay ?? null : null
+    parsed.type === "credit_card" ? parsed.paymentDueDay ?? null : null,
+    currentUserId()
   );
 
   return getAccount(id);
@@ -1387,9 +1412,9 @@ export function getCurrentBatch(weekStart: string, weekEnd: string) {
   const parsed = createBatchSchema.parse({ weekStart, weekEnd, status: "draft" });
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO entry_batches (id, week_start, week_end, status)
-     VALUES (?, ?, ?, ?)`
-  ).run(id, parsed.weekStart, parsed.weekEnd, parsed.status);
+    `INSERT INTO entry_batches (id, week_start, week_end, status, user_id)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(id, parsed.weekStart, parsed.weekEnd, parsed.status, currentUserId());
 
   return getBatch(id);
 }
@@ -1602,8 +1627,8 @@ function insertValidatedTransaction(parsed: CreateTransactionInput) {
       `INSERT INTO transactions
         (id, batch_id, date, account_id, method, merchant, note,
          type_id, subcategory_id, amount_paise, direction, kind, status,
-         transfer_account_id, linked_transaction_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         transfer_account_id, linked_transaction_id, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
       id,
       parsed.batchId ?? null,
@@ -1619,7 +1644,8 @@ function insertValidatedTransaction(parsed: CreateTransactionInput) {
       parsed.kind,
       status,
       parsed.transferAccountId ?? null,
-      parsed.linkedTransactionId ?? null
+      parsed.linkedTransactionId ?? null,
+      currentUserId()
   );
 
   if (parsed.splits?.length) {
@@ -1629,9 +1655,9 @@ function insertValidatedTransaction(parsed: CreateTransactionInput) {
   if (parsed.linkedTransactionId && (parsed.kind === "refund" || parsed.kind === "reversal")) {
     db.prepare(
       `INSERT INTO transaction_links
-        (id, source_transaction_id, target_transaction_id, link_type, amount_paise)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run(randomUUID(), id, parsed.linkedTransactionId, parsed.kind, parsed.amountPaise);
+        (id, source_transaction_id, target_transaction_id, link_type, amount_paise, user_id)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(randomUUID(), id, parsed.linkedTransactionId, parsed.kind, parsed.amountPaise, currentUserId());
   }
 
   syncLoanPaymentForTransaction(id, parsed);
@@ -1974,15 +2000,23 @@ export function getWealthSummary(): WealthSummary {
 
   // Freeze this month's snapshot so a net-worth history builds over time.
   db.prepare(
-    `INSERT INTO net_worth_snapshots (month, liquid_paise, investments_paise, liabilities_paise, net_worth_paise)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(month) DO UPDATE SET
+    `INSERT INTO net_worth_snapshots
+       (user_id, month, liquid_paise, investments_paise, liabilities_paise, net_worth_paise)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, month) DO UPDATE SET
        liquid_paise = excluded.liquid_paise,
        investments_paise = excluded.investments_paise,
        liabilities_paise = excluded.liabilities_paise,
        net_worth_paise = excluded.net_worth_paise,
        captured_at = CURRENT_TIMESTAMP`
-  ).run(month, netWorth.liquidPaise, netWorth.investmentsPaise, netWorth.liabilitiesPaise, netWorth.netWorthPaise);
+  ).run(
+    currentUserId(),
+    month,
+    netWorth.liquidPaise,
+    netWorth.investmentsPaise,
+    netWorth.liabilitiesPaise,
+    netWorth.netWorthPaise
+  );
 
   const history = asRecords<{ month: string; net_worth_paise: number }>(
     db
@@ -2242,9 +2276,9 @@ export function createBudgetLine(input: CreateBudgetLineInput): BudgetLineSummar
 
   try {
     db.prepare(
-      `INSERT INTO budget_lines (id, month, scope_type, scope_id, amount_paise)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run(id, parsed.month, parsed.scopeType, scope.scopeId, parsed.amountPaise);
+      `INSERT INTO budget_lines (id, month, scope_type, scope_id, amount_paise, user_id)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(id, parsed.month, parsed.scopeType, scope.scopeId, parsed.amountPaise, currentUserId());
   } catch (error) {
     if (error instanceof Error && error.message.includes("UNIQUE")) {
       throw badRequest(`${scope.name} already has a budget for ${parsed.month}.`);
@@ -2271,9 +2305,9 @@ export function copyBudgetFromPreviousMonth(month: string) {
       try {
         ensureNoBudgetOverlap(safeMonth, row.scope_type, row.scope_id);
         db.prepare(
-          `INSERT INTO budget_lines (id, month, scope_type, scope_id, amount_paise)
-           VALUES (?, ?, ?, ?, ?)`
-        ).run(randomUUID(), safeMonth, row.scope_type, row.scope_id, row.amount_paise);
+          `INSERT INTO budget_lines (id, month, scope_type, scope_id, amount_paise, user_id)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        ).run(randomUUID(), safeMonth, row.scope_type, row.scope_id, row.amount_paise, currentUserId());
         copiedCount += 1;
       } catch {
         skippedCount += 1;
@@ -4057,9 +4091,9 @@ function syncAutopayPaymentForTransaction(
       ? requireAutopayRow(input.subscriptionId)
       : requireActiveAutopay(input.subscriptionId);
   db.prepare(
-    `INSERT INTO autopay_payments (id, subscription_id, transaction_id)
-     VALUES (?, ?, ?)`
-  ).run(randomUUID(), subscription.id, transactionId);
+    `INSERT INTO autopay_payments (id, subscription_id, transaction_id, user_id)
+     VALUES (?, ?, ?, ?)`
+  ).run(randomUUID(), subscription.id, transactionId, currentUserId());
 }
 
 function getInvestmentPaymentForTransaction(transactionId: string) {
@@ -4088,9 +4122,9 @@ function syncInvestmentPaymentForTransaction(transactionId: string, input: Creat
     throw badRequest("Linked holding must be a mutual fund.");
   }
   db.prepare(
-    `INSERT INTO investment_payments (id, investment_id, transaction_id)
-     VALUES (?, ?, ?)`
-  ).run(randomUUID(), investment.id, transactionId);
+    `INSERT INTO investment_payments (id, investment_id, transaction_id, user_id)
+     VALUES (?, ?, ?, ?)`
+  ).run(randomUUID(), investment.id, transactionId, currentUserId());
 }
 
 function syncLoanPaymentForTransaction(transactionId: string, input: CreateTransactionInput) {
@@ -4112,8 +4146,8 @@ function syncLoanPaymentForTransaction(transactionId: string, input: CreateTrans
   db.prepare(
     `INSERT INTO loan_payments
       (id, loan_id, transaction_id, payment_type, amount_paise, principal_paise, interest_paise,
-       outstanding_before_paise, outstanding_after_paise)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       outstanding_before_paise, outstanding_after_paise, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     randomUUID(),
     loan.id,
@@ -4123,7 +4157,8 @@ function syncLoanPaymentForTransaction(transactionId: string, input: CreateTrans
     placeholderPrincipalPaise,
     0,
     loan.starting_outstanding_paise,
-    placeholderOutstandingAfterPaise
+    placeholderOutstandingAfterPaise,
+    currentUserId()
   );
 }
 
@@ -4351,16 +4386,17 @@ function insertSplits(
   splits: NonNullable<CreateTransactionInput["splits"]>
 ) {
   const insert = db.prepare(
-    `INSERT INTO transaction_splits (id, transaction_id, subcategory_id, amount_paise)
-     VALUES (?, ?, ?, ?)`
+    `INSERT INTO transaction_splits (id, transaction_id, subcategory_id, amount_paise, user_id)
+     VALUES (?, ?, ?, ?, ?)`
   );
+  const owner = currentUserId();
 
   for (const split of splits) {
     const subcategory = getSubcategoryRow(split.subcategoryId);
     if (!subcategory) {
       throw badRequest("Selected split SubType does not exist.");
     }
-    insert.run(randomUUID(), transactionId, subcategory.id, split.amountPaise);
+    insert.run(randomUUID(), transactionId, subcategory.id, split.amountPaise, owner);
   }
 }
 
@@ -4749,19 +4785,20 @@ function ensureImportSubcategory(
 function insertImportPlans(context: ImportContext) {
   const insertAccount = db.prepare(
     `INSERT INTO accounts
-      (id, name, type, starting_balance_paise, credit_limit_paise, is_archived, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, name, type, starting_balance_paise, credit_limit_paise, is_archived, created_at, updated_at, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const insertType = db.prepare(
     `INSERT INTO category_types
-      (id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const insertSubcategory = db.prepare(
     `INSERT INTO subcategories
-      (id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
+  const owner = currentUserId();
 
   for (const account of context.plannedAccounts) {
     insertAccount.run(
@@ -4772,7 +4809,8 @@ function insertImportPlans(context: ImportContext) {
       account.credit_limit_paise,
       account.is_archived,
       account.created_at,
-      account.updated_at
+      account.updated_at,
+      owner
     );
   }
 
@@ -4786,7 +4824,8 @@ function insertImportPlans(context: ImportContext) {
       type.is_system,
       type.is_locked,
       type.sort_order,
-      type.created_at
+      type.created_at,
+      owner
     );
   }
 
@@ -4800,7 +4839,8 @@ function insertImportPlans(context: ImportContext) {
       subcategory.is_system,
       subcategory.is_locked,
       subcategory.sort_order,
-      subcategory.created_at
+      subcategory.created_at,
+      owner
     );
   }
 }
@@ -5265,8 +5305,17 @@ function csvCell(value: string) {
 }
 
 function setSetting(key: string, value: string) {
+  if (isPerPersonSetting(key)) {
+    db.prepare(
+      `INSERT INTO user_settings (user_id, key, value)
+       VALUES (?, ?, ?)
+       ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`
+    ).run(currentUserId(), key, value);
+    return;
+  }
+
   db.prepare(
-    `INSERT INTO settings (key, value)
+    `INSERT INTO app_settings (key, value)
      VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`
   ).run(key, value);
@@ -5274,7 +5323,11 @@ function setSetting(key: string, value: string) {
 
 function setOptionalSetting(key: string, value: string | null) {
   if (value === null) {
-    db.prepare("DELETE FROM settings WHERE key = ?").run(key);
+    if (isPerPersonSetting(key)) {
+      db.prepare("DELETE FROM user_settings WHERE user_id = ? AND key = ?").run(currentUserId(), key);
+    } else {
+      db.prepare("DELETE FROM app_settings WHERE key = ?").run(key);
+    }
     return;
   }
 

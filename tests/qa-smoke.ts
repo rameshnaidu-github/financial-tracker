@@ -391,7 +391,7 @@ test("creates backup, stores last-backup status, and removes empty backups", asy
     count: number;
   };
   const backupStatus = backupDb
-    .prepare("SELECT key, value FROM settings WHERE key IN ('last_backup_at', 'last_backup_path', 'last_backup_mode')")
+    .prepare("SELECT key, value FROM app_settings WHERE key IN ('last_backup_at', 'last_backup_path', 'last_backup_mode')")
     .all() as Array<{ key: string; value: string }>;
 
   assert(result.path.startsWith(testBackupDir), "Backup should be written to configured backup dir.");
@@ -2643,7 +2643,7 @@ test("report outflow covers every non-inflow type and matches the overview", asy
   });
 
   services.createTransaction({
-    date: "2026-10-05",
+    date: "2028-04-05",
     accountId: bank.id,
     method: "upi",
     typeId: typeId("Expense"),
@@ -2653,7 +2653,7 @@ test("report outflow covers every non-inflow type and matches the overview", asy
     kind: "expense"
   });
   services.createTransaction({
-    date: "2026-10-06",
+    date: "2028-04-06",
     accountId: bank.id,
     method: "bank_transfer",
     typeId: typeId("Transfer"),
@@ -2663,7 +2663,7 @@ test("report outflow covers every non-inflow type and matches the overview", asy
     kind: "transfer"
   });
   services.createTransaction({
-    date: "2026-10-07",
+    date: "2028-04-07",
     accountId: card.id,
     method: "credit_card",
     typeId: typeId("Expense"),
@@ -2673,7 +2673,7 @@ test("report outflow covers every non-inflow type and matches the overview", asy
     kind: "expense"
   });
   services.createTransaction({
-    date: "2026-10-08",
+    date: "2028-04-08",
     accountId: bank.id,
     method: "bank_transfer",
     typeId: typeId("Credit Card Payment"),
@@ -2683,7 +2683,11 @@ test("report outflow covers every non-inflow type and matches the overview", asy
     transferAccountId: card.id
   });
 
-  const report = services.getMonthlyReport(undefined, "2026-10");
+  // A month of its own. This assertion is a total for the whole month across every account, so
+  // any other test writing a transaction into the same month breaks it -- which is what happened
+  // when the month it used to name, 2026-10, became the current one and other tests started
+  // dating their rows into it.
+  const report = services.getMonthlyReport(undefined, "2028-04");
   const outflowFromTypes = cashflowPartsFromTypes(report.types as ReportType[], "out").reduce(
     (sum, part) => sum + part.amountPaise,
     0
@@ -2701,7 +2705,7 @@ test("report outflow covers every non-inflow type and matches the overview", asy
     "The outflow total must equal the Reports outflow breakdown."
   );
 
-  const overview = services.getOverview(undefined, "2026-10");
+  const overview = services.getOverview(undefined, "2028-04");
   assert(
     overview.summary.totalOutflowPaise === report.totalOutflowPaise,
     "The overview outflow must match the report outflow."
@@ -2786,7 +2790,7 @@ test("deleted defaults stay deleted after a restart while new defaults arrive on
 
   // A database from before the seeded-defaults ledger, missing a newly shipped default.
   services.deleteSubcategory("sub_personal_care");
-  dbModule.db.prepare("DELETE FROM settings WHERE key = 'seeded_default_taxonomy_ids'").run();
+  dbModule.db.prepare("DELETE FROM user_settings WHERE key = 'seeded_default_taxonomy_ids'").run();
   dbModule.initDatabase();
   assert(hasTaxonomyId("sub_personal_care"), "A newly shipped default should reach an existing database.");
   assert(!hasTaxonomyId("sub_entertainment"), "An original default the user deleted stays deleted on upgrade.");

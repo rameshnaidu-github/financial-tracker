@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   DEFAULT_CATEGORY_TYPES,
@@ -24,10 +25,24 @@ db.exec("PRAGMA busy_timeout = 5000;");
 
 export function initDatabase() {
   db.exec(`
-    CREATE TABLE IF NOT EXISTS settings (
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS user_settings (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY (user_id, key)
+    );
+
 
     CREATE TABLE IF NOT EXISTS accounts (
       id TEXT PRIMARY KEY,
@@ -169,33 +184,45 @@ export function initDatabase() {
     );
 
     CREATE TABLE IF NOT EXISTS net_worth_snapshots (
-      month TEXT PRIMARY KEY CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
       liquid_paise INTEGER NOT NULL,
       investments_paise INTEGER NOT NULL,
       liabilities_paise INTEGER NOT NULL,
       net_worth_paise INTEGER NOT NULL,
-      captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, month)
     );
 
     CREATE TABLE IF NOT EXISTS budget_lines (
       id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
       scope_type TEXT NOT NULL CHECK (scope_type IN ('type', 'subcategory')),
       scope_id TEXT NOT NULL,
       amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(month, scope_type, scope_id)
+      UNIQUE (user_id, month, scope_type, scope_id)
     );
-
   `);
 
+  // Stage 2 of the move to more than one person: the owner exists, and settings are split by
+  // whom they belong to, before anything else reads or writes a row.
+  ensureOwner();
+  splitSettings();
   migrateAccountNameConstraint();
   migrateAccountTypes();
   migrateTransactionKinds();
   migrateTransactionSplitsNullable();
   ensureTaxonomySchema();
+  // The owner columns and the keys that carry them come before anything writes a taxonomy row,
+  // so every row written below belongs to somebody from the moment it exists.
+  addOwnerColumns();
+  rekeyForOwner();
   seedTaxonomy();
+  // The legacy migration stays after seeding, because it maps old rows onto the default Types
+  // and SubTypes that seeding is what puts there.
   migrateLegacyCategoriesToTaxonomy();
   dropLegacyCategories();
   ensureAccountIndexes();
@@ -255,6 +282,249 @@ function dropLegacyCategories() {
   } finally {
     db.exec("PRAGMA foreign_keys = ON;");
   }
+}
+
+/**
+ * Every table whose rows belong to one person. app_settings is deliberately absent -- it holds
+ * installation-wide state -- and users is the table doing the owning.
+ */
+const OWNED_TABLES = [
+  "accounts",
+  "entry_batches",
+  "transactions",
+  "transaction_splits",
+  "transaction_links",
+  "loans",
+  "loan_payments",
+  "autopay_subscriptions",
+  "autopay_payments",
+  "investments",
+  "investment_payments",
+  "vacations",
+  "vacation_expenses",
+  "net_worth_snapshots",
+  "budget_lines",
+  "category_types",
+  "subcategories"
+] as const;
+
+/**
+ * An owner id no user can ever have, used only as the default a NOT NULL column needs while it
+ * is being added to a table that already has rows. Every such row is attributed to its owner
+ * immediately afterwards, and because the sentinel satisfies no foreign key, a later INSERT that
+ * forgets to name an owner fails loudly instead of quietly creating an unowned row.
+ */
+const UNATTRIBUTED = "";
+
+/** What the owner is called until the profile says who they are. */
+const PLACEHOLDER_OWNER_EMAIL = "owner@localhost";
+
+/** D2: the settings keys that describe a person, as opposed to the installation. */
+const PER_PERSON_SETTINGS = new Set([
+  "profile_name",
+  "profile_email",
+  "profile_age",
+  "card_utilization_alert_percent",
+  "first_screen",
+  "week_start",
+  "currency",
+  // A person's taxonomy is their own (D1), so the ledger of which defaults they have already
+  // been given is theirs too.
+  "seeded_default_taxonomy_ids"
+]);
+
+/**
+ * There is exactly one person until sign-up exists, and on an existing database that person is
+ * whoever the stored profile describes. Their id is generated once and then never changes, so
+ * every row attributed to them stays attributed across restarts.
+ */
+function ensureOwner() {
+  const profileEmail = () => {
+    const source = tableExists("settings") ? "settings" : "user_settings";
+    const stored = db.prepare(`SELECT value FROM ${source} WHERE key = 'profile_email'`).get() as
+      | { value: string }
+      | undefined;
+    return (stored?.value ?? "").trim();
+  };
+
+  const existing = db.prepare("SELECT id, email FROM users ORDER BY created_at, id LIMIT 1").get() as
+    | { id: string; email: string }
+    | undefined;
+  if (existing) {
+    // A database created before its owner filled in a profile holds the placeholder below. Once
+    // the profile names them, the owner becomes that person rather than staying anonymous.
+    const email = profileEmail();
+    if (existing.email === PLACEHOLDER_OWNER_EMAIL && email) {
+      db.prepare("UPDATE users SET email = ? WHERE id = ?").run(email, existing.id);
+    }
+    return existing.id;
+  }
+
+  const id = randomUUID();
+  db.prepare("INSERT INTO users (id, email) VALUES (?, ?)").run(id, profileEmail() || PLACEHOLDER_OWNER_EMAIL);
+  return id;
+}
+
+/** The one owner. Everything that writes a row needs this until requests carry a person. */
+export function currentUserId(): string {
+  const row = db.prepare("SELECT id FROM users ORDER BY created_at, id LIMIT 1").get() as
+    | { id: string }
+    | undefined;
+  if (!row) {
+    throw new Error("No user exists: initDatabase must run before any row is written.");
+  }
+  return row.id;
+}
+
+/** Keeps the owner's identity in step with the profile they edit. */
+export function setOwnerEmail(email: string) {
+  const trimmed = email.trim();
+  if (!trimmed) {
+    return;
+  }
+  db.prepare("UPDATE users SET email = ? WHERE id = ?").run(trimmed, currentUserId());
+}
+
+/**
+ * Gives every owned table a user_id. SQLite cannot add a NOT NULL column without a default, and
+ * refuses a default on a column that references another table, so the column is added with
+ * foreign keys off and the sentinel default; the existing rows are then attributed to the owner.
+ * What a table gains is an owner it cannot lose, not a nullable column somebody has to remember.
+ */
+function addOwnerColumns() {
+  const owner = ensureOwner();
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    for (const table of OWNED_TABLES) {
+      if (!tableExists(table)) continue;
+      if (!columnExists(table, "user_id")) {
+        db.exec(
+          `ALTER TABLE ${table}
+             ADD COLUMN user_id TEXT NOT NULL DEFAULT '${UNATTRIBUTED}'
+             REFERENCES users(id) ON DELETE CASCADE`
+        );
+      }
+      db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(owner, UNATTRIBUTED);
+      // Every owner-filtered query the app will grow needs this, or it reads the whole table.
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_owner ON ${table}(user_id)`);
+    }
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
+}
+
+/**
+ * The three tables whose keys make a second person impossible: one month, one budget line per
+ * scope and one Type name per *database* rather than per person. SQLite cannot alter a primary
+ * key or drop an inline UNIQUE, so each is rebuilt with the owner inside its key.
+ */
+function rekeyForOwner() {
+  const owner = ensureOwner();
+  const keyed = (table: string, marker: string) => {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as
+      | { sql: string }
+      | undefined;
+    return !row || row.sql.replace(/\s+/g, " ").includes(marker);
+  };
+
+  const rebuild = (table: string, columns: string, create: string) => {
+    db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(owner, UNATTRIBUTED);
+    db.exec(`CREATE TABLE ${table}_rekeyed (${create});`);
+    db.exec(`INSERT INTO ${table}_rekeyed (${columns}) SELECT ${columns} FROM ${table};`);
+    db.exec(`DROP TABLE ${table};`);
+    db.exec(`ALTER TABLE ${table}_rekeyed RENAME TO ${table};`);
+  };
+
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    transaction(() => {
+      if (!keyed("net_worth_snapshots", "PRIMARY KEY (user_id, month)")) {
+        rebuild(
+          "net_worth_snapshots",
+          "user_id, month, liquid_paise, investments_paise, liabilities_paise, net_worth_paise, captured_at",
+          `user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+           month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
+           liquid_paise INTEGER NOT NULL,
+           investments_paise INTEGER NOT NULL,
+           liabilities_paise INTEGER NOT NULL,
+           net_worth_paise INTEGER NOT NULL,
+           captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           PRIMARY KEY (user_id, month)`
+        );
+      }
+
+      if (!keyed("budget_lines", "UNIQUE (user_id, month, scope_type, scope_id)")) {
+        rebuild(
+          "budget_lines",
+          "id, user_id, month, scope_type, scope_id, amount_paise, created_at, updated_at",
+          `id TEXT PRIMARY KEY,
+           user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+           month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
+           scope_type TEXT NOT NULL CHECK (scope_type IN ('type', 'subcategory')),
+           scope_id TEXT NOT NULL,
+           amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           UNIQUE (user_id, month, scope_type, scope_id)`
+        );
+      }
+
+      if (!keyed("category_types", "UNIQUE (user_id, name)")) {
+        rebuild(
+          "category_types",
+          "id, user_id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at",
+          `id TEXT PRIMARY KEY,
+           user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+           name TEXT NOT NULL COLLATE NOCASE,
+           behavior TEXT NOT NULL CHECK (behavior IN ('expense', 'income', 'loan', 'investment', 'transfer', 'card_payment', 'refund')),
+           icon TEXT NOT NULL,
+           color TEXT NOT NULL,
+           is_system INTEGER NOT NULL DEFAULT 0,
+           is_locked INTEGER NOT NULL DEFAULT 0,
+           sort_order INTEGER NOT NULL DEFAULT 0,
+           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           UNIQUE (user_id, name)`
+        );
+      }
+    });
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
+
+  // A rebuilt table keeps none of its indexes, so the ones it had come back.
+  for (const table of ["net_worth_snapshots", "budget_lines", "category_types"]) {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_owner ON ${table}(user_id);`);
+  }
+  ensureBudgetIndexes();
+  ensureTaxonomyIndexes();
+}
+
+/**
+ * D2: one settings table held both the owner's profile and installation-wide bookkeeping, keyed
+ * so only one of each could exist. It becomes two tables whose names say which kind they hold,
+ * so no future reader has to know the difference by heart.
+ */
+function splitSettings() {
+  // Only a database written by an earlier release still has the single settings table; this is the
+  // one place that knows it ever existed, which is why nothing above creates it.
+  if (!tableExists("settings")) {
+    return;
+  }
+  const owner = ensureOwner();
+  const rows = db.prepare("SELECT key, value FROM settings").all() as Array<{ key: string; value: string }>;
+  const mine = db.prepare("INSERT OR IGNORE INTO user_settings (user_id, key, value) VALUES (?, ?, ?)");
+  const shared = db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)");
+
+  transaction(() => {
+    for (const row of rows) {
+      if (PER_PERSON_SETTINGS.has(row.key)) {
+        mine.run(owner, row.key, row.value);
+      } else {
+        shared.run(row.key, row.value);
+      }
+    }
+    db.exec("DROP TABLE settings;");
+  });
 }
 
 function ensureLoanIndexes() {
@@ -570,18 +840,21 @@ function ensureTaxonomySchema() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS category_types (
       id TEXT PRIMARY KEY,
-      name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL COLLATE NOCASE,
       behavior TEXT NOT NULL CHECK (behavior IN ('expense', 'income', 'loan', 'investment', 'transfer', 'card_payment', 'refund')),
       icon TEXT NOT NULL,
       color TEXT NOT NULL,
       is_system INTEGER NOT NULL DEFAULT 0,
       is_locked INTEGER NOT NULL DEFAULT 0,
       sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (user_id, name)
     );
 
     CREATE TABLE IF NOT EXISTS subcategories (
       id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       type_id TEXT NOT NULL REFERENCES category_types(id) ON DELETE CASCADE,
       name TEXT NOT NULL COLLATE NOCASE,
       icon TEXT NOT NULL,
@@ -614,29 +887,32 @@ function ensureTaxonomySchema() {
 const SEEDED_DEFAULTS_SETTING = "seeded_default_taxonomy_ids";
 
 /**
- * Inserts each shipped default Type/SubType exactly once per database. The ids already
- * delivered are recorded in settings, so a default the user deletes stays deleted after a
- * restart, while a default added in a later release still reaches existing databases.
+ * Inserts each shipped default Type/SubType exactly once per person. The ids already delivered
+ * are recorded against that person, so a default they delete stays deleted after a restart, while
+ * a default added in a later release still reaches existing databases.
  */
 function seedTaxonomy() {
+  const owner = currentUserId();
   const insertType = db.prepare(`
     INSERT OR IGNORE INTO category_types
-      (id, name, behavior, icon, color, is_system, is_locked, sort_order)
-    VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+      (id, user_id, name, behavior, icon, color, is_system, is_locked, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
   `);
   const insertSubcategory = db.prepare(`
     INSERT OR IGNORE INTO subcategories
-      (id, type_id, name, icon, color, is_system, is_locked, sort_order)
-    VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+      (id, user_id, type_id, name, icon, color, is_system, is_locked, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
   `);
-  const typeExists = db.prepare("SELECT 1 FROM category_types WHERE id = ?");
+  const typeExists = db.prepare("SELECT 1 FROM category_types WHERE id = ? AND user_id = ?");
 
   const recorded = getSetting(SEEDED_DEFAULTS_SETTING);
   let seeded: Set<string>;
   if (recorded !== undefined) {
     seeded = new Set(JSON.parse(recorded) as string[]);
   } else {
-    const hasTaxonomy = (db.prepare("SELECT COUNT(*) AS count FROM category_types").get() as { count: number }).count > 0;
+    const hasTaxonomy =
+      (db.prepare("SELECT COUNT(*) AS count FROM category_types WHERE user_id = ?").get(owner) as { count: number })
+        .count > 0;
     // Before this ledger existed every original default was inserted on each boot, so an
     // original default missing from an existing database is one the user deleted.
     seeded = new Set(
@@ -652,6 +928,7 @@ function seedTaxonomy() {
     if (!seeded.has(type.id)) {
       insertType.run(
         type.id,
+        owner,
         type.name,
         type.behavior,
         type.icon,
@@ -668,11 +945,12 @@ function seedTaxonomy() {
         return;
       }
       // A default SubType can only be added under a parent Type the user still has.
-      if (!typeExists.get(type.id)) {
+      if (!typeExists.get(type.id, owner)) {
         return;
       }
       insertSubcategory.run(
         subcategory.id,
+        owner,
         type.id,
         subcategory.name,
         subcategory.icon,
@@ -840,34 +1118,57 @@ function createMigrationBackup(label: string) {
   pruneBackupFiles(backupDir);
 }
 
+/**
+ * Reads a setting from whichever of the two tables owns that kind of key (D2), so every existing
+ * caller keeps working without having to know which is which.
+ */
 function getSetting(key: string) {
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
+  const row = (
+    PER_PERSON_SETTINGS.has(key)
+      ? db.prepare("SELECT value FROM user_settings WHERE user_id = ? AND key = ?").get(currentUserId(), key)
+      : db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key)
+  ) as
     | { value: string }
     | undefined;
   return row?.value;
 }
 
 function setSetting(key: string, value: string) {
+  if (PER_PERSON_SETTINGS.has(key)) {
+    db.prepare(
+      `INSERT INTO user_settings (user_id, key, value)
+       VALUES (?, ?, ?)
+       ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`
+    ).run(currentUserId(), key, value);
+    return;
+  }
   db.prepare(
-    `INSERT INTO settings (key, value)
+    `INSERT INTO app_settings (key, value)
      VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`
   ).run(key, value);
 }
 
-function seedSettings() {
-  const insert = db.prepare(`
-    INSERT OR IGNORE INTO settings (key, value)
-    VALUES (?, ?)
-  `);
+/** The split in D2, as one list the server can ask about rather than two tables to remember. */
+export function isPerPersonSetting(key: string) {
+  return PER_PERSON_SETTINGS.has(key);
+}
 
-  insert.run("currency", CURRENCY);
-  insert.run("week_start", WEEK_START);
-  insert.run("first_screen", "overview");
-  insert.run("card_utilization_alert_percent", "30");
-  insert.run("profile_name", "");
-  insert.run("profile_email", "");
-  insert.run("profile_age", "");
+function seedSettings() {
+  const owner = currentUserId();
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO user_settings (user_id, key, value)
+    VALUES (?, ?, ?)
+  `);
+  const seed = (key: string, value: string) => insert.run(owner, key, value);
+
+  seed("currency", CURRENCY);
+  seed("week_start", WEEK_START);
+  seed("first_screen", "overview");
+  seed("card_utilization_alert_percent", "30");
+  seed("profile_name", "");
+  seed("profile_email", "");
+  seed("profile_age", "");
 }
 
 export function transaction<T>(fn: () => T): T {
