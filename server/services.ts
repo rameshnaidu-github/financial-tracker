@@ -1496,15 +1496,6 @@ function buildTransactionFilters(query: TransactionQuery) {
     );
     params.push(query.typeId, query.typeId);
   }
-  if (query.subcategoryId) {
-    filters.push(
-      `(t.subcategory_id = ? OR EXISTS (
-        SELECT 1 FROM transaction_splits s
-        WHERE s.transaction_id = t.id AND s.subcategory_id = ?
-      ))`
-    );
-    params.push(query.subcategoryId, query.subcategoryId);
-  }
   if (query.status) {
     filters.push("t.status = ?");
     params.push(query.status);
@@ -1581,7 +1572,11 @@ export function listTransactions(query: TransactionQuery = {}): TransactionSumma
          FROM transactions t
          ${transactionJoins}
 ${where}
-         ORDER BY t.date DESC, t.created_at DESC
+         -- t.id last so the order is decided by the row, not by where it happens to sit: two
+         -- transactions entered on the same day in the same second would otherwise come back in
+         -- whatever sequence storage gave, and that sequence changes whenever the table is
+         -- rebuilt, vacuumed or restored.
+         ORDER BY t.date DESC, t.created_at DESC, t.id DESC
          LIMIT ${limit} OFFSET ${offset}`
       )
       .all(...params)
@@ -2161,7 +2156,7 @@ export function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): 
           `SELECT t.date AS date
            FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id AND t.user_id = lp.user_id
            WHERE lp.loan_id = ? AND lp.user_id = ? AND lp.payment_type = 'emi'
-           ORDER BY t.date DESC`
+           ORDER BY t.date DESC, t.id DESC`
         )
         .all(loan.id, currentUserId())
     );
@@ -5046,7 +5041,7 @@ WHERE t.id != ?
            AND t.amount_paise = ?
            AND t.direction = ?
            AND ABS(julianday(t.date) - julianday(?)) <= 2
-         ORDER BY t.date DESC
+         ORDER BY t.date DESC, t.id DESC
          LIMIT 5`
       )
       .all(input.id, input.accountId, input.amountPaise, input.direction, input.date)

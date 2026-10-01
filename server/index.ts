@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZodError } from "zod";
+import { currentBatchQuerySchema } from "../shared/finance.ts";
 import { initDatabase } from "./db.ts";
 import { isTrustedRequestOrigin, securityHeaders } from "./security.ts";
 import {
@@ -241,8 +242,8 @@ app.delete("/api/subscriptions/:id", async (request) => {
 });
 
 app.get("/api/batches/current", async (request) => {
-  const query = request.query as { weekStart: string; weekEnd: string };
-  return getCurrentBatch(query.weekStart, query.weekEnd);
+  const { weekStart, weekEnd } = currentBatchQuerySchema.parse(request.query);
+  return getCurrentBatch(weekStart, weekEnd);
 });
 
 app.post("/api/batches/:id/save", async (request) => {
@@ -470,8 +471,16 @@ if (existsSync(distDir)) {
     }
   });
 
-  app.setNotFoundHandler((_request, reply) => {
-    reply.header("cache-control", "no-store").sendFile("index.html");
+  // The single-page app owns every path the server does not, so an unknown page URL gets the app
+  // and the router sorts it out. An unknown /api path is a different thing entirely: it is a call
+  // that was never going to work, and answering it with the page means the caller gets 200 and a
+  // mouthful of HTML where it expected JSON, then fails later with a parse error that says nothing
+  // about the real mistake.
+  app.setNotFoundHandler((request, reply) => {
+    if (request.url.startsWith("/api/")) {
+      return reply.status(404).send({ error: "Not found", method: request.method, path: request.url });
+    }
+    return reply.header("cache-control", "no-store").sendFile("index.html");
   });
 }
 

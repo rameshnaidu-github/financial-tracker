@@ -593,6 +593,21 @@ export const createBatchSchema = z.object({
   status: z.enum(["draft", "saved"]).default("draft")
 });
 
+/**
+ * The week the entry screen is asking about. These two arrive on the query string and go straight
+ * into a prepared statement, so they are checked the way every other input is: a request missing
+ * one, or carrying something that is not a date, is answered with a 400 that says which.
+ */
+export const currentBatchQuerySchema = z
+  .object({
+    weekStart: dateSchema,
+    weekEnd: dateSchema
+  })
+  .refine((value) => value.weekStart <= value.weekEnd, {
+    message: "The week must start on or before it ends.",
+    path: ["weekEnd"]
+  });
+
 export type AccountType = z.infer<typeof accountTypeSchema>;
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
 export type Direction = z.infer<typeof directionSchema>;
