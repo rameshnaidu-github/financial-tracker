@@ -357,23 +357,42 @@ function ensureOwner() {
     if (existing.email === PLACEHOLDER_OWNER_EMAIL && email) {
       db.prepare("UPDATE users SET email = ? WHERE id = ?").run(email, existing.id);
     }
+    rememberedOwner = existing.id;
     return existing.id;
   }
 
   const id = randomUUID();
   db.prepare("INSERT INTO users (id, email) VALUES (?, ?)").run(id, profileEmail() || PLACEHOLDER_OWNER_EMAIL);
+  forgetOwner();
   return id;
 }
 
-/** The one owner. Everything that writes a row needs this until requests carry a person. */
+/**
+ * The person every query is for. Stage 3 made this the single source the whole of services.ts
+ * reads, so Stage 4 changes this one function to read the request instead of the table.
+ *
+ * It is remembered rather than looked up: a single page of the app runs hundreds of statements
+ * and every one of them asks. The cache is cleared whenever the users table changes.
+ */
+let rememberedOwner: string | undefined;
+
 export function currentUserId(): string {
+  if (rememberedOwner) {
+    return rememberedOwner;
+  }
   const row = db.prepare("SELECT id FROM users ORDER BY created_at, id LIMIT 1").get() as
     | { id: string }
     | undefined;
   if (!row) {
     throw new Error("No user exists: initDatabase must run before any row is written.");
   }
-  return row.id;
+  rememberedOwner = row.id;
+  return rememberedOwner;
+}
+
+/** Called wherever the users table is written, so the id above is never stale. */
+function forgetOwner() {
+  rememberedOwner = undefined;
 }
 
 /** Keeps the owner's identity in step with the profile they edit. */
@@ -383,6 +402,7 @@ export function setOwnerEmail(email: string) {
     return;
   }
   db.prepare("UPDATE users SET email = ? WHERE id = ?").run(trimmed, currentUserId());
+  forgetOwner();
 }
 
 /**

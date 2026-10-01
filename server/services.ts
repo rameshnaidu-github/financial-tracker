@@ -417,10 +417,10 @@ export function listLoans(includeArchived = false): LoanSummary[] {
                 start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day,
                 is_archived, created_at, updated_at
          FROM loans
-         ${includeArchived ? "" : "WHERE is_archived = 0"}
+         WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
          ORDER BY is_archived ASC, name COLLATE NOCASE ASC`
       )
-      .all()
+      .all(currentUserId())
   );
 
   return rows.map(mapLoan);
@@ -514,7 +514,7 @@ export function updateLoan(id: string, input: UpdateLoanInput): LoanSummary {
        SET name = ?, subcategory_id = ?, principal_amount_paise = ?, starting_outstanding_paise = ?,
            start_month = ?, annual_interest_rate_bps = ?, tenure_months = ?, monthly_emi_paise = ?,
            emi_due_day = ?, is_archived = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`
+       WHERE id = ? AND user_id = ?`
     ).run(
       parsed.name,
       parsed.subcategoryId,
@@ -526,15 +526,17 @@ export function updateLoan(id: string, input: UpdateLoanInput): LoanSummary {
       parsed.monthlyEmiPaise,
       merged.emiDueDay ?? null,
       merged.isArchived ? 1 : 0,
-      id
+      id,
+      currentUserId()
     );
 
     if (parsed.subcategoryId !== existing.subcategory_id) {
       db.prepare(
         `UPDATE transactions
          SET subcategory_id = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE id IN (SELECT transaction_id FROM loan_payments WHERE loan_id = ?)`
-      ).run(parsed.subcategoryId, id);
+         WHERE user_id = ?
+           AND id IN (SELECT transaction_id FROM loan_payments WHERE loan_id = ? AND user_id = ?)`
+      ).run(parsed.subcategoryId, currentUserId(), id, currentUserId());
     }
 
     refreshLoanPayments(id);
@@ -544,7 +546,10 @@ export function updateLoan(id: string, input: UpdateLoanInput): LoanSummary {
 
 export function archiveLoan(id: string) {
   requireLoanRow(id);
-  db.prepare("UPDATE loans SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
+  db.prepare("UPDATE loans SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?").run(
+    id,
+    currentUserId()
+  );
   return { ok: true, mode: "archived" as const };
 }
 
@@ -577,10 +582,10 @@ export function listAutopaySubscriptions(includeArchived = false): AutopaySubscr
       .prepare(
         `SELECT id, name, amount_paise, start_date, duration_months, is_archived, created_at, updated_at
          FROM autopay_subscriptions
-         ${includeArchived ? "" : "WHERE is_archived = 0"}
+         WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
          ORDER BY is_archived ASC, name COLLATE NOCASE ASC`
       )
-      .all()
+      .all(currentUserId())
   );
 
   return rows.map(mapAutopaySubscription);
@@ -624,14 +629,15 @@ export function updateAutopaySubscription(
     `UPDATE autopay_subscriptions
      SET name = ?, amount_paise = ?, start_date = ?, duration_months = ?,
          is_archived = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
+     WHERE id = ? AND user_id = ?`
   ).run(
     merged.name,
     merged.amountPaise,
     merged.startDate,
     merged.durationMonths,
     merged.isArchived ? 1 : 0,
-    id
+    id,
+    currentUserId()
   );
 
   return requireAutopaySummary(id);
@@ -640,8 +646,8 @@ export function updateAutopaySubscription(
 export function archiveAutopaySubscription(id: string) {
   requireAutopayRow(id);
   db.prepare(
-    "UPDATE autopay_subscriptions SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-  ).run(id);
+    "UPDATE autopay_subscriptions SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?"
+  ).run(id, currentUserId());
   return { ok: true, mode: "archived" as const };
 }
 
@@ -695,9 +701,10 @@ export function listInvestments(): InvestmentSummary[] {
       .prepare(
         `SELECT ${INVESTMENT_COLUMNS}
          FROM investments
+         WHERE user_id = ?
          ORDER BY created_at, id`
       )
-      .all()
+      .all(currentUserId())
   );
   return rows.map(mapInvestment);
 }
@@ -752,7 +759,7 @@ export function updateInvestment(id: string, input: UpdateInvestmentInput): Inve
     `UPDATE investments
      SET type = ?, name = ?, invested_paise = ?, current_value_paise = ?, shares = ?, purchase_date = ?, note = ?,
          invested_as_of = ?, value_as_of = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
+     WHERE id = ? AND user_id = ?`
   ).run(
     merged.type,
     merged.name,
@@ -763,13 +770,14 @@ export function updateInvestment(id: string, input: UpdateInvestmentInput): Inve
     merged.note,
     merged.investedAsOf,
     merged.valueAsOf,
-    id
+    id,
+    currentUserId()
   );
   return requireInvestmentSummary(id);
 }
 
 export function deleteInvestment(id: string) {
-  const result = db.prepare("DELETE FROM investments WHERE id = ?").run(id);
+  const result = db.prepare("DELETE FROM investments WHERE id = ? AND user_id = ?").run(id, currentUserId());
   if (result.changes === 0) {
     throw notFound("Investment not found.");
   }
@@ -782,9 +790,9 @@ function requireInvestmentRow(id: string) {
       .prepare(
         `SELECT ${INVESTMENT_COLUMNS}
          FROM investments
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId())
   );
   if (!row) {
     throw notFound("Investment not found.");
@@ -801,10 +809,10 @@ function linkedSipsAfter(investmentId: string, afterDate: string) {
     db
       .prepare(
         `SELECT COUNT(*) AS count, COALESCE(SUM(t.amount_paise), 0) AS total
-         FROM investment_payments ip JOIN transactions t ON t.id = ip.transaction_id
-         WHERE ip.investment_id = ? AND t.direction = 'outflow' AND t.date > ?`
+         FROM investment_payments ip JOIN transactions t ON t.id = ip.transaction_id AND t.user_id = ip.user_id
+         WHERE ip.investment_id = ? AND ip.user_id = ? AND t.direction = 'outflow' AND t.date > ?`
       )
-      .get(investmentId, afterDate)
+      .get(investmentId, currentUserId(), afterDate)
   );
 }
 
@@ -897,10 +905,11 @@ function vacationSpendByVacation(): Map<string, VacationSpend> {
       .prepare(
         `SELECT ve.vacation_id AS vacation_id, SUM(t.amount_paise) AS total, COUNT(*) AS cnt
          FROM vacation_expenses ve
-         JOIN transactions t ON t.id = ve.transaction_id
+         JOIN transactions t ON t.id = ve.transaction_id AND t.user_id = ve.user_id
+         WHERE ve.user_id = ?
          GROUP BY ve.vacation_id`
       )
-      .all()
+      .all(currentUserId())
   );
   for (const row of totals) {
     map.set(row.vacation_id, { total: row.total, count: row.cnt, breakdown: [] });
@@ -924,12 +933,14 @@ function vacationSpendByVacation(): Map<string, VacationSpend> {
                 sc.name AS name, sc.icon AS icon, sc.color AS color,
                 SUM(COALESCE(ts.amount_paise, t.amount_paise)) AS amount
          FROM vacation_expenses ve
-         JOIN transactions t ON t.id = ve.transaction_id
-         LEFT JOIN transaction_splits ts ON ts.transaction_id = t.id
+         JOIN transactions t ON t.id = ve.transaction_id AND t.user_id = ve.user_id
+         LEFT JOIN transaction_splits ts ON ts.transaction_id = t.id AND ts.user_id = t.user_id
          LEFT JOIN subcategories sc ON sc.id = COALESCE(ts.subcategory_id, t.subcategory_id)
+                                   AND sc.user_id = t.user_id
+         WHERE ve.user_id = ?
          GROUP BY ve.vacation_id, COALESCE(ts.subcategory_id, t.subcategory_id)`
       )
-      .all()
+      .all(currentUserId())
   );
   for (const row of rows) {
     const entry = map.get(row.vacation_id) ?? { total: 0, count: 0, breakdown: [] };
@@ -973,10 +984,10 @@ export function listVacations(includeArchived = true): VacationSummary[] {
       .prepare(
         `SELECT id, name, start_date, end_date, budget_paise, note, is_archived, created_at, updated_at
          FROM vacations
-         ${includeArchived ? "" : "WHERE is_archived = 0"}
+         WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
          ORDER BY created_at DESC, id`
       )
-      .all()
+      .all(currentUserId())
   );
   const spend = vacationSpendByVacation();
   return rows.map((row) => mapVacation(row, spend.get(row.id)));
@@ -987,9 +998,9 @@ function requireVacationRow(id: string) {
     db
       .prepare(
         `SELECT id, name, start_date, end_date, budget_paise, note, is_archived, created_at, updated_at
-         FROM vacations WHERE id = ?`
+         FROM vacations WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId())
   );
   if (!row) {
     throw notFound("Vacation not found.");
@@ -1044,14 +1055,23 @@ export function updateVacation(id: string, input: UpdateVacationInput): Vacation
     `UPDATE vacations
      SET name = ?, start_date = ?, end_date = ?, budget_paise = ?, note = ?, is_archived = ?,
          updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
-  ).run(merged.name, merged.startDate, merged.endDate, merged.budgetPaise, merged.note, merged.isArchived, id);
+     WHERE id = ? AND user_id = ?`
+  ).run(
+    merged.name,
+    merged.startDate,
+    merged.endDate,
+    merged.budgetPaise,
+    merged.note,
+    merged.isArchived,
+    id,
+    currentUserId()
+  );
   return requireVacationSummary(id);
 }
 
 export function deleteVacation(id: string) {
   // Cascades only remove the expense links; the tagged transactions stay as normal expenses.
-  const result = db.prepare("DELETE FROM vacations WHERE id = ?").run(id);
+  const result = db.prepare("DELETE FROM vacations WHERE id = ? AND user_id = ?").run(id, currentUserId());
   if (result.changes === 0) {
     throw notFound("Vacation not found.");
   }
@@ -1064,10 +1084,10 @@ function getVacationExpenseForTransaction(transactionId: string) {
       .prepare(
         `SELECT id, vacation_id, transaction_id
          FROM vacation_expenses
-         WHERE transaction_id = ?
+         WHERE transaction_id = ? AND user_id = ?
          LIMIT 1`
       )
-      .get(transactionId)
+      .get(transactionId, currentUserId())
   );
 }
 
@@ -1127,18 +1147,20 @@ export function listCategoryTypes(): CategoryTypeSummary[] {
       .prepare(
         `SELECT id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at
          FROM category_types
+         WHERE user_id = ?
          ORDER BY sort_order, name`
       )
-      .all()
+      .all(currentUserId())
   );
   const subcategoryRows = asRecords<SubcategoryRow>(
     db
       .prepare(
         `SELECT id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at
          FROM subcategories
+         WHERE user_id = ?
          ORDER BY sort_order, name`
       )
-      .all()
+      .all(currentUserId())
   );
   const grouped = new Map<string, SubcategorySummary[]>();
 
@@ -1163,7 +1185,7 @@ export function createCategoryType(input: CreateCategoryTypeInput) {
   }
 
   const maxSort = asRecord<{ max_sort: number | null }>(
-    db.prepare("SELECT MAX(sort_order) AS max_sort FROM category_types").get()
+    db.prepare("SELECT MAX(sort_order) AS max_sort FROM category_types WHERE user_id = ?").get(currentUserId())
   );
   const id = randomUUID();
 
@@ -1190,7 +1212,9 @@ export function createSubcategory(input: CreateSubcategoryInput) {
   }
 
   const maxSort = asRecord<{ max_sort: number | null }>(
-    db.prepare("SELECT MAX(sort_order) AS max_sort FROM subcategories WHERE type_id = ?").get(parsed.typeId)
+    db
+      .prepare("SELECT MAX(sort_order) AS max_sort FROM subcategories WHERE type_id = ? AND user_id = ?")
+      .get(parsed.typeId, currentUserId())
   );
   const id = randomUUID();
 
@@ -1215,8 +1239,9 @@ export function deleteCategoryType(id: string) {
     db.prepare(
       `SELECT COUNT(*) AS count
        FROM loans
-       WHERE subcategory_id IN (SELECT id FROM subcategories WHERE type_id = ?)`
-    ).get(id)
+       WHERE user_id = ?
+         AND subcategory_id IN (SELECT id FROM subcategories WHERE type_id = ? AND user_id = ?)`
+    ).get(currentUserId(), id, currentUserId())
   );
   if (loanUsage.count > 0) {
     throw badRequest("This Type is used by a loan. Archive or reclassify the loan before deleting it.");
@@ -1229,22 +1254,25 @@ export function deleteCategoryType(id: string) {
            subcategory_id = NULL,
            status = CASE WHEN status = 'split' THEN status ELSE 'uncategorized' END,
            updated_at = CURRENT_TIMESTAMP
-       WHERE type_id = ?`
-    ).run(id);
+       WHERE type_id = ? AND user_id = ?`
+    ).run(id, currentUserId());
 
     db.prepare(
       `UPDATE transaction_splits
        SET subcategory_id = NULL
-       WHERE subcategory_id IN (SELECT id FROM subcategories WHERE type_id = ?)`
-    ).run(id);
+       WHERE user_id = ?
+         AND subcategory_id IN (SELECT id FROM subcategories WHERE type_id = ? AND user_id = ?)`
+    ).run(currentUserId(), id, currentUserId());
 
     db.prepare(
       `DELETE FROM budget_lines
-       WHERE (scope_type = 'type' AND scope_id = ?)
-          OR (scope_type = 'subcategory' AND scope_id IN (SELECT id FROM subcategories WHERE type_id = ?))`
-    ).run(id, id);
+       WHERE user_id = ?
+         AND ((scope_type = 'type' AND scope_id = ?)
+           OR (scope_type = 'subcategory'
+               AND scope_id IN (SELECT id FROM subcategories WHERE type_id = ? AND user_id = ?)))`
+    ).run(currentUserId(), id, id, currentUserId());
 
-    db.prepare("DELETE FROM category_types WHERE id = ?").run(id);
+    db.prepare("DELETE FROM category_types WHERE id = ? AND user_id = ?").run(id, currentUserId());
   });
 
   return { ok: true };
@@ -1259,7 +1287,7 @@ export function deleteSubcategory(id: string) {
     throw badRequest("This SubType is locked and cannot be deleted.");
   }
   const loanUsage = asRecord<{ count: number }>(
-    db.prepare("SELECT COUNT(*) AS count FROM loans WHERE subcategory_id = ?").get(id)
+    db.prepare("SELECT COUNT(*) AS count FROM loans WHERE subcategory_id = ? AND user_id = ?").get(id, currentUserId())
   );
   if (loanUsage.count > 0) {
     throw badRequest("This SubType is used by a loan. Archive or reclassify the loan before deleting it.");
@@ -1271,11 +1299,15 @@ export function deleteSubcategory(id: string) {
        SET subcategory_id = NULL,
            status = CASE WHEN status = 'split' THEN status ELSE 'uncategorized' END,
            updated_at = CURRENT_TIMESTAMP
-       WHERE subcategory_id = ?`
-    ).run(id);
-    db.prepare("UPDATE transaction_splits SET subcategory_id = NULL WHERE subcategory_id = ?").run(id);
-    db.prepare("DELETE FROM budget_lines WHERE scope_type = 'subcategory' AND scope_id = ?").run(id);
-    db.prepare("DELETE FROM subcategories WHERE id = ?").run(id);
+       WHERE subcategory_id = ? AND user_id = ?`
+    ).run(id, currentUserId());
+    db
+      .prepare("UPDATE transaction_splits SET subcategory_id = NULL WHERE subcategory_id = ? AND user_id = ?")
+      .run(id, currentUserId());
+    db
+      .prepare("DELETE FROM budget_lines WHERE scope_type = 'subcategory' AND scope_id = ? AND user_id = ?")
+      .run(id, currentUserId());
+    db.prepare("DELETE FROM subcategories WHERE id = ? AND user_id = ?").run(id, currentUserId());
   });
 
   return { ok: true };
@@ -1288,10 +1320,10 @@ export function listAccounts(includeArchived = true): AccountSummary[] {
         `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day,
                 is_archived, created_at, updated_at
          FROM accounts
-         ${includeArchived ? "" : "WHERE is_archived = 0"}
+         WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
          ORDER BY is_archived, type, name`
       )
-      .all()
+      .all(currentUserId())
   );
 
   return rows.map(mapAccountWithBalance);
@@ -1358,8 +1390,8 @@ export function updateAccount(id: string, input: UpdateAccountInput) {
     `UPDATE accounts
      SET name = ?, starting_balance_paise = ?, credit_limit_paise = ?, payment_due_day = ?,
          is_archived = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
-  ).run(name, startingBalance, creditLimit, paymentDueDay, isArchived, id);
+     WHERE id = ? AND user_id = ?`
+  ).run(name, startingBalance, creditLimit, paymentDueDay, isArchived, id, currentUserId());
 
   return getAccount(id);
 }
@@ -1375,21 +1407,21 @@ export function deleteAccount(id: string) {
       .prepare(
         `SELECT COUNT(*) AS count
          FROM transactions
-         WHERE account_id = ? OR transfer_account_id = ?`
+         WHERE user_id = ? AND (account_id = ? OR transfer_account_id = ?)`
       )
-      .get(id, id)
+      .get(currentUserId(), id, id)
   );
 
   if (usage.count === 0) {
-    db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
+    db.prepare("DELETE FROM accounts WHERE id = ? AND user_id = ?").run(id, currentUserId());
     return { ok: true, mode: "deleted" };
   }
 
   db.prepare(
     `UPDATE accounts
      SET is_archived = 1, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
-  ).run(id);
+     WHERE id = ? AND user_id = ?`
+  ).run(id, currentUserId());
 
   return { ok: true, mode: "hidden" };
 }
@@ -1399,10 +1431,10 @@ export function getCurrentBatch(weekStart: string, weekEnd: string) {
     db
       .prepare(
         `SELECT id FROM entry_batches
-         WHERE week_start = ? AND week_end = ? AND status = 'draft'
+         WHERE week_start = ? AND week_end = ? AND status = 'draft' AND user_id = ?
          ORDER BY created_at DESC LIMIT 1`
       )
-      .get(weekStart, weekEnd)
+      .get(weekStart, weekEnd, currentUserId())
   );
 
   if (existing) {
@@ -1424,9 +1456,9 @@ export function saveBatch(id: string) {
     .prepare(
       `UPDATE entry_batches
        SET status = 'saved', saved_at = CURRENT_TIMESTAMP
-       WHERE id = ?`
+       WHERE id = ? AND user_id = ?`
     )
-    .run(id);
+    .run(id, currentUserId());
 
   if (result.changes === 0) {
     throw notFound("Batch not found.");
@@ -1437,8 +1469,10 @@ export function saveBatch(id: string) {
 
 // Shared by the ledger list and its totals, so a search always sums exactly the rows it lists.
 function buildTransactionFilters(query: TransactionQuery) {
-  const filters: string[] = [];
-  const params: SqlParam[] = [];
+  // The owner comes first and is not optional, so a ledger query with no filters at all is
+  // still one person's ledger.
+  const filters: string[] = ["t.user_id = ?"];
+  const params: SqlParam[] = [currentUserId()];
 
   if (query.accountId) {
     filters.push("t.account_id = ?");
@@ -1509,7 +1543,7 @@ function buildTransactionFilters(query: TransactionQuery) {
     filters.push(`(${clauses.join(" OR ")})`);
   }
 
-  return { where: filters.length ? `WHERE ${filters.join(" AND ")}` : "", params };
+  return { where: `WHERE ${filters.join(" AND ")}`, params };
 }
 
 export type TransactionTotals = {
@@ -1546,18 +1580,7 @@ export function listTransactions(query: TransactionQuery = {}): TransactionSumma
       .prepare(
         `SELECT ${transactionSelectFields}
          FROM transactions t
-         JOIN accounts a ON a.id = t.account_id
-         LEFT JOIN category_types ct ON ct.id = t.type_id
-         LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
-         LEFT JOIN accounts ta ON ta.id = t.transfer_account_id
-         LEFT JOIN loan_payments lp ON lp.transaction_id = t.id
-         LEFT JOIN loans l ON l.id = lp.loan_id
-         LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
-         LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
-         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
-         LEFT JOIN investments iv ON iv.id = ip.investment_id
-         LEFT JOIN vacation_expenses vx ON vx.transaction_id = t.id
-         LEFT JOIN vacations vc ON vc.id = vx.vacation_id
+         ${transactionJoins}
 ${where}
          ORDER BY t.date DESC, t.created_at DESC
          LIMIT ${limit} OFFSET ${offset}`
@@ -1574,21 +1597,10 @@ export function getTransaction(id: string) {
       .prepare(
         `SELECT ${transactionSelectFields}
          FROM transactions t
-         JOIN accounts a ON a.id = t.account_id
-         LEFT JOIN category_types ct ON ct.id = t.type_id
-         LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
-         LEFT JOIN accounts ta ON ta.id = t.transfer_account_id
-         LEFT JOIN loan_payments lp ON lp.transaction_id = t.id
-         LEFT JOIN loans l ON l.id = lp.loan_id
-         LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
-         LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
-         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
-         LEFT JOIN investments iv ON iv.id = ip.investment_id
-         LEFT JOIN vacation_expenses vx ON vx.transaction_id = t.id
-         LEFT JOIN vacations vc ON vc.id = vx.vacation_id
-WHERE t.id = ?`
+         ${transactionJoins}
+WHERE t.id = ? AND t.user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId())
   );
 
   return row ? mapTransaction(row) : null;
@@ -1691,7 +1703,9 @@ function transactionStatus(
   }
   // A Type with no SubTypes (e.g. Refund) has nothing further to choose.
   const subCount = asRecord<{ count: number }>(
-    db.prepare("SELECT COUNT(*) AS count FROM subcategories WHERE type_id = ?").get(taxonomy.typeId)
+    db
+      .prepare("SELECT COUNT(*) AS count FROM subcategories WHERE type_id = ? AND user_id = ?")
+      .get(taxonomy.typeId, currentUserId())
   ).count;
   return subCount === 0 ? "categorized" : "uncategorized";
 }
@@ -1724,9 +1738,9 @@ function validateLinkedRefund(input: CreateTransactionInput, selfId?: string) {
       .prepare(
         `SELECT COALESCE(SUM(amount_paise), 0) AS total
          FROM transactions
-         WHERE linked_transaction_id = ? AND kind IN ('refund', 'reversal') AND id != ?`
+         WHERE linked_transaction_id = ? AND user_id = ? AND kind IN ('refund', 'reversal') AND id != ?`
       )
-      .get(original.id, selfId ?? "")
+      .get(original.id, currentUserId(), selfId ?? "")
   ).total;
   if (alreadyRefunded + input.amountPaise > original.amount_paise) {
     const left = Math.max(original.amount_paise - alreadyRefunded, 0);
@@ -1805,7 +1819,7 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
            type_id = ?, subcategory_id = ?,
            amount_paise = ?, direction = ?, kind = ?, status = ?,
            transfer_account_id = ?, linked_transaction_id = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`
+       WHERE id = ? AND user_id = ?`
     ).run(
       merged.batchId ?? null,
       merged.date,
@@ -1821,15 +1835,16 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
       status,
       merged.transferAccountId ?? null,
       merged.linkedTransactionId ?? null,
-      id
+      id,
+      currentUserId()
     );
 
-    db.prepare("DELETE FROM transaction_splits WHERE transaction_id = ?").run(id);
+    db.prepare("DELETE FROM transaction_splits WHERE transaction_id = ? AND user_id = ?").run(id, currentUserId());
     if (merged.splits?.length) {
       insertSplits(id, merged.splits);
     }
 
-    db.prepare("DELETE FROM loan_payments WHERE transaction_id = ?").run(id);
+    db.prepare("DELETE FROM loan_payments WHERE transaction_id = ? AND user_id = ?").run(id, currentUserId());
     syncLoanPaymentForTransaction(id, merged);
     const nextLoanId = merged.loanId;
     const loanIdsToRefresh = new Set([existingLoanPayment?.loan_id, nextLoanId].filter(Boolean));
@@ -1837,13 +1852,13 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
       refreshLoanPayments(loanId as string);
     }
 
-    db.prepare("DELETE FROM autopay_payments WHERE transaction_id = ?").run(id);
+    db.prepare("DELETE FROM autopay_payments WHERE transaction_id = ? AND user_id = ?").run(id, currentUserId());
     syncAutopayPaymentForTransaction(id, merged, existingAutopayPayment?.subscription_id);
 
-    db.prepare("DELETE FROM investment_payments WHERE transaction_id = ?").run(id);
+    db.prepare("DELETE FROM investment_payments WHERE transaction_id = ? AND user_id = ?").run(id, currentUserId());
     syncInvestmentPaymentForTransaction(id, merged);
 
-    db.prepare("DELETE FROM vacation_expenses WHERE transaction_id = ?").run(id);
+    db.prepare("DELETE FROM vacation_expenses WHERE transaction_id = ? AND user_id = ?").run(id, currentUserId());
     syncVacationExpenseForTransaction(id, merged);
   });
 
@@ -1861,7 +1876,7 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
 
 export function deleteTransaction(id: string) {
   const loanPayment = getLoanPaymentForTransaction(id);
-  const result = db.prepare("DELETE FROM transactions WHERE id = ?").run(id);
+  const result = db.prepare("DELETE FROM transactions WHERE id = ? AND user_id = ?").run(id, currentUserId());
   if (result.changes === 0) {
     throw notFound("Transaction not found.");
   }
@@ -1898,9 +1913,9 @@ export function getOverview(accountId?: string, month = currentMonth()) {
       .prepare(
         `SELECT COUNT(*) AS count
          FROM transactions
-         WHERE status = 'uncategorized' ${accountId ? "AND account_id = ?" : ""}`
+         WHERE user_id = ? AND status = 'uncategorized' ${accountId ? "AND account_id = ?" : ""}`
       )
-      .get(...(accountId ? [accountId] : []))
+      .get(...[currentUserId(), ...(accountId ? [accountId] : [])])
   );
 
   // Money put into investments is saved, not spent: keep it out of the spending mix and
@@ -2020,8 +2035,8 @@ export function getWealthSummary(): WealthSummary {
 
   const history = asRecords<{ month: string; net_worth_paise: number }>(
     db
-      .prepare("SELECT month, net_worth_paise FROM net_worth_snapshots ORDER BY month ASC")
-      .all()
+      .prepare("SELECT month, net_worth_paise FROM net_worth_snapshots WHERE user_id = ? ORDER BY month ASC")
+      .all(currentUserId())
   ).map((row) => ({ month: row.month, netWorthPaise: row.net_worth_paise }));
 
   // Asset allocation — where the wealth currently sits (positive holdings only).
@@ -2121,10 +2136,10 @@ export function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): 
         db
           .prepare(
             `SELECT DISTINCT substr(t.date, 1, 7) AS month
-             FROM autopay_payments ap JOIN transactions t ON t.id = ap.transaction_id
-             WHERE ap.subscription_id = ?`
+             FROM autopay_payments ap JOIN transactions t ON t.id = ap.transaction_id AND t.user_id = ap.user_id
+             WHERE ap.subscription_id = ? AND ap.user_id = ?`
           )
-          .all(subscription.id)
+          .all(subscription.id, currentUserId())
       ).map((row) => row.month)
     );
     const due = nextMonthlyDueDate(
@@ -2145,11 +2160,11 @@ export function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): 
       db
         .prepare(
           `SELECT t.date AS date
-           FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id
-           WHERE lp.loan_id = ? AND lp.payment_type = 'emi'
+           FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id AND t.user_id = lp.user_id
+           WHERE lp.loan_id = ? AND lp.user_id = ? AND lp.payment_type = 'emi'
            ORDER BY t.date DESC`
         )
-        .all(loan.id)
+        .all(loan.id, currentUserId())
     );
     // The day a real EMI landed beats the entered day; without either there is nothing to remind about.
     const dueDay = emiDates.length > 0 ? Number(emiDates[0].date.slice(8, 10)) : loan.emiDueDay;
@@ -2182,9 +2197,9 @@ export function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): 
           .prepare(
             `SELECT DISTINCT substr(date, 1, 7) AS month
              FROM transactions
-             WHERE kind = 'card_payment' AND transfer_account_id = ?`
+             WHERE kind = 'card_payment' AND transfer_account_id = ? AND user_id = ?`
           )
-          .all(account.id)
+          .all(account.id, currentUserId())
       ).map((row) => row.month)
     );
     const due = nextMonthlyDueDate(account.paymentDueDay, today, windowDays, paidMonths, () => true);
@@ -2326,14 +2341,14 @@ export function updateBudgetLine(id: string, input: UpdateBudgetLineInput): Budg
     `UPDATE budget_lines
      SET amount_paise = ?,
          updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
-  ).run(parsed.amountPaise ?? current.amount_paise, id);
+     WHERE id = ? AND user_id = ?`
+  ).run(parsed.amountPaise ?? current.amount_paise, id, currentUserId());
 
   return getBudgetLine(id);
 }
 
 export function deleteBudgetLine(id: string) {
-  const result = db.prepare("DELETE FROM budget_lines WHERE id = ?").run(id);
+  const result = db.prepare("DELETE FROM budget_lines WHERE id = ? AND user_id = ?").run(id, currentUserId());
   if (result.changes === 0) {
     throw notFound("Budget line not found.");
   }
@@ -2395,7 +2410,7 @@ export function getTrendReport(
     }
   } else {
     const firstRow = asRecord<{ first: string | null }>(
-      db.prepare("SELECT MIN(date) AS first FROM transactions").get()
+      db.prepare("SELECT MIN(date) AS first FROM transactions WHERE user_id = ?").get(currentUserId())
     );
     const firstYear = firstRow?.first ? Number(firstRow.first.slice(0, 4)) : currentYear;
     // Cap the window so a mis-dated transaction can never trigger an unbounded
@@ -2430,9 +2445,10 @@ function subcategoryBudgetForMonth(subcategoryId: string, month: string): number
   const row = asRecord<{ amount_paise: number } | undefined>(
     db
       .prepare(
-        "SELECT amount_paise FROM budget_lines WHERE scope_type = 'subcategory' AND scope_id = ? AND month = ? LIMIT 1"
+        `SELECT amount_paise FROM budget_lines
+         WHERE scope_type = 'subcategory' AND scope_id = ? AND month = ? AND user_id = ? LIMIT 1`
       )
-      .get(subcategoryId, month)
+      .get(subcategoryId, month, currentUserId())
   );
   return row ? row.amount_paise : null;
 }
@@ -2481,7 +2497,7 @@ export function getBudgetTrendReport(
     }
   } else {
     const firstRow = asRecord<{ first: string | null }>(
-      db.prepare("SELECT MIN(date) AS first FROM transactions").get()
+      db.prepare("SELECT MIN(date) AS first FROM transactions WHERE user_id = ?").get(currentUserId())
     );
     const firstYear = firstRow?.first ? Number(firstRow.first.slice(0, 4)) : currentYear;
     const startYear = Math.max(Math.min(firstYear, currentYear), currentYear - 9);
@@ -2541,10 +2557,10 @@ export function getPaymentHistory(
         .prepare(
           `SELECT DISTINCT substr(t.date, 6, 2) AS month
            FROM transactions t
-           JOIN loan_payments lp ON lp.transaction_id = t.id
-           WHERE lp.loan_id = ? AND substr(t.date, 1, 4) = ?`
+           JOIN loan_payments lp ON lp.transaction_id = t.id AND lp.user_id = t.user_id
+           WHERE lp.loan_id = ? AND t.user_id = ? AND substr(t.date, 1, 4) = ?`
         )
-        .all(id, yearText)
+        .all(id, currentUserId(), yearText)
     );
   } else if (source === "autopay") {
     rows = asRecords<{ month: string }>(
@@ -2552,10 +2568,10 @@ export function getPaymentHistory(
         .prepare(
           `SELECT DISTINCT substr(t.date, 6, 2) AS month
            FROM transactions t
-           JOIN autopay_payments ap ON ap.transaction_id = t.id
-           WHERE ap.subscription_id = ? AND substr(t.date, 1, 4) = ?`
+           JOIN autopay_payments ap ON ap.transaction_id = t.id AND ap.user_id = t.user_id
+           WHERE ap.subscription_id = ? AND t.user_id = ? AND substr(t.date, 1, 4) = ?`
         )
-        .all(id, yearText)
+        .all(id, currentUserId(), yearText)
     );
   } else {
     // A month ticks only when a Mutual-Funds investment transaction is explicitly
@@ -2565,10 +2581,10 @@ export function getPaymentHistory(
         .prepare(
           `SELECT DISTINCT substr(t.date, 6, 2) AS month
            FROM transactions t
-           JOIN investment_payments iph ON iph.transaction_id = t.id
-           WHERE iph.investment_id = ? AND substr(t.date, 1, 4) = ?`
+           JOIN investment_payments iph ON iph.transaction_id = t.id AND iph.user_id = t.user_id
+           WHERE iph.investment_id = ? AND t.user_id = ? AND substr(t.date, 1, 4) = ?`
         )
-        .all(id, yearText)
+        .all(id, currentUserId(), yearText)
     );
   }
 
@@ -2591,7 +2607,7 @@ export function getMonthlyReport(
 ) {
   const range = resolveReportRange(month, from, to);
   const { start, end } = range;
-  const params: SqlParam[] = [start, end];
+  const params: SqlParam[] = [currentUserId(), start, end];
   const accountFilter = accountId ? "AND (t.account_id = ? OR t.transfer_account_id = ?)" : "";
   if (accountId) {
     params.push(accountId, accountId);
@@ -2618,16 +2634,17 @@ export function getMonthlyReport(
                 ss.icon AS split_subcategory_icon, ss.color AS split_subcategory_color,
                 s.amount_paise AS split_amount_paise
          FROM transactions t
-         LEFT JOIN category_types tt ON tt.id = t.type_id
-         LEFT JOIN subcategories ts ON ts.id = t.subcategory_id
-         LEFT JOIN accounts ota ON ota.id = t.transfer_account_id
+         LEFT JOIN category_types tt ON tt.id = t.type_id AND tt.user_id = t.user_id
+         LEFT JOIN subcategories ts ON ts.id = t.subcategory_id AND ts.user_id = t.user_id
+         LEFT JOIN accounts ota ON ota.id = t.transfer_account_id AND ota.user_id = t.user_id
          LEFT JOIN transactions original ON original.id = t.linked_transaction_id
-         LEFT JOIN category_types ott ON ott.id = original.type_id
-         LEFT JOIN subcategories ots ON ots.id = original.subcategory_id
-         LEFT JOIN transaction_splits s ON s.transaction_id = t.id
-         LEFT JOIN subcategories ss ON ss.id = s.subcategory_id
-         LEFT JOIN category_types st ON st.id = ss.type_id
-         WHERE t.date >= ? AND t.date <= ?
+                                        AND original.user_id = t.user_id
+         LEFT JOIN category_types ott ON ott.id = original.type_id AND ott.user_id = t.user_id
+         LEFT JOIN subcategories ots ON ots.id = original.subcategory_id AND ots.user_id = t.user_id
+         LEFT JOIN transaction_splits s ON s.transaction_id = t.id AND s.user_id = t.user_id
+         LEFT JOIN subcategories ss ON ss.id = s.subcategory_id AND ss.user_id = t.user_id
+         LEFT JOIN category_types st ON st.id = ss.type_id AND st.user_id = t.user_id
+         WHERE t.user_id = ? AND t.date >= ? AND t.date <= ?
            ${accountFilter}`
       )
       .all(...params)
@@ -2718,7 +2735,7 @@ export function getMonthlyReport(
            SUM(CASE WHEN kind = 'emi' AND direction = 'outflow' THEN amount_paise ELSE 0 END) AS loan,
            SUM(CASE WHEN kind = 'investment' AND direction = 'outflow' THEN amount_paise ELSE 0 END) AS investment
          FROM transactions t
-         WHERE t.date >= ? AND t.date <= ?
+         WHERE t.user_id = ? AND t.date >= ? AND t.date <= ?
            ${accountFilter}`
       )
       .get(...params)
@@ -2960,10 +2977,10 @@ function listBudgetRows(month: string) {
       .prepare(
         `SELECT id, month, scope_type, scope_id, amount_paise, created_at, updated_at
          FROM budget_lines
-         WHERE month = ?
+         WHERE month = ? AND user_id = ?
          ORDER BY created_at, id`
       )
-      .all(month)
+      .all(month, currentUserId())
   );
 }
 
@@ -2973,9 +2990,9 @@ function requireBudgetLineRow(id: string) {
       .prepare(
         `SELECT id, month, scope_type, scope_id, amount_paise, created_at, updated_at
          FROM budget_lines
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId())
   );
   if (!row) {
     throw notFound("Budget line not found.");
@@ -3030,7 +3047,9 @@ function restOfMonthHistory(month: string, pace: ReturnType<typeof budgetPace>) 
     const start = `${past}-01`;
     const end = monthEndDate(past);
     const active = asRecord<{ count: number }>(
-      db.prepare("SELECT COUNT(*) AS count FROM transactions WHERE date BETWEEN ? AND ?").get(start, end)
+      db
+        .prepare("SELECT COUNT(*) AS count FROM transactions WHERE date BETWEEN ? AND ? AND user_id = ?")
+        .get(start, end, currentUserId())
     ).count;
     if (active === 0) {
       continue;
@@ -3673,9 +3692,9 @@ function getBatch(id: string) {
       .prepare(
         `SELECT id, week_start, week_end, status, created_at, saved_at
          FROM entry_batches
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId())
   );
 
   if (!row) {
@@ -3700,9 +3719,9 @@ function requireLoanRow(id: string) {
                 start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day,
                 is_archived, created_at, updated_at
          FROM loans
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId())
   );
 
   if (!row) {
@@ -3748,9 +3767,9 @@ function mapLoan(row: LoanRow): LoanSummary {
                 COALESCE(SUM(interest_paise), 0) AS interest_paise,
                 COALESCE(SUM(CASE WHEN payment_type = 'emi' THEN 1 ELSE 0 END), 0) AS emi_count
          FROM loan_payments
-         WHERE loan_id = ?`
+         WHERE loan_id = ? AND user_id = ?`
       )
-      .get(row.id)
+      .get(row.id, currentUserId())
   );
   const openingPrincipalPaidPaise = Math.max(
     row.principal_amount_paise - row.starting_outstanding_paise,
@@ -3763,10 +3782,10 @@ function mapLoan(row: LoanRow): LoanSummary {
     db
       .prepare(
         `SELECT MIN(substr(t.date, 1, 7)) AS month
-         FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id
-         WHERE lp.loan_id = ? AND lp.payment_type = 'emi'`
+         FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id AND t.user_id = lp.user_id
+         WHERE lp.loan_id = ? AND lp.user_id = ? AND lp.payment_type = 'emi'`
       )
-      .get(row.id)
+      .get(row.id, currentUserId())
   ).month;
   const createdMonth = localMonthFromSqliteTimestamp(row.created_at);
   const trackingStartMonth =
@@ -3814,10 +3833,10 @@ function mapLoan(row: LoanRow): LoanSummary {
     db
       .prepare(
         `SELECT COUNT(*) AS count
-         FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id
-         WHERE lp.loan_id = ? AND lp.payment_type = 'emi' AND substr(t.date, 1, 7) = ?`
+         FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id AND t.user_id = lp.user_id
+         WHERE lp.loan_id = ? AND lp.user_id = ? AND lp.payment_type = 'emi' AND substr(t.date, 1, 7) = ?`
       )
-      .get(row.id, currentMonth())
+      .get(row.id, currentUserId(), currentMonth())
   ).count > 0;
   const closureMonth =
     monthsLeft > 0 ? addMonths(currentMonth(), (paidThisMonth ? 1 : 0) + monthsLeft - 1) : null;
@@ -3966,11 +3985,11 @@ function refreshLoanPayments(loanId: string) {
                 lp.interest_paise, lp.outstanding_before_paise, lp.outstanding_after_paise,
                 lp.created_at, lp.updated_at
          FROM loan_payments lp
-         JOIN transactions t ON t.id = lp.transaction_id
-         WHERE lp.loan_id = ?
+         JOIN transactions t ON t.id = lp.transaction_id AND t.user_id = lp.user_id
+         WHERE lp.loan_id = ? AND lp.user_id = ?
          ORDER BY t.date ASC, t.created_at ASC, lp.id ASC`
       )
-      .all(loanId)
+      .all(loanId, currentUserId())
   );
 
   let outstandingPaise = loan.starting_outstanding_paise;
@@ -3986,13 +4005,14 @@ function refreshLoanPayments(loanId: string) {
       `UPDATE loan_payments
        SET principal_paise = ?, interest_paise = ?, outstanding_before_paise = ?,
            outstanding_after_paise = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`
+       WHERE id = ? AND user_id = ?`
     ).run(
       split.principalPaise,
       split.interestPaise,
       split.outstandingBeforePaise,
       split.outstandingAfterPaise,
-      payment.id
+      payment.id,
+      currentUserId()
     );
     outstandingPaise = split.outstandingAfterPaise;
   }
@@ -4005,16 +4025,18 @@ function getLoanPaymentForTransaction(transactionId: string) {
         `SELECT id, loan_id, transaction_id, payment_type, amount_paise, principal_paise,
                 interest_paise, outstanding_before_paise, outstanding_after_paise, created_at, updated_at
          FROM loan_payments
-         WHERE transaction_id = ?
+         WHERE transaction_id = ? AND user_id = ?
          LIMIT 1`
       )
-      .get(transactionId)
+      .get(transactionId, currentUserId())
   );
 }
 
 function mapAutopaySubscription(row: AutopaySubscriptionRow): AutopaySubscriptionSummary {
   const paymentCount = asRecord<{ count: number }>(
-    db.prepare("SELECT COUNT(*) AS count FROM autopay_payments WHERE subscription_id = ?").get(row.id)
+    db
+      .prepare("SELECT COUNT(*) AS count FROM autopay_payments WHERE subscription_id = ? AND user_id = ?")
+      .get(row.id, currentUserId())
   ).count;
   const expiryDate = addMonthsToIsoDate(row.start_date, row.duration_months);
   const status: "active" | "expired" = currentIsoDate() >= expiryDate ? "expired" : "active";
@@ -4038,9 +4060,9 @@ function requireAutopayRow(id: string) {
       .prepare(
         `SELECT id, name, amount_paise, start_date, duration_months, is_archived, created_at, updated_at
          FROM autopay_subscriptions
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId())
   );
 
   if (!row) {
@@ -4067,10 +4089,10 @@ function getAutopayPaymentForTransaction(transactionId: string) {
       .prepare(
         `SELECT id, subscription_id, transaction_id
          FROM autopay_payments
-         WHERE transaction_id = ?
+         WHERE transaction_id = ? AND user_id = ?
          LIMIT 1`
       )
-      .get(transactionId)
+      .get(transactionId, currentUserId())
   );
 }
 
@@ -4102,10 +4124,10 @@ function getInvestmentPaymentForTransaction(transactionId: string) {
       .prepare(
         `SELECT id, investment_id, transaction_id
          FROM investment_payments
-         WHERE transaction_id = ?
+         WHERE transaction_id = ? AND user_id = ?
          LIMIT 1`
       )
-      .get(transactionId)
+      .get(transactionId, currentUserId())
   );
 }
 
@@ -4177,9 +4199,9 @@ function getAccountRow(id: string) {
         `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day,
                 is_archived, created_at, updated_at
          FROM accounts
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId())
   );
 }
 
@@ -4190,11 +4212,12 @@ function getActiveAccountByName(name: string, exceptId?: string) {
         `SELECT id
          FROM accounts
          WHERE name = ? COLLATE NOCASE
+           AND user_id = ?
            AND is_archived = 0
            AND (? IS NULL OR id != ?)
          LIMIT 1`
       )
-      .get(name, exceptId ?? null, exceptId ?? null)
+      .get(name, currentUserId(), exceptId ?? null, exceptId ?? null)
   );
 }
 
@@ -4216,9 +4239,9 @@ function getCategoryTypeRow(id: string) {
       .prepare(
         `SELECT id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at
          FROM category_types
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId())
   );
 }
 
@@ -4228,10 +4251,10 @@ function getCategoryTypeByName(name: string) {
       .prepare(
         `SELECT id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at
          FROM category_types
-         WHERE name = ? COLLATE NOCASE
+         WHERE name = ? COLLATE NOCASE AND user_id = ?
          LIMIT 1`
       )
-      .get(name)
+      .get(name, currentUserId())
   );
 }
 
@@ -4257,9 +4280,9 @@ function getSubcategoryRow(id: string) {
       .prepare(
         `SELECT id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at
          FROM subcategories
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId())
   );
 }
 
@@ -4271,9 +4294,10 @@ function getSubcategoryByName(typeId: string, name: string) {
          FROM subcategories
          WHERE type_id = ?
            AND name = ? COLLATE NOCASE
+           AND user_id = ?
          LIMIT 1`
       )
-      .get(typeId, name)
+      .get(typeId, name, currentUserId())
   );
 }
 
@@ -4283,16 +4307,16 @@ function listSubcategoriesForType(typeId: string) {
       .prepare(
         `SELECT id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at
          FROM subcategories
-         WHERE type_id = ?
+         WHERE type_id = ? AND user_id = ?
          ORDER BY sort_order, name`
       )
-      .all(typeId)
+      .all(typeId, currentUserId())
   ).map(mapSubcategory);
 }
 
 function getTransactionRow(id: string) {
   return asRecord<TransactionRow | undefined>(
-    db.prepare("SELECT * FROM transactions WHERE id = ?").get(id)
+    db.prepare("SELECT * FROM transactions WHERE id = ? AND user_id = ?").get(id, currentUserId())
   );
 }
 
@@ -4405,9 +4429,9 @@ function getTransactionSplits(transactionId: string): NonNullable<CreateTransact
     db.prepare(
       `SELECT subcategory_id, amount_paise
        FROM transaction_splits
-       WHERE transaction_id = ?
+       WHERE transaction_id = ? AND user_id = ?
        ORDER BY rowid ASC`
-    ).all(transactionId)
+    ).all(transactionId, currentUserId())
   );
 
   return rows.map((row) => ({
@@ -4561,6 +4585,7 @@ function exactTransactionExists(input: CreateTransactionInput) {
            AND COALESCE(transfer_account_id, '') = ?
            AND COALESCE(merchant, '') = ?
            AND COALESCE(note, '') = ?
+           AND user_id = ?
          LIMIT 1`
       )
       .get(
@@ -4574,7 +4599,8 @@ function exactTransactionExists(input: CreateTransactionInput) {
         input.subcategoryId ?? "",
         input.transferAccountId ?? "",
         input.merchant ?? "",
-        input.note ?? ""
+        input.note ?? "",
+        currentUserId()
       )
   );
 
@@ -4608,25 +4634,27 @@ function buildImportContext(): ImportContext {
         `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day,
                 is_archived, created_at, updated_at
          FROM accounts
-         WHERE is_archived = 0`
+         WHERE is_archived = 0 AND user_id = ?`
       )
-      .all()
+      .all(currentUserId())
   );
   const types = asRecords<CategoryTypeRow>(
     db
       .prepare(
         `SELECT id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at
-         FROM category_types`
+         FROM category_types
+         WHERE user_id = ?`
       )
-      .all()
+      .all(currentUserId())
   );
   const subcategories = asRecords<SubcategoryRow>(
     db
       .prepare(
         `SELECT id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at
-         FROM subcategories`
+         FROM subcategories
+         WHERE user_id = ?`
       )
-      .all()
+      .all(currentUserId())
   );
 
   return {
@@ -4908,14 +4936,16 @@ function defaultImportStyleForBehavior(behavior: TaxonomyBehavior) {
 
 function nextImportTypeSort(context: ImportContext) {
   const maxSort = asRecord<{ max_sort: number | null }>(
-    db.prepare("SELECT MAX(sort_order) AS max_sort FROM category_types").get()
+    db.prepare("SELECT MAX(sort_order) AS max_sort FROM category_types WHERE user_id = ?").get(currentUserId())
   );
   return (maxSort.max_sort ?? 0) + context.plannedTypes.length + 1;
 }
 
 function nextImportSubcategorySort(context: ImportContext, typeId: string) {
   const maxSort = asRecord<{ max_sort: number | null }>(
-    db.prepare("SELECT MAX(sort_order) AS max_sort FROM subcategories WHERE type_id = ?").get(typeId)
+    db
+      .prepare("SELECT MAX(sort_order) AS max_sort FROM subcategories WHERE type_id = ? AND user_id = ?")
+      .get(typeId, currentUserId())
   );
   const plannedMax = context.plannedSubcategories
     .filter((subcategory) => subcategory.type_id === typeId)
@@ -4985,18 +5015,7 @@ function findDuplicateCandidates(input: {
       .prepare(
         `SELECT ${transactionSelectFields}
          FROM transactions t
-         JOIN accounts a ON a.id = t.account_id
-         LEFT JOIN category_types ct ON ct.id = t.type_id
-         LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
-         LEFT JOIN accounts ta ON ta.id = t.transfer_account_id
-         LEFT JOIN loan_payments lp ON lp.transaction_id = t.id
-         LEFT JOIN loans l ON l.id = lp.loan_id
-         LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
-         LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
-         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
-         LEFT JOIN investments iv ON iv.id = ip.investment_id
-         LEFT JOIN vacation_expenses vx ON vx.transaction_id = t.id
-         LEFT JOIN vacations vc ON vc.id = vx.vacation_id
+         ${transactionJoins}
 WHERE t.id != ?
            AND t.account_id = ?
            AND t.amount_paise = ?
@@ -5025,9 +5044,9 @@ function mapAccountWithBalance(account: AccountRow): AccountSummary {
              END
            ) AS total
            FROM transactions
-           WHERE account_id = ? OR transfer_account_id = ?`
+           WHERE user_id = ? AND (account_id = ? OR transfer_account_id = ?)`
         )
-        .get(account.id, account.id, account.id, account.id, account.id)
+        .get(account.id, account.id, account.id, currentUserId(), account.id, account.id)
     );
     const outstanding = account.starting_balance_paise + (cardActivity.total ?? 0);
     const creditLimit = account.credit_limit_paise ?? 0;
@@ -5057,10 +5076,11 @@ function mapAccountWithBalance(account: AccountRow): AccountSummary {
            END
          ) AS total
          FROM transactions
-         WHERE account_id = ?
-            OR (subcategory_id = ? AND transfer_account_id = ?)`
+         WHERE user_id = ?
+           AND (account_id = ?
+                OR (subcategory_id = ? AND transfer_account_id = ?))`
       )
-      .get(account.id, account.id, account.id, SELF_TRANSFER_SUBCATEGORY_ID, account.id)
+      .get(account.id, account.id, currentUserId(), account.id, SELF_TRANSFER_SUBCATEGORY_ID, account.id)
   );
   const balance = account.starting_balance_paise + (bankActivity.total ?? 0);
 
@@ -5131,6 +5151,24 @@ type JoinedFields = {
   vacation_id: string | null;
   vacation_name: string | null;
 };
+
+/**
+ * Everything a transaction row is shown with. Every join carries the owner as well as the key,
+ * so a join cannot reach across to another person's account, Type or trip even if the row it
+ * starts from were somehow theirs. The caller still has to scope `t` itself.
+ */
+const transactionJoins = `JOIN accounts a ON a.id = t.account_id AND a.user_id = t.user_id
+         LEFT JOIN category_types ct ON ct.id = t.type_id AND ct.user_id = t.user_id
+         LEFT JOIN subcategories sc ON sc.id = t.subcategory_id AND sc.user_id = t.user_id
+         LEFT JOIN accounts ta ON ta.id = t.transfer_account_id AND ta.user_id = t.user_id
+         LEFT JOIN loan_payments lp ON lp.transaction_id = t.id AND lp.user_id = t.user_id
+         LEFT JOIN loans l ON l.id = lp.loan_id AND l.user_id = t.user_id
+         LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id AND ap.user_id = t.user_id
+         LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id AND s.user_id = t.user_id
+         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id AND ip.user_id = t.user_id
+         LEFT JOIN investments iv ON iv.id = ip.investment_id AND iv.user_id = t.user_id
+         LEFT JOIN vacation_expenses vx ON vx.transaction_id = t.id AND vx.user_id = t.user_id
+         LEFT JOIN vacations vc ON vc.id = vx.vacation_id AND vc.user_id = t.user_id`;
 
 const transactionSelectFields = `
   t.id,
