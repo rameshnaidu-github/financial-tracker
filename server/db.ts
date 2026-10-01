@@ -237,6 +237,9 @@ export function initDatabase() {
   ensureVacationIndexes();
   ensureTaxonomyIndexes();
   seedSettings();
+  // D4 and D8, last: every other migration has finished moving rows by now, so the composite
+  // keys are checked against the schema as it will actually be used.
+  addCompositeOwnerKeys();
   pruneBackupFiles();
 }
 
@@ -473,7 +476,10 @@ function rekeyForOwner() {
         );
       }
 
-      if (!keyed("budget_lines", "UNIQUE (user_id, month, scope_type, scope_id)")) {
+      // D8 later replaces scope_id with two columns and keys the table on those instead, so a
+      // database that has already been through that must not be dragged back to this shape.
+      const splitAlready = columnExists("budget_lines", "scope_subcategory_id");
+      if (!splitAlready && !keyed("budget_lines", "UNIQUE (user_id, month, scope_type, scope_id)")) {
         rebuild(
           "budget_lines",
           "id, user_id, month, scope_type, scope_id, amount_paise, created_at, updated_at",
@@ -547,6 +553,292 @@ function splitSettings() {
   });
 }
 
+/**
+ * D4, the half Stage 2 could not do. A child row now references its parent by (id, user_id), so
+ * the database itself rejects a row that points at somebody else's: the guarantee stops depending
+ * on which code path remembered to check.
+ *
+ * SQLite needs the parent side of a composite foreign key to be uniquely indexed, which a plain
+ * index on (id, user_id) satisfies -- no parent has to be rebuilt. The children do, because a
+ * constraint cannot be added to an existing table.
+ */
+const OWNER_PARENTS = [
+  "accounts",
+  "entry_batches",
+  "transactions",
+  "loans",
+  "autopay_subscriptions",
+  "investments",
+  "vacations",
+  "category_types",
+  "subcategories"
+];
+
+function ensureParentOwnerKeys() {
+  for (const table of OWNER_PARENTS) {
+    if (!tableExists(table)) continue;
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_${table}_id_owner ON ${table}(id, user_id);`);
+  }
+}
+
+/**
+ * Each child, as it must look once its references carry the owner. D8 is here too: budget_lines
+ * stops holding one polymorphic scope_id and holds two columns the database can actually check,
+ * with a CHECK that exactly one of them is set.
+ */
+const COMPOSITE_CHILDREN: Array<{ table: string; marker: string; columns: string; create: string; select?: string }> = [
+  {
+    table: "subcategories",
+    marker: "REFERENCES category_types(id, user_id)",
+    columns: "id, user_id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at",
+    create: `id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       type_id TEXT NOT NULL,
+       name TEXT NOT NULL COLLATE NOCASE,
+       icon TEXT NOT NULL,
+       color TEXT NOT NULL,
+       is_system INTEGER NOT NULL DEFAULT 0,
+       is_locked INTEGER NOT NULL DEFAULT 0,
+       sort_order INTEGER NOT NULL DEFAULT 0,
+       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       UNIQUE(type_id, name),
+       FOREIGN KEY (type_id, user_id) REFERENCES category_types(id, user_id) ON DELETE CASCADE`
+  },
+  {
+    table: "transactions",
+    marker: "REFERENCES accounts(id, user_id)",
+    columns: `id, user_id, batch_id, date, account_id, method, merchant, note, type_id, subcategory_id,
+              amount_paise, direction, kind, status, transfer_account_id, linked_transaction_id,
+              created_at, updated_at`,
+    create: `id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       batch_id TEXT,
+       date TEXT NOT NULL,
+       account_id TEXT NOT NULL,
+       method TEXT NOT NULL CHECK (method IN ('upi', 'credit_card', 'bank_transfer', 'cash', 'other')),
+       merchant TEXT,
+       note TEXT,
+       type_id TEXT,
+       subcategory_id TEXT,
+       amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+       direction TEXT NOT NULL CHECK (direction IN ('inflow', 'outflow')),
+       kind TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'refund', 'transfer', 'card_payment', 'reversal', 'investment', 'emi')),
+       status TEXT NOT NULL CHECK (status IN ('categorized', 'uncategorized', 'split')) DEFAULT 'categorized',
+       transfer_account_id TEXT,
+       linked_transaction_id TEXT,
+       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       FOREIGN KEY (account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT,
+       FOREIGN KEY (transfer_account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT,
+       FOREIGN KEY (batch_id, user_id) REFERENCES entry_batches(id, user_id) ON DELETE SET NULL,
+       FOREIGN KEY (type_id, user_id) REFERENCES category_types(id, user_id) ON DELETE RESTRICT,
+       FOREIGN KEY (subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE RESTRICT,
+       FOREIGN KEY (linked_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE SET NULL`
+  },
+  {
+    table: "transaction_splits",
+    marker: "REFERENCES transactions(id, user_id)",
+    columns: "id, user_id, transaction_id, subcategory_id, amount_paise",
+    create: `id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       transaction_id TEXT NOT NULL,
+       subcategory_id TEXT,
+       amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE,
+       FOREIGN KEY (subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE RESTRICT`
+  },
+  {
+    table: "transaction_links",
+    marker: "REFERENCES transactions(id, user_id)",
+    columns: "id, user_id, source_transaction_id, target_transaction_id, link_type, amount_paise, created_at",
+    create: `id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       source_transaction_id TEXT NOT NULL,
+       target_transaction_id TEXT NOT NULL,
+       link_type TEXT NOT NULL CHECK (link_type IN ('refund', 'reversal', 'duplicate', 'card_payment')),
+       amount_paise INTEGER,
+       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       FOREIGN KEY (source_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE,
+       FOREIGN KEY (target_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`
+  },
+  {
+    table: "loans",
+    marker: "REFERENCES subcategories(id, user_id)",
+    columns: `id, user_id, name, subcategory_id, principal_amount_paise, starting_outstanding_paise,
+              start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day,
+              is_archived, created_at, updated_at`,
+    create: `id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       name TEXT NOT NULL COLLATE NOCASE,
+       subcategory_id TEXT NOT NULL,
+       principal_amount_paise INTEGER NOT NULL CHECK (principal_amount_paise > 0),
+       starting_outstanding_paise INTEGER NOT NULL CHECK (starting_outstanding_paise >= 0),
+       start_month TEXT NOT NULL CHECK (start_month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
+       annual_interest_rate_bps INTEGER NOT NULL CHECK (annual_interest_rate_bps >= 0),
+       tenure_months INTEGER NOT NULL CHECK (tenure_months > 0),
+       monthly_emi_paise INTEGER NOT NULL CHECK (monthly_emi_paise > 0),
+       emi_due_day INTEGER,
+       is_archived INTEGER NOT NULL DEFAULT 0,
+       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       FOREIGN KEY (subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE RESTRICT`
+  },
+  {
+    table: "loan_payments",
+    marker: "REFERENCES loans(id, user_id)",
+    columns: `id, user_id, loan_id, transaction_id, payment_type, amount_paise, principal_paise,
+              interest_paise, outstanding_before_paise, outstanding_after_paise, created_at, updated_at`,
+    create: `id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       loan_id TEXT NOT NULL,
+       transaction_id TEXT NOT NULL UNIQUE,
+       payment_type TEXT NOT NULL CHECK (payment_type IN ('emi', 'prepayment')),
+       amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+       principal_paise INTEGER NOT NULL CHECK (principal_paise >= 0),
+       interest_paise INTEGER NOT NULL CHECK (interest_paise >= 0),
+       outstanding_before_paise INTEGER NOT NULL CHECK (outstanding_before_paise >= 0),
+       outstanding_after_paise INTEGER NOT NULL CHECK (outstanding_after_paise >= 0),
+       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       FOREIGN KEY (loan_id, user_id) REFERENCES loans(id, user_id) ON DELETE CASCADE,
+       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`
+  },
+  {
+    table: "autopay_payments",
+    marker: "REFERENCES autopay_subscriptions(id, user_id)",
+    columns: "id, user_id, subscription_id, transaction_id, created_at",
+    create: `id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       subscription_id TEXT NOT NULL,
+       transaction_id TEXT NOT NULL UNIQUE,
+       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       FOREIGN KEY (subscription_id, user_id) REFERENCES autopay_subscriptions(id, user_id) ON DELETE CASCADE,
+       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`
+  },
+  {
+    table: "investment_payments",
+    marker: "REFERENCES investments(id, user_id)",
+    columns: "id, user_id, investment_id, transaction_id, created_at",
+    create: `id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       investment_id TEXT NOT NULL,
+       transaction_id TEXT NOT NULL UNIQUE,
+       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       FOREIGN KEY (investment_id, user_id) REFERENCES investments(id, user_id) ON DELETE CASCADE,
+       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`
+  },
+  {
+    table: "vacation_expenses",
+    marker: "REFERENCES vacations(id, user_id)",
+    columns: "id, user_id, vacation_id, transaction_id, created_at",
+    create: `id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       vacation_id TEXT NOT NULL,
+       transaction_id TEXT NOT NULL UNIQUE,
+       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       FOREIGN KEY (vacation_id, user_id) REFERENCES vacations(id, user_id) ON DELETE CASCADE,
+       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`
+  },
+  {
+    // D8. The one column the database could not check becomes two it can.
+    table: "budget_lines",
+    marker: "scope_subcategory_id",
+    columns: `id, user_id, month, scope_type, scope_type_id, scope_subcategory_id, amount_paise,
+              created_at, updated_at`,
+    select: `id, user_id, month, scope_type,
+             CASE WHEN scope_type = 'type' THEN scope_id END,
+             CASE WHEN scope_type = 'subcategory' THEN scope_id END,
+             amount_paise, created_at, updated_at`,
+    create: `id TEXT PRIMARY KEY,
+       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
+       scope_type TEXT NOT NULL CHECK (scope_type IN ('type', 'subcategory')),
+       scope_type_id TEXT,
+       scope_subcategory_id TEXT,
+       amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       -- Exactly one scope, and it must be the one scope_type names.
+       CHECK ((scope_type = 'type' AND scope_type_id IS NOT NULL AND scope_subcategory_id IS NULL)
+           OR (scope_type = 'subcategory' AND scope_subcategory_id IS NOT NULL AND scope_type_id IS NULL)),
+       UNIQUE (user_id, month, scope_type, scope_type_id, scope_subcategory_id),
+       FOREIGN KEY (scope_type_id, user_id) REFERENCES category_types(id, user_id) ON DELETE CASCADE,
+       FOREIGN KEY (scope_subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE CASCADE`
+  }
+];
+
+/** True once the table's own definition carries the marker, so this runs once and then never. */
+function alreadyComposite(table: string, marker: string) {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as
+    | { sql: string }
+    | undefined;
+  return !row || row.sql.replace(/\s+/g, " ").includes(marker);
+}
+
+function addCompositeOwnerKeys() {
+  ensureParentOwnerKeys();
+
+  // A database that still holds a legacy category keeps its category_id columns -- dropLegacyCategories
+  // leaves them alone and asks the owner to recategorise those rows first. Rebuilding a table here
+  // writes out an explicit column list, so it would take those columns, and the values in them, with
+  // it. Nothing is rebuilt until that cleanup has happened; the keys arrive on the next start.
+  const legacyRemains =
+    columnExists("transactions", "category_id") || columnExists("transaction_splits", "category_id");
+  if (legacyRemains) {
+    console.warn(
+      "[db] Legacy category columns are still present, so the owner keys were not added yet. " +
+        "Recategorise the rows that still reference a legacy category and restart."
+    );
+    return;
+  }
+
+  const pending = COMPOSITE_CHILDREN.filter((child) => tableExists(child.table) && !alreadyComposite(child.table, child.marker));
+  if (pending.length === 0) {
+    return;
+  }
+  createMigrationBackup("composite-owner-keys");
+
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    transaction(() => {
+      for (const child of pending) {
+        const columns = child.columns.replace(/\s+/g, " ").trim();
+        db.exec(`CREATE TABLE ${child.table}_owned (${child.create});`);
+        db.exec(
+          `INSERT INTO ${child.table}_owned (${columns})
+           SELECT ${(child.select ?? columns).replace(/\s+/g, " ").trim()} FROM ${child.table};`
+        );
+        db.exec(`DROP TABLE ${child.table};`);
+        db.exec(`ALTER TABLE ${child.table}_owned RENAME TO ${child.table};`);
+      }
+    });
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
+
+  // A rebuilt table keeps none of its indexes, and a parent that was rebuilt loses the unique
+  // index its own children depend on.
+  ensureParentOwnerKeys();
+  for (const child of pending) {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_${child.table}_owner ON ${child.table}(user_id);`);
+  }
+  ensureAccountIndexes();
+  ensureTransactionIndexes();
+  ensureLoanIndexes();
+  ensureAutopayIndexes();
+  ensureBudgetIndexes();
+  ensureInvestmentIndexes();
+  ensureVacationIndexes();
+  ensureTaxonomyIndexes();
+
+  // Nothing may have been orphaned on the way through.
+  const broken = db.prepare("PRAGMA foreign_key_check").all() as Array<{ table?: string }>;
+  if (broken.length > 0) {
+    const where = [...new Set(broken.map((row) => row.table ?? "?"))].join(", ");
+    throw new Error(`Composite owner keys left ${broken.length} broken reference(s) in ${where}.`);
+  }
+}
+
 function ensureLoanIndexes() {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_loans_subcategory ON loans(subcategory_id);
@@ -565,10 +857,19 @@ function ensureAutopayIndexes() {
 }
 
 function ensureBudgetIndexes() {
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_budget_lines_month ON budget_lines(month);
-    CREATE INDEX IF NOT EXISTS idx_budget_lines_scope ON budget_lines(scope_type, scope_id);
-  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_budget_lines_month ON budget_lines(month);");
+  // D8 replaced the single polymorphic scope_id with one column per kind, so the index that
+  // served lookups by scope follows it. An older database still has the old column until the
+  // migration below has run on it.
+  if (columnExists("budget_lines", "scope_subcategory_id")) {
+    db.exec(`
+      DROP INDEX IF EXISTS idx_budget_lines_scope;
+      CREATE INDEX IF NOT EXISTS idx_budget_lines_type_scope ON budget_lines(scope_type_id);
+      CREATE INDEX IF NOT EXISTS idx_budget_lines_subcategory_scope ON budget_lines(scope_subcategory_id);
+    `);
+  } else if (columnExists("budget_lines", "scope_id")) {
+    db.exec("CREATE INDEX IF NOT EXISTS idx_budget_lines_scope ON budget_lines(scope_type, scope_id);");
+  }
 }
 
 function ensureVacationIndexes() {

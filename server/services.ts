@@ -1267,9 +1267,8 @@ export function deleteCategoryType(id: string) {
     db.prepare(
       `DELETE FROM budget_lines
        WHERE user_id = ?
-         AND ((scope_type = 'type' AND scope_id = ?)
-           OR (scope_type = 'subcategory'
-               AND scope_id IN (SELECT id FROM subcategories WHERE type_id = ? AND user_id = ?)))`
+         AND (scope_type_id = ?
+           OR scope_subcategory_id IN (SELECT id FROM subcategories WHERE type_id = ? AND user_id = ?))`
     ).run(currentUserId(), id, id, currentUserId());
 
     db.prepare("DELETE FROM category_types WHERE id = ? AND user_id = ?").run(id, currentUserId());
@@ -1305,7 +1304,7 @@ export function deleteSubcategory(id: string) {
       .prepare("UPDATE transaction_splits SET subcategory_id = NULL WHERE subcategory_id = ? AND user_id = ?")
       .run(id, currentUserId());
     db
-      .prepare("DELETE FROM budget_lines WHERE scope_type = 'subcategory' AND scope_id = ? AND user_id = ?")
+      .prepare("DELETE FROM budget_lines WHERE scope_subcategory_id = ? AND user_id = ?")
       .run(id, currentUserId());
     db.prepare("DELETE FROM subcategories WHERE id = ? AND user_id = ?").run(id, currentUserId());
   });
@@ -2291,9 +2290,18 @@ export function createBudgetLine(input: CreateBudgetLineInput): BudgetLineSummar
 
   try {
     db.prepare(
-      `INSERT INTO budget_lines (id, month, scope_type, scope_id, amount_paise, user_id)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(id, parsed.month, parsed.scopeType, scope.scopeId, parsed.amountPaise, currentUserId());
+      `INSERT INTO budget_lines
+         (id, month, scope_type, scope_type_id, scope_subcategory_id, amount_paise, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id,
+      parsed.month,
+      parsed.scopeType,
+      parsed.scopeType === "type" ? scope.scopeId : null,
+      parsed.scopeType === "subcategory" ? scope.scopeId : null,
+      parsed.amountPaise,
+      currentUserId()
+    );
   } catch (error) {
     if (error instanceof Error && error.message.includes("UNIQUE")) {
       throw badRequest(`${scope.name} already has a budget for ${parsed.month}.`);
@@ -2320,9 +2328,18 @@ export function copyBudgetFromPreviousMonth(month: string) {
       try {
         ensureNoBudgetOverlap(safeMonth, row.scope_type, row.scope_id);
         db.prepare(
-          `INSERT INTO budget_lines (id, month, scope_type, scope_id, amount_paise, user_id)
-           VALUES (?, ?, ?, ?, ?, ?)`
-        ).run(randomUUID(), safeMonth, row.scope_type, row.scope_id, row.amount_paise, currentUserId());
+          `INSERT INTO budget_lines
+             (id, month, scope_type, scope_type_id, scope_subcategory_id, amount_paise, user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          randomUUID(),
+          safeMonth,
+          row.scope_type,
+          row.scope_type === "type" ? row.scope_id : null,
+          row.scope_type === "subcategory" ? row.scope_id : null,
+          row.amount_paise,
+          currentUserId()
+        );
         copiedCount += 1;
       } catch {
         skippedCount += 1;
@@ -2446,7 +2463,7 @@ function subcategoryBudgetForMonth(subcategoryId: string, month: string): number
     db
       .prepare(
         `SELECT amount_paise FROM budget_lines
-         WHERE scope_type = 'subcategory' AND scope_id = ? AND month = ? AND user_id = ? LIMIT 1`
+         WHERE scope_subcategory_id = ? AND month = ? AND user_id = ? LIMIT 1`
       )
       .get(subcategoryId, month, currentUserId())
   );
@@ -2975,7 +2992,11 @@ function listBudgetRows(month: string) {
   return asRecords<BudgetLineRow>(
     db
       .prepare(
-        `SELECT id, month, scope_type, scope_id, amount_paise, created_at, updated_at
+        `SELECT id, month, scope_type,
+                -- D8 split the one polymorphic column in two; everything above still reads a
+                -- single scope_id, and exactly one of the two is ever set.
+                COALESCE(scope_type_id, scope_subcategory_id) AS scope_id,
+                amount_paise, created_at, updated_at
          FROM budget_lines
          WHERE month = ? AND user_id = ?
          ORDER BY created_at, id`
@@ -2988,7 +3009,11 @@ function requireBudgetLineRow(id: string) {
   const row = asRecord<BudgetLineRow | undefined>(
     db
       .prepare(
-        `SELECT id, month, scope_type, scope_id, amount_paise, created_at, updated_at
+        `SELECT id, month, scope_type,
+                -- D8 split the one polymorphic column in two; everything above still reads a
+                -- single scope_id, and exactly one of the two is ever set.
+                COALESCE(scope_type_id, scope_subcategory_id) AS scope_id,
+                amount_paise, created_at, updated_at
          FROM budget_lines
          WHERE id = ? AND user_id = ?`
       )

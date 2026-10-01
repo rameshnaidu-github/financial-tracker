@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
 import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
@@ -3410,6 +3411,286 @@ test("whole-rupee headline figures round and never show paise", () => {
     assert(!/\.\d/.test(shown), `formatINRWhole(${paise}) must not show paise`);
   }
   assert(formatINR(1_23_456_49).endsWith(".49"), "Row figures keep their paise.");
+});
+
+// ---------------------------------------------------------------------------
+// One person's money stays one person's. The application cannot create a second
+// user yet, so these plant one directly and then ask the app for their rows.
+// ---------------------------------------------------------------------------
+
+/** A second person with a row in every table that belongs to somebody. */
+function plantSecondPerson() {
+  const db = dbModule.db;
+  const other = randomUUID();
+  const id = () => randomUUID();
+  const today = currentIsoDateForTests();
+  const month = today.slice(0, 7);
+
+  db.prepare("INSERT INTO users (id, email) VALUES (?, ?)").run(other, `other-${other.slice(0, 8)}@example.com`);
+  const rows: Record<string, string> = {};
+
+  rows.account = id();
+  db.prepare(
+    `INSERT INTO accounts (id, user_id, name, type, starting_balance_paise)
+     VALUES (?, ?, 'Someone Else Bank', 'bank', 99999900)`
+  ).run(rows.account, other);
+
+  rows.type = id();
+  db.prepare(
+    `INSERT INTO category_types (id, user_id, name, behavior, icon, color, sort_order)
+     VALUES (?, ?, 'Someone Else Type', 'expense', 'wallet', '#123456', 99)`
+  ).run(rows.type, other);
+
+  rows.subcategory = id();
+  db.prepare(
+    `INSERT INTO subcategories (id, user_id, type_id, name, icon, color, sort_order)
+     VALUES (?, ?, ?, 'Someone Else SubType', 'wallet', '#123456', 99)`
+  ).run(rows.subcategory, other, rows.type);
+
+  rows.batch = id();
+  db.prepare(
+    `INSERT INTO entry_batches (id, user_id, week_start, week_end, status)
+     VALUES (?, ?, '2029-01-01', '2029-01-07', 'draft')`
+  ).run(rows.batch, other);
+
+  rows.transaction = id();
+  db.prepare(
+    `INSERT INTO transactions (id, user_id, date, account_id, method, merchant, type_id, subcategory_id,
+       amount_paise, direction, kind, status)
+     VALUES (?, ?, ?, ?, 'upi', 'Someone Else spend', ?, ?, 7777700, 'outflow', 'expense', 'categorized')`
+  ).run(rows.transaction, other, today, rows.account, rows.type, rows.subcategory);
+
+  rows.split = id();
+  db.prepare(
+    `INSERT INTO transaction_splits (id, user_id, transaction_id, subcategory_id, amount_paise)
+     VALUES (?, ?, ?, ?, 7777700)`
+  ).run(rows.split, other, rows.transaction, rows.subcategory);
+
+  rows.loan = id();
+  db.prepare(
+    `INSERT INTO loans (id, user_id, name, subcategory_id, principal_amount_paise, starting_outstanding_paise,
+       start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise)
+     VALUES (?, ?, 'Someone Else Loan', ?, 50000000, 40000000, '2029-01', 900, 60, 1000000)`
+  ).run(rows.loan, other, rows.subcategory);
+
+  rows.loanPayment = id();
+  db.prepare(
+    `INSERT INTO loan_payments (id, user_id, loan_id, transaction_id, payment_type, amount_paise,
+       principal_paise, interest_paise, outstanding_before_paise, outstanding_after_paise)
+     VALUES (?, ?, ?, ?, 'emi', 1000000, 700000, 300000, 40000000, 39300000)`
+  ).run(rows.loanPayment, other, rows.loan, rows.transaction);
+
+  rows.subscription = id();
+  db.prepare(
+    `INSERT INTO autopay_subscriptions (id, user_id, name, amount_paise, start_date, duration_months)
+     VALUES (?, ?, 'Someone Else Sub', 500000, ?, 12)`
+  ).run(rows.subscription, other, today);
+
+  rows.investment = id();
+  db.prepare(
+    `INSERT INTO investments (id, user_id, type, name, invested_paise, current_value_paise)
+     VALUES (?, ?, 'stocks', 'Someone Else Holding', 8888800, 9999900)`
+  ).run(rows.investment, other);
+
+  rows.vacation = id();
+  db.prepare("INSERT INTO vacations (id, user_id, name) VALUES (?, ?, 'Someone Else Trip')").run(rows.vacation, other);
+
+  rows.budget = id();
+  db.prepare(
+    `INSERT INTO budget_lines (id, user_id, month, scope_type, scope_subcategory_id, amount_paise)
+     VALUES (?, ?, ?, 'subcategory', ?, 1234500)`
+  ).run(rows.budget, other, month, rows.subcategory);
+
+  db.prepare("INSERT INTO user_settings (user_id, key, value) VALUES (?, 'profile_name', 'Someone Else')").run(other);
+
+  return { other, rows, month };
+}
+
+/** Removes the planted person; every row of theirs goes with them. */
+function removeSecondPerson(userId: string) {
+  dbModule.db.exec("PRAGMA foreign_keys = ON;");
+  dbModule.db.prepare("DELETE FROM users WHERE id = ?").run(userId);
+}
+
+function currentIsoDateForTests() {
+  const now = new Date();
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0")
+  ].join("-");
+}
+
+test("nothing in the app shows a second person's rows", async () => {
+  const { other, rows, month } = plantSecondPerson();
+  try {
+    const answers: Array<[string, unknown]> = [
+      ["settings", services.getSettings()],
+      ["profile", services.getProfile()],
+      ["accounts", services.listAccounts(true)],
+      ["loans", services.listLoans(true)],
+      ["subscriptions", services.listAutopaySubscriptions(true)],
+      ["investments", services.listInvestments()],
+      ["vacations", services.listVacations(true)],
+      ["types", services.listCategoryTypes()],
+      ["transactions", services.listTransactions({ limit: 500 })],
+      ["totals", services.summarizeTransactions({})],
+      ["overview", services.getOverview(undefined, month)],
+      ["report", services.getMonthlyReport(undefined, month)],
+      ["wealth", services.getWealthSummary()],
+      ["upcoming", services.getUpcomingPayments()],
+      ["budgets", services.getBudgetPlan(month)],
+      ["one transaction", services.getTransaction(rows.transaction)],
+      ["their batch", services.getCurrentBatch("2029-01-01", "2029-01-07")]
+    ];
+
+    for (const [where, answer] of answers) {
+      const text = JSON.stringify(answer ?? null);
+      for (const [name, planted] of Object.entries(rows)) {
+        assert(!text.includes(planted), `${where} returned the other person's ${name}.`);
+      }
+      assert(!/Someone Else/.test(text), `${where} returned something belonging to someone else.`);
+      assert(
+        !/7777700|8888800|9999900|1234500/.test(text),
+        `${where} returned one of the other person's figures.`
+      );
+    }
+  } finally {
+    removeSecondPerson(other);
+  }
+});
+
+test("nothing in the app changes a second person's rows", async () => {
+  const { other, rows } = plantSecondPerson();
+  const countTheirs = () =>
+    [
+      "accounts", "category_types", "subcategories", "entry_batches", "transactions",
+      "transaction_splits", "loans", "loan_payments", "autopay_subscriptions", "investments",
+      "vacations", "budget_lines", "user_settings"
+    ].reduce(
+      (total, table) =>
+        total +
+        (dbModule.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?`).get(other) as { n: number }).n,
+      0
+    );
+
+  try {
+    const before = countTheirs();
+    assert(before >= 13, `Only ${before} rows were planted, too few to be a real test.`);
+
+    const attempts: Array<[string, () => unknown]> = [
+      ["rename their account", () => services.updateAccount(rows.account, { name: "taken" })],
+      ["delete their account", () => services.deleteAccount(rows.account)],
+      ["rename their loan", () => services.updateLoan(rows.loan, { name: "taken" })],
+      ["archive their loan", () => services.archiveLoan(rows.loan)],
+      ["rename their subscription", () => services.updateAutopaySubscription(rows.subscription, { name: "taken" })],
+      ["archive their subscription", () => services.archiveAutopaySubscription(rows.subscription)],
+      ["rename their holding", () => services.updateInvestment(rows.investment, { name: "taken" })],
+      ["delete their holding", () => services.deleteInvestment(rows.investment)],
+      ["rename their trip", () => services.updateVacation(rows.vacation, { name: "taken" })],
+      ["delete their trip", () => services.deleteVacation(rows.vacation)],
+      ["edit their transaction", () => services.updateTransaction(rows.transaction, { merchant: "taken" })],
+      ["delete their transaction", () => services.deleteTransaction(rows.transaction)],
+      ["change their budget", () => services.updateBudgetLine(rows.budget, { amountPaise: 1 })],
+      ["delete their budget", () => services.deleteBudgetLine(rows.budget)],
+      ["delete their Type", () => services.deleteCategoryType(rows.type)],
+      ["delete their SubType", () => services.deleteSubcategory(rows.subcategory)],
+      ["save their batch", () => services.saveBatch(rows.batch)]
+    ];
+
+    for (const [what, run] of attempts) {
+      await assertRejects(`Asking the app to ${what}`, run);
+    }
+
+    assert(countTheirs() === before, `The app changed the other person's rows: ${before} -> ${countTheirs()}.`);
+    const stillNamed = (
+      dbModule.db.prepare("SELECT name FROM accounts WHERE id = ?").get(rows.account) as { name?: string } | undefined
+    )?.name;
+    assert(stillNamed === "Someone Else Bank", `Their account was renamed to ${JSON.stringify(stillNamed)}.`);
+  } finally {
+    removeSecondPerson(other);
+  }
+});
+
+test("nothing new can be attached to a second person's rows", async () => {
+  const { other, rows, month } = plantSecondPerson();
+  try {
+    const mine = services.listCategoryTypes().find((type) => type.name === "Expense");
+    assert(Boolean(mine), "The seeded Expense Type is missing, so this test proves nothing.");
+
+    await assertRejects("Adding a SubType under their Type", () =>
+      services.createSubcategory({ typeId: rows.type, name: "Mine", icon: "wallet", color: "#2563eb" })
+    );
+    await assertRejects("Spending into their account", () =>
+      services.createTransaction({
+        date: currentIsoDateForTests(),
+        accountId: rows.account,
+        method: "upi",
+        typeId: mine!.id,
+        subcategoryId: mine!.subcategories[0].id,
+        amountPaise: 100,
+        direction: "outflow",
+        kind: "expense"
+      })
+    );
+    await assertRejects("Budgeting their SubType", () =>
+      services.createBudgetLine({ month, scopeType: "subcategory", scopeId: rows.subcategory, amountPaise: 100 })
+    );
+    await assertRejects("Taking a loan against their SubType", () =>
+      services.createLoan({
+        name: "Mine",
+        subcategoryId: rows.subcategory,
+        principalAmountPaise: 100000,
+        startingOutstandingPaise: 100000,
+        startMonth: month,
+        annualInterestRateBps: 900,
+        tenureMonths: 12,
+        monthlyEmiPaise: 10000
+      })
+    );
+  } finally {
+    removeSecondPerson(other);
+  }
+});
+
+test("the database itself refuses a row that points across to another person", async () => {
+  const { other, rows } = plantSecondPerson();
+  const db = dbModule.db;
+  db.exec("PRAGMA foreign_keys = ON;");
+  const owner = dbModule.currentUserId();
+
+  try {
+    const myAccount = (
+      db.prepare("SELECT id FROM accounts WHERE user_id = ? LIMIT 1").get(owner) as { id?: string } | undefined
+    )?.id;
+    const mySubcategory = (
+      db.prepare("SELECT id FROM subcategories WHERE user_id = ? LIMIT 1").get(owner) as { id?: string } | undefined
+    )?.id;
+    assert(Boolean(myAccount) && Boolean(mySubcategory), "The owner has no account or SubType, so this proves nothing.");
+
+    const spend = (accountId: string, subcategoryId: string) => () =>
+      db
+        .prepare(
+          `INSERT INTO transactions (id, user_id, date, account_id, method, subcategory_id,
+             amount_paise, direction, kind, status)
+           VALUES (?, ?, '2029-02-01', ?, 'upi', ?, 100, 'outflow', 'expense', 'categorized')`
+        )
+        .run(randomUUID(), owner, accountId, subcategoryId);
+
+    // Pointing at their account, or their SubType, must be refused …
+    await assertRejects("A transaction in their account", spend(rows.account, mySubcategory!));
+    await assertRejects("A transaction under their SubType", spend(myAccount!, rows.subcategory));
+    // … and the same insert, pointing at the owner's own, must still work, or the two checks
+    // above would pass for the wrong reason.
+    spend(myAccount!, mySubcategory!)();
+    assert(
+      (db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE user_id = ?").get(other) as { n: number }).n === 1,
+      "The other person gained or lost a transaction."
+    );
+  } finally {
+    db.prepare("DELETE FROM transactions WHERE date = '2029-02-01'").run();
+    removeSecondPerson(other);
+  }
 });
 
 let failed = 0;
