@@ -418,7 +418,10 @@ export function listLoans(includeArchived = false): LoanSummary[] {
                 is_archived, created_at, updated_at
          FROM loans
          WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
-         ORDER BY is_archived ASC, name COLLATE NOCASE ASC`
+         -- The name column is declared COLLATE NOCASE, which SQLite applies to the ordering as
+         -- well as to comparisons, so repeating it here changes nothing -- and it is the one
+         -- construct Postgres has no spelling for.
+         ORDER BY is_archived ASC, name ASC`
       )
       .all(currentUserId())
   );
@@ -583,7 +586,7 @@ export function listAutopaySubscriptions(includeArchived = false): AutopaySubscr
         `SELECT id, name, amount_paise, start_date, duration_months, is_archived, created_at, updated_at
          FROM autopay_subscriptions
          WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
-         ORDER BY is_archived ASC, name COLLATE NOCASE ASC`
+         ORDER BY is_archived ASC, name ASC`
       )
       .all(currentUserId())
   );
@@ -3370,7 +3373,7 @@ export function createBackup(mode: BackupMode = "manual") {
   setSetting("last_backup_mode", mode);
 
   try {
-    db.prepare("VACUUM INTO ?").run(target);
+    db.copyTo(target);
     pruneBackupFiles(backupDir);
   } catch (error) {
     if (existsSync(target)) {
@@ -4231,7 +4234,7 @@ function getActiveAccountByName(name: string, exceptId?: string) {
       .prepare(
         `SELECT id
          FROM accounts
-         WHERE name = ? COLLATE NOCASE
+         WHERE name = ?
            AND user_id = ?
            AND is_archived = 0
            AND (? IS NULL OR id != ?)
@@ -4271,7 +4274,7 @@ function getCategoryTypeByName(name: string) {
       .prepare(
         `SELECT id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at
          FROM category_types
-         WHERE name = ? COLLATE NOCASE AND user_id = ?
+         WHERE name = ? AND user_id = ?
          LIMIT 1`
       )
       .get(name, currentUserId())
@@ -4313,7 +4316,7 @@ function getSubcategoryByName(typeId: string, name: string) {
         `SELECT id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at
          FROM subcategories
          WHERE type_id = ?
-           AND name = ? COLLATE NOCASE
+           AND name = ?
            AND user_id = ?
          LIMIT 1`
       )

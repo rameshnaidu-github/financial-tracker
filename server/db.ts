@@ -17,11 +17,75 @@ export const dbPath = configuredDbPath ? path.resolve(configuredDbPath) : path.j
 
 mkdirSync(path.dirname(dbPath), { recursive: true });
 
-export const db = new DatabaseSync(dbPath);
+/**
+ * What the application needs from a database, and nothing else. The 127 statements in
+ * `server/services.ts` already speak exactly this shape, so naming it costs no call sites and
+ * buys one place that knows which engine is underneath.
+ */
+export type Row = Record<string, unknown>;
 
-db.exec("PRAGMA foreign_keys = ON;");
-db.exec("PRAGMA journal_mode = WAL;");
-db.exec("PRAGMA busy_timeout = 5000;");
+export type Statement = {
+  all: (...params: unknown[]) => Row[];
+  get: (...params: unknown[]) => Row | undefined;
+  run: (...params: unknown[]) => { changes: number | bigint };
+};
+
+export type Adapter = {
+  /** What engine this is, for the few places that legitimately have to know. */
+  readonly dialect: "sqlite" | "postgres";
+  prepare: (sql: string) => Statement;
+  exec: (sql: string) => void;
+  close: () => void;
+  /**
+   * Copy the whole database to a file. This is the one thing the application asks for that is not
+   * a statement: SQLite does it with VACUUM INTO, which no other engine has, and a hosted Postgres
+   * does not hand a client its own storage at all. Naming it here keeps that difference inside the
+   * adapter instead of leaving unportable SQL in the middle of the backup code -- and a Postgres
+   * adapter answers it by saying so, which is what D7 replaces it with.
+   */
+  copyTo: (target: string) => void;
+};
+
+const driver = new DatabaseSync(dbPath);
+
+driver.exec("PRAGMA foreign_keys = ON;");
+driver.exec("PRAGMA journal_mode = WAL;");
+driver.exec("PRAGMA busy_timeout = 5000;");
+
+/**
+ * SQLite, behind the shape above. A Postgres adapter is the same three methods over `pg`, with
+ * `?` rewritten to `$1, $2, …` -- `translate` below is where that will live, and it is a no-op
+ * here because SQLite's own placeholder is already `?`.
+ *
+ * The one thing a Postgres adapter cannot do with this shape is be synchronous, and `node:sqlite`
+ * is. Converting the application to `async` is the step after this one; the point of naming the
+ * shape now is that the conversion then has a single place to start from rather than 127.
+ */
+function sqliteAdapter(): Adapter {
+  return {
+    dialect: "sqlite",
+    prepare: (sql) => {
+      const prepared = driver.prepare(translate(sql));
+      return {
+        all: (...params) => prepared.all(...(params as never[])) as Row[],
+        get: (...params) => prepared.get(...(params as never[])) as Row | undefined,
+        run: (...params) => prepared.run(...(params as never[]))
+      };
+    },
+    exec: (sql) => driver.exec(sql),
+    close: () => driver.close(),
+    copyTo: (target) => {
+      driver.prepare("VACUUM INTO ?").run(target);
+    }
+  };
+}
+
+/** The one place a statement is adjusted for the engine underneath. */
+function translate(sql: string): string {
+  return sql;
+}
+
+export const db: Adapter = sqliteAdapter();
 
 export function initDatabase() {
   db.exec(`
