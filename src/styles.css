@@ -470,6 +470,11 @@ a {
   line-height: 1.35;
 }
 
+/* The owner's backup row carries a value and a button, so it needs a column for each. */
+.backup-row.has-action {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
 .theme-row {
   grid-template-columns: minmax(0, 1fr) auto auto;
   background: var(--accent-soft);

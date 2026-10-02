@@ -8,15 +8,58 @@
 //
 // A password may be piped in (`echo … | node server/account.ts create a@b.c`) for a script; typed
 // interactively it is not echoed and is asked for twice.
-import { createInterface } from "node:readline";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { db, initDatabase } from "./db.ts";
-import { hashPassword, passwordComplaint } from "./auth.ts";
+import type { Adapter } from "./db.ts";
+
+/**
+ * Opened only after the guard below has let the command through.
+ *
+ * `./db.ts` resolves and *opens* its database the moment it is imported, which creates the file --
+ * and `./auth.ts` imports it in turn, so neither can be named at the top of this file. Imported
+ * there, a refusal would still have left an empty database sitting at the path it had just
+ * refused to touch: a small lie in a message that says nothing has been changed.
+ */
+let db: Adapter;
+let hashPassword: (password: string) => Promise<string>;
+let passwordComplaint: (password: string) => string | null;
 
 type UserRow = { id: string; email: string; password_hash: string | null; created_at: string };
 
+/** Says you meant the project's own database, out loud, on the command line. */
+const DELIBERATE = "--yes-the-real-one";
+
 function usage(): never {
-  console.error("usage: node server/account.ts <list|create|password|sessions> [email]");
+  console.error("usage: node server/account.ts <list|create|password|sessions> [email] [--yes-the-real-one]");
+  process.exit(2);
+}
+
+/**
+ * Refuses to change accounts in whatever database the command fell back to.
+ *
+ * Without `FINANCE_DB_PATH`, `db.ts` resolves `./data/finance.db` -- which, run from the project,
+ * is the owner's real money. There is no visible difference between a command aimed at a test
+ * database and one that silently landed on the real one, and on 2026-10-02 that cost the owner
+ * their password: `node server/account.ts password <them>`, meant for a copy, overwrote the hash
+ * in `data/finance.db` and printed a cheerful success.
+ *
+ * So the fallback is now a refusal rather than a default. Saying where to go, or saying you mean
+ * this one, both still work -- they just have to be said.
+ */
+function refuseAnUnaskedForDatabase(command: string, argv: string[]): void {
+  // `list` only reads. Everything else writes, including `sessions`, which signs people out.
+  if (command === "list") return;
+  if (process.env.FINANCE_DB_PATH) return;
+  if (argv.includes(DELIBERATE)) return;
+
+  // Resolved the same way db.ts resolves it, but without importing it: naming the file must not
+  // be what creates the file.
+  const wouldBe = path.join(process.cwd(), "data", "finance.db");
+  console.error(`Refusing to change accounts in a database nobody asked for:\n`);
+  console.error(`    ${wouldBe}\n`);
+  console.error("Nothing has been changed. Say where you mean, or say you mean this one:\n");
+  console.error(`    FINANCE_DB_PATH=/tmp/scratch.db node server/account.ts ${command} <email>`);
+  console.error(`    node server/account.ts ${command} <email> ${DELIBERATE}`);
   process.exit(2);
 }
 
@@ -98,9 +141,20 @@ function findByEmail(email: string): UserRow | undefined {
 }
 
 async function main() {
-  const [command, emailArgument] = process.argv.slice(2);
+  const argv = process.argv.slice(2);
+  const [command, emailArgument] = argv.filter((value) => !value.startsWith("--"));
   if (!command) usage();
-  initDatabase();
+  // Before initDatabase: the migrations write, so the refusal has to come first or it is advice
+  // given after the fact. Before askForPassword too, so nothing is typed into a prompt that was
+  // never going to be used.
+  refuseAnUnaskedForDatabase(command, argv);
+
+  const database = await import("./db.ts");
+  const auth = await import("./auth.ts");
+  db = database.db;
+  hashPassword = auth.hashPassword;
+  passwordComplaint = auth.passwordComplaint;
+  database.initDatabase();
 
   if (command === "list") {
     const people = db

@@ -1108,7 +1108,14 @@ function syncVacationExpenseForTransaction(transactionId: string, input: CreateT
   ).run(randomUUID(), vacation.id, transactionId, currentUserId());
 }
 
-export function getBackupStatus() {
+/**
+ * The whole status, including where on disk the last backup went.
+ *
+ * For the server's own use. The long name is the point: a route that reaches for this one has to
+ * spell out that it wants the host's filesystem, and `getBackupStatus` -- the short name anything
+ * reaches for by habit -- is the one that cannot leak it.
+ */
+export function getBackupStatusWithHostPath() {
   const settings = getSettings();
   return {
     intervalMs: AUTO_BACKUP_INTERVAL_MS,
@@ -1116,6 +1123,17 @@ export function getBackupStatus() {
     lastBackupPath: settings.last_backup_path ?? null,
     lastBackupMode: settings.last_backup_mode ?? null
   };
+}
+
+/**
+ * What a browser is allowed to know: which file, not where the host keeps it.
+ *
+ * The directory is the owner's business and nobody else's -- it tells a reader the layout of the
+ * machine the application runs on, which is of no use to the page and of some use to anyone else.
+ */
+export function getBackupStatus() {
+  const { lastBackupPath, ...rest } = getBackupStatusWithHostPath();
+  return { ...rest, lastBackupFile: lastBackupPath ? path.basename(lastBackupPath) : null };
 }
 
 export function startAutoBackup(logger?: { info: (value: unknown, message?: string) => void; error: (value: unknown, message?: string) => void }) {
@@ -3384,6 +3402,12 @@ export function createBackup(mode: BackupMode = "manual") {
   }
 
   return { path: target, mode, createdAt };
+}
+
+/** The same backup, described the way a browser may hear about it. */
+export function createBackupForClient(mode: BackupMode = "manual") {
+  const { path: target, ...rest } = createBackup(mode);
+  return { ...rest, file: path.basename(target) };
 }
 
 export function exportTransactionsCsv(query: Omit<TransactionQuery, "limit" | "offset"> = {}) {

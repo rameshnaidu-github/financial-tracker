@@ -383,6 +383,9 @@ export default function App() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
+  // Whether this person owns the installation. null until asked, so the Profile page shows neither
+  // the owner's rows nor their absence while the answer is still in flight.
+  const [isOwner, setIsOwner] = useState<boolean | null>(null);
   // The intro plays on every open of the app, whatever page was asked for. Decided here,
   // synchronously at mount, so it is the first thing painted rather than something that
   // waits for the app's data; the owner can turn it off in Profile.
@@ -450,6 +453,27 @@ export default function App() {
 
   useEffect(() => {
     let isMounted = true;
+    Api.me()
+      .then((who) => {
+        if (!isMounted) return;
+        setIsOwner(Boolean(who.isOwner));
+      })
+      .catch(() => {
+        if (isMounted) setIsOwner(false);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [refreshKey]);
+
+  useEffect(() => {
+    // The backup is the owner's. Asking for it as anybody else earns a 403, so don't ask: a
+    // console full of refusals is how a real problem goes unnoticed.
+    if (isOwner !== true) {
+      setBackupStatus(null);
+      return undefined;
+    }
+    let isMounted = true;
 
     async function loadBackupStatus() {
       try {
@@ -466,7 +490,7 @@ export default function App() {
       isMounted = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [isOwner]);
 
   const refresh = useCallback(async () => {
     await loadBootstrap();
@@ -831,6 +855,12 @@ export default function App() {
               savedProfile={bootstrap.profile}
               settings={bootstrap.settings}
               backupStatus={backupStatus}
+              isOwner={isOwner}
+              onBackupNow={async () => {
+                const result = await Api.backup();
+                setBackupStatus(await Api.backupStatus());
+                return result.file;
+              }}
               theme={theme}
               saving={profileSaving}
               cardAlertPercent={cardAlertPercent}
@@ -6811,6 +6841,8 @@ function ProfilePage({
   savedProfile,
   settings,
   backupStatus,
+  isOwner,
+  onBackupNow,
   theme,
   saving,
   cardAlertPercent,
@@ -6827,6 +6859,8 @@ function ProfilePage({
   savedProfile: UserProfile;
   settings: Record<string, string>;
   backupStatus: BackupStatus | null;
+  isOwner: boolean | null;
+  onBackupNow: () => Promise<string>;
   theme: Theme;
   saving: boolean;
   cardAlertPercent: number;
@@ -6838,6 +6872,8 @@ function ProfilePage({
 }) {
   const displayName = profile.name || "Your profile";
   const displayEmail = profile.email || "Local profile";
+  const [backingUp, setBackingUp] = useState(false);
+  const [backupNote, setBackupNote] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [cardAlertDraft, setCardAlertDraft] = useState(String(cardAlertPercent));
   // Only a real difference counts as unsaved: opening the editor changes nothing by itself.
@@ -6990,10 +7026,36 @@ function ProfilePage({
             <small>Credit cards turn red when utilization crosses this value (1-100).</small>
           </div>
           <div className="settings-row backup-row">
-            <span>Backup status</span>
-            <strong>{formatBackupStatus(backupStatus)}</strong>
-            <small>{formatBackupDetail(backupStatus)}</small>
+            <span>Your data</span>
+            <a className="secondary-action" href={Api.exportAllUrl()} download>
+              Download
+            </a>
+            <small>
+              Accounts, transactions, budgets, loans, investments, subscriptions and trips.
+              Everything this app holds for you, in one file, and yours only.
+            </small>
           </div>
+          {isOwner === true ? (
+            <div className="settings-row backup-row has-action">
+              <span>Backup status</span>
+              <strong>{formatBackupStatus(backupStatus)}</strong>
+              <button
+                type="button"
+                className="secondary-action"
+                disabled={backingUp}
+                onClick={() => {
+                  setBackingUp(true);
+                  void onBackupNow()
+                    .then((file) => setBackupNote(`Saved ${file}`))
+                    .catch((error: Error) => setBackupNote(error.message))
+                    .finally(() => setBackingUp(false));
+                }}
+              >
+                {backingUp ? "Backing up..." : "Back up now"}
+              </button>
+              <small>{backupNote ?? formatBackupDetail(backupStatus)}</small>
+            </div>
+          ) : null}
           <button className="settings-row theme-row" onClick={onThemeToggle}>
             <span>{theme === "dark" ? "Light theme" : "Dark theme"}</span>
             <strong>{theme === "dark" ? "Switch on" : "Switch on"}</strong>

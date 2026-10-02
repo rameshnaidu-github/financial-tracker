@@ -528,6 +528,22 @@ export function runAsUser<T>(userId: string, fn: () => T): T {
  * command. Both legitimately act as the single owner of an installation that has one.
  */
 export function asOwner<T>(fn: () => T): T {
+  return requestUser.run({ id: ownerId() }, fn);
+}
+
+/** Whether a person is in scope, for the few places that have to ask rather than assume. */
+export function hasCurrentUser(): boolean {
+  return requestUser.getStore() !== undefined;
+}
+
+/**
+ * The owner of this installation: the first account by `created_at`.
+ *
+ * One definition, read from here by everything that needs it. `asOwner` picks the same row by the
+ * same order, so "the owner" cannot come to mean two different people depending on which function
+ * was asked -- which is exactly how the second account would quietly gain the first one's rights.
+ */
+export function ownerId(): string {
   const row = db
     .prepare("SELECT id FROM users ORDER BY created_at, id LIMIT 1")
     .get() as { id: string } | undefined;
@@ -536,12 +552,12 @@ export function asOwner<T>(fn: () => T): T {
       "No user exists: initDatabase must run before any row is written.",
     );
   }
-  return requestUser.run({ id: row.id }, fn);
+  return row.id;
 }
 
-/** Whether a person is in scope, for the few places that have to ask rather than assume. */
-export function hasCurrentUser(): boolean {
-  return requestUser.getStore() !== undefined;
+/** Whether the person in scope owns this installation. Throws outside a request, like the rest. */
+export function currentUserIsOwner(): boolean {
+  return currentUserId() === ownerId();
 }
 
 /** Keeps the owner's identity in step with the profile they edit. */

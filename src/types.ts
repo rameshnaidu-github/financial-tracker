@@ -199,7 +199,8 @@ export type UserProfile = {
 export type BackupStatus = {
   intervalMs: number;
   lastBackupAt: string | null;
-  lastBackupPath: string | null;
+  /** The file's name. Not its directory: where the host keeps it is not the page's business. */
+  lastBackupFile: string | null;
   lastBackupMode: "manual" | "auto" | "shutdown" | null;
 };
 

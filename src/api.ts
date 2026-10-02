@@ -61,7 +61,7 @@ async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export type SignedIn = { signedIn: boolean; email?: string };
+export type SignedIn = { signedIn: boolean; email?: string; isOwner?: boolean };
 
 export const Api = {
   me: () => api<SignedIn>("/api/auth/me"),
@@ -274,7 +274,10 @@ export const Api = {
     api<BudgetLine>(`/api/budgets/${id}`, { method: "PATCH", body }),
   deleteBudgetLine: (id: string) => api<{ ok: true }>(`/api/budgets/${id}`, { method: "DELETE" }),
   backupStatus: () => api<BackupStatus>("/api/backup/status"),
-  backup: () => api<{ path: string; mode: "manual" | "auto" | "shutdown"; createdAt: string }>("/api/backup", { method: "POST" }),
+  backup: () =>
+    api<{ file: string; mode: "manual" | "auto" | "shutdown"; createdAt: string }>("/api/backup", { method: "POST" }),
+  /** A plain URL, so the browser downloads it with its own cookie and its own progress bar. */
+  exportAllUrl: () => "/api/export/all.json",
   importTemplateUrl: () => "/api/import/template.xlsx",
   importTransactions: async (file: File, batchId?: string) => {
     const params = new URLSearchParams();

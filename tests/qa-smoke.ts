@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, unlinkSync, utimesSync, writeFileSy
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
 import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
@@ -384,6 +385,46 @@ test("creates, saves, and reloads a weekly batch", () => {
   assert(saved.status === "saved", "Batch should save.");
 });
 
+test("the account command refuses a database nobody asked for, and obeys one that was", () => {
+  // Run from a scratch directory, so the default the command falls back to is a throwaway rather
+  // than the project's own data. If this guard ever breaks, the damage lands here.
+  const home = path.join(tmpdir(), `finance-tracker-guard-${randomUUID()}`);
+  mkdirSync(home, { recursive: true });
+  const script = path.join(process.cwd(), "server", "account.ts");
+  const run = (args: string[], env: Record<string, string | undefined> = {}) =>
+    spawnSync(process.execPath, ["--no-warnings", script, ...args], {
+      cwd: home,
+      encoding: "utf8",
+      input: "a long enough passphrase for testing\n",
+      env: { ...process.env, FINANCE_DB_PATH: undefined, FINANCE_BACKUP_DIR: undefined, ...env }
+    });
+
+  const refused = run(["password", "someone@example.com"]);
+  assert(refused.status !== 0, "A mutating account command should refuse an unasked-for database.");
+  assert(
+    /Refusing to change accounts/.test(refused.stderr),
+    `The refusal should say so plainly, got: ${refused.stderr.slice(0, 200)}`
+  );
+  assert(
+    !/Password:/.test(refused.stdout),
+    "The refusal should come before the password prompt, so nothing is typed into a prompt that was never going to be used."
+  );
+  assert(
+    !existsSync(path.join(home, "data", "finance.db")),
+    "A refused command should not leave a database behind at the path it refused."
+  );
+
+  // Said explicitly, it proceeds: the guard is about the silent fallback, not about the command.
+  const named = path.join(home, "named.db");
+  const created = run(["create", "someone@example.com"], { FINANCE_DB_PATH: named, FINANCE_BACKUP_DIR: path.join(home, "backups") });
+  assert(created.status === 0, `An explicitly named database should be accepted, got: ${created.stderr.slice(0, 300)}`);
+  assert(existsSync(named), "The explicitly named database should have been created.");
+
+  // And reading is never guarded.
+  const listed = run(["list"]);
+  assert(listed.status === 0, `Listing accounts should not be refused, got: ${listed.stderr.slice(0, 200)}`);
+});
+
 test("creates backup, stores last-backup status, and removes empty backups", async () => {
   const result = services.createBackup("manual");
   const status = services.getBackupStatus();
@@ -398,7 +439,15 @@ test("creates backup, stores last-backup status, and removes empty backups", asy
   assert(result.path.startsWith(testBackupDir), "Backup should be written to configured backup dir.");
   assert(existsSync(result.path), "Backup file should exist.");
   assert(status.lastBackupAt === result.createdAt, "Backup status should track created timestamp.");
-  assert(status.lastBackupPath === result.path, "Backup status should track path.");
+  assert(status.lastBackupFile === path.basename(result.path), "Backup status should name the file.");
+  assert(
+    !JSON.stringify(status).includes(testBackupDir),
+    "Backup status must not carry the host's backup directory: it is what a browser receives."
+  );
+  assert(
+    services.getBackupStatusWithHostPath().lastBackupPath === result.path,
+    "The host-path variant should still track the full path, for the server's own use."
+  );
   assert(status.lastBackupMode === "manual", "Backup status should track mode.");
   assert(accountCount.count === 2, "Backup should include committed account data.");
   assert(

@@ -8,7 +8,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZodError } from "zod";
 import { currentBatchQuerySchema } from "../shared/finance.ts";
-import { forUser, initDatabase } from "./db.ts";
+import { currentUserIsOwner, forUser, initDatabase } from "./db.ts";
+import { buildExport, exportFilename } from "./export.ts";
 import { isTrustedRequestOrigin, securityHeaders } from "./security.ts";
 import { SESSION_COOKIE, SESSION_DAYS, endSession, signIn, userForToken } from "./auth.ts";
 import {
@@ -35,6 +36,7 @@ import {
   buildImportTemplate,
   exportTransactionsCsv,
   getBackupStatus,
+  createBackupForClient,
   getBudgetPlan,
   getCurrentBatch,
   getMonthlyReport,
@@ -82,6 +84,19 @@ startAutoBackup(app.log);
  * of things to protect, which is one forgotten line away from an exposed route.
  */
 const OPEN_PATHS = new Set(["/api/health", "/api/auth/sign-in", "/api/auth/sign-out", "/api/auth/me"]);
+
+/**
+ * Prefixes only the owner of this installation may reach.
+ *
+ * `/api/backup` copies the whole database file, every account's rows together, so it is not a
+ * per-person action and cannot be made into one: there is one file. It belongs to whoever runs the
+ * host. A prefix rather than exact paths, so `/api/backup/anything` added later is covered by
+ * this line instead of needing to remember it.
+ */
+const OWNER_PREFIXES = ["/api/backup"];
+
+const isOwnerOnlyPath = (url: string) =>
+  OWNER_PREFIXES.some((prefix) => url === prefix || url.startsWith(`${prefix}/`));
 
 const SESSION_MAX_AGE = SESSION_DAYS * 24 * 60 * 60;
 
@@ -133,6 +148,9 @@ app.addHook("onRequest", async (request, reply) => {
     // them.
     forUser(person.id);
     (request as FastifyRequest & { person?: { id: string; email: string } }).person = person;
+    if (isOwnerOnlyPath(url) && !currentUserIsOwner()) {
+      return reply.status(403).send({ error: "Only the owner of this installation can do that." });
+    }
     return undefined;
   }
 
@@ -233,7 +251,9 @@ app.post("/api/auth/sign-out", async (request, reply) => {
 
 app.get("/api/auth/me", async (request) => {
   const person = (request as FastifyRequest & { person?: { id: string; email: string } }).person;
-  return person ? { signedIn: true, email: person.email } : { signedIn: false };
+  // isOwner so the page can leave out what it would only be refused anyway. The refusal in the
+  // onRequest hook is what actually protects the backup; this is politeness, not the guard.
+  return person ? { signedIn: true, email: person.email, isOwner: currentUserIsOwner() } : { signedIn: false };
 });
 
 app.get("/api/bootstrap", async () => ({
@@ -511,7 +531,7 @@ app.delete("/api/vacations/:id", async (request) => {
 
 app.get("/api/backup/status", async () => getBackupStatus());
 
-app.post("/api/backup", expensiveRouteLimit, async () => createBackup("manual"));
+app.post("/api/backup", expensiveRouteLimit, async () => createBackupForClient("manual"));
 
 app.get("/api/import/template.xlsx", expensiveRouteLimit, async (_request, reply) => {
   const buffer = await buildImportTemplate();
@@ -529,6 +549,16 @@ app.post("/api/import/transactions", expensiveRouteLimit, async (request, reply)
   }
   const buffer = await file.toBuffer();
   return importTransactionsWorkbook(buffer, blankToUndefined(query.batchId));
+});
+
+app.get("/api/export/all.json", expensiveRouteLimit, async (_request, reply) => {
+  // Whoever is signed in gets their own data and nobody else's: `buildExport` filters by the
+  // person in scope, the same way every other query in the application does.
+  const body = buildExport();
+  return reply
+    .header("content-type", "application/json; charset=utf-8")
+    .header("content-disposition", `attachment; filename="${exportFilename()}"`)
+    .send(JSON.stringify(body, null, 2));
 });
 
 app.get("/api/export/transactions.csv", expensiveRouteLimit, async (request, reply) => {
