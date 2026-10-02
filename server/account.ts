@@ -34,18 +34,52 @@ async function askForPassword(): Promise<string> {
 
   const ask = (prompt: string) =>
     new Promise<string>((resolve) => {
-      const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-      const output = process.stdout as NodeJS.WriteStream & { muted?: boolean };
-      // Echo the prompt, then nothing, so the password does not sit in the terminal's scrollback.
-      const write = output.write.bind(output);
-      (rl as unknown as { _writeToOutput: (text: string) => void })._writeToOutput = (text) => {
-        write(text.startsWith(prompt) ? prompt : "");
+      // Read the keystrokes rather than letting readline draw the line. Readline redraws the whole
+      // line, prompt included, on every keypress, and any attempt to filter that either echoes the
+      // password or repeats the prompt once per character -- which is what the first version here
+      // did. This writes the prompt once and shows nothing else.
+      // Raw mode first, then the prompt: the other way round leaves a window in which the
+      // terminal is still echoing, and anything typed in it appears on screen. Measured -- over a
+      // pty that answers the prompt instantly, the first password was visible and the second was
+      // not, which is exactly that window.
+      const input = process.stdin;
+      input.setRawMode(true);
+      input.resume();
+      input.setEncoding("utf8");
+      process.stdout.write(prompt);
+
+      let typed = "";
+      const stop = () => {
+        input.setRawMode(false);
+        input.pause();
+        input.off("data", onData);
       };
-      rl.question(prompt, (answer) => {
-        rl.close();
-        write("\n");
-        resolve(answer);
-      });
+      const onData = (chunk: string) => {
+        for (const character of chunk) {
+          if (character === "\r" || character === "\n") {
+            stop();
+            process.stdout.write("\n");
+            resolve(typed);
+            return;
+          }
+          if (character === "\u0003") {
+            // Ctrl-C, which should stop the command rather than be typed into the password.
+            stop();
+            process.stdout.write("\n");
+            process.exit(130);
+          }
+          if (character === "\u007f" || character === "\b") {
+            typed = typed.slice(0, -1);
+            continue;
+          }
+          // Arrow keys and the like arrive as escape sequences; none of them belong in a password.
+          if (character < " ") {
+            continue;
+          }
+          typed += character;
+        }
+      };
+      input.on("data", onData);
     });
 
   const first = await ask("Password: ");
