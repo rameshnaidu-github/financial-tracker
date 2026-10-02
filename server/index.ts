@@ -2,13 +2,15 @@ import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
+import type { FastifyRequest } from "fastify";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZodError } from "zod";
 import { currentBatchQuerySchema } from "../shared/finance.ts";
-import { initDatabase } from "./db.ts";
+import { forUser, initDatabase } from "./db.ts";
 import { isTrustedRequestOrigin, securityHeaders } from "./security.ts";
+import { SESSION_COOKIE, SESSION_DAYS, endSession, signIn, userForToken } from "./auth.ts";
 import {
   createAccount,
   createAutopaySubscription,
@@ -74,10 +76,70 @@ const app = Fastify({ logger: true });
 initDatabase();
 startAutoBackup(app.log);
 
+/**
+ * The only paths that answer without a session. Everything else is refused by default, so a route
+ * added later is closed until somebody deliberately opens it -- the opposite way round from a list
+ * of things to protect, which is one forgotten line away from an exposed route.
+ */
+const OPEN_PATHS = new Set(["/api/health", "/api/auth/sign-in", "/api/auth/sign-out", "/api/auth/me"]);
+
+const SESSION_MAX_AGE = SESSION_DAYS * 24 * 60 * 60;
+
+/** Reads our cookie out of the header without pulling in a parser for one value. */
+function sessionToken(cookieHeader: string | undefined): string | undefined {
+  for (const part of String(cookieHeader ?? "").split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === SESSION_COOKIE) {
+      return decodeURIComponent(rest.join("="));
+    }
+  }
+  return undefined;
+}
+
+/**
+ * httpOnly so script cannot read it, SameSite=Lax so another site cannot ride it, Secure whenever
+ * the request arrived over HTTPS -- which is how it will be served, and which cannot simply be
+ * hard-coded or sign-in would stop working over plain http on this machine.
+ */
+function sessionCookie(request: FastifyRequest, token: string, maxAge: number) {
+  const https = request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";
+  return [
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${maxAge}`,
+    https ? "Secure" : ""
+  ]
+    .filter(Boolean)
+    .join("; ");
+}
+
 app.addHook("onRequest", async (request, reply) => {
   if (!isTrustedRequestOrigin(request.headers.origin, request.headers.host)) {
     return reply.status(403).send({ error: "Cross-origin requests are not allowed." });
   }
+
+  const url = request.url.split("?")[0];
+  if (!url.startsWith("/api/")) {
+    return undefined;
+  }
+
+  const person = userForToken(sessionToken(request.headers.cookie));
+  if (person) {
+    // enterWith, not run: the person has to stay in scope for the handler and everything it
+    // awaits, and a callback that returns cannot do that. Checked against 40 overlapping
+    // requests for five different people, each awaiting several times, with no bleed between
+    // them.
+    forUser(person.id);
+    (request as FastifyRequest & { person?: { id: string; email: string } }).person = person;
+    return undefined;
+  }
+
+  if (OPEN_PATHS.has(url)) {
+    return undefined;
+  }
+  return reply.status(401).send({ error: "Not signed in." });
 });
 
 app.addHook("onSend", async (_request, reply) => {
@@ -139,6 +201,40 @@ app.setErrorHandler((error, request, reply) => {
 });
 
 app.get("/api/health", async () => ({ ok: true }));
+
+// --- signing in -------------------------------------------------------------
+// D5 is invite only, so there is no sign-up route here. Accounts are made by
+// `node server/account.ts create <email>`.
+
+const signInLimit = {
+  config: {
+    // Sign-in is the one route worth guessing at, and each attempt costs a scrypt hash.
+    rateLimit: { max: 10, timeWindow: "5 minutes" }
+  }
+};
+
+app.post("/api/auth/sign-in", signInLimit, async (request, reply) => {
+  const body = request.body as { email?: string; password?: string } | undefined;
+  const session = await signIn(String(body?.email ?? ""), String(body?.password ?? ""));
+  if (!session) {
+    // The same answer whether the account exists or not, and signIn does the same work either
+    // way, so neither the wording nor the timing says which email addresses have accounts.
+    return reply.status(401).send({ error: "That email and password do not match." });
+  }
+  return reply
+    .header("set-cookie", sessionCookie(request, session.token, SESSION_MAX_AGE))
+    .send({ ok: true });
+});
+
+app.post("/api/auth/sign-out", async (request, reply) => {
+  endSession(sessionToken(request.headers.cookie));
+  return reply.header("set-cookie", sessionCookie(request, "", 0)).send({ ok: true });
+});
+
+app.get("/api/auth/me", async (request) => {
+  const person = (request as FastifyRequest & { person?: { id: string; email: string } }).person;
+  return person ? { signedIn: true, email: person.email } : { signedIn: false };
+});
 
 app.get("/api/bootstrap", async () => ({
   settings: getSettings(),

@@ -293,8 +293,80 @@ const UNDO_WINDOW_MS = 8000;
 const INITIAL_TRANSACTION_LIMIT = 12;
 const TRANSACTION_PAGE_SIZE = 10;
 
+
+/**
+ * Everything the application does needs a person, so nothing is rendered until there is one.
+ * There is no sign-up here on purpose: D5 is invite only, and accounts are made with
+ * `node server/account.ts create <email>`.
+ */
+function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await Api.signIn(email.trim(), password);
+      onSignedIn();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not sign in.");
+      setPassword("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="sign-in-page">
+      <div className="panel sign-in-panel">
+        <h1>Financial Tracker</h1>
+        <p className="sign-in-lead">Sign in to see your money.</p>
+        <form className="sign-in-form" onSubmit={submit}>
+          <label className="control-field">
+            <span className="control-label">Email</span>
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              autoComplete="username"
+              required
+              autoFocus
+            />
+          </label>
+          <label className="control-field">
+            <span className="control-label">Password</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </label>
+          {error && (
+            <p className="sign-in-error" role="alert">
+              {error}
+            </p>
+          )}
+          <button type="submit" className="sign-in-submit" disabled={busy || !email || !password}>
+            {busy ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
+  // Null until the first request answers: rendering the sign-in screen before knowing would
+  // flash it at somebody who is already signed in.
+  const [signedIn, setSignedIn] = useState<boolean | null>(null);
   const [activePage, setActivePage] = useState<Page>(() =>
     typeof window === "undefined" ? "overview" : pageFromPath(window.location.pathname)
   );
@@ -328,9 +400,13 @@ export default function App() {
 
   useEffect(() => {
     loadBootstrap()
-      .catch((err) => setError(err.message))
+      .catch((err: Error & { notSignedIn?: boolean }) => {
+        // Not being signed in is not an error to report; it is a screen to show.
+        if (err.notSignedIn) setSignedIn(false);
+        else setError(err.message);
+      })
       .finally(() => setLoading(false));
-  }, [loadBootstrap]);
+  }, [loadBootstrap, refreshKey]);
 
   // Before paint, so a dark-mode visitor never sees a light frame.
   useLayoutEffect(() => {
@@ -518,6 +594,21 @@ export default function App() {
       <>
         {introOpen && <IntroVideo onClose={closeIntro} />}
         {!introOpen && <FullScreenState icon={<Loader2 className="spin" />} title="Loading Financial Tracker" />}
+      </>
+    );
+  }
+
+  if (signedIn === false) {
+    return (
+      <>
+        {introOpen && <IntroVideo onClose={closeIntro} />}
+        <SignInScreen
+          onSignedIn={() => {
+            setSignedIn(true);
+            setLoading(true);
+            setRefreshKey((key) => key + 1);
+          }}
+        />
       </>
     );
   }
@@ -725,6 +816,14 @@ export default function App() {
           {activePage === "faq" && <FaqPage />}
           {activePage === "profile" && (
             <ProfilePage
+              onSignOut={() => {
+                void Api.signOut()
+                  .catch(() => undefined)
+                  .finally(() => {
+                    setSignedIn(false);
+                    setBootstrap(null);
+                  });
+              }}
               onPlayIntro={() => setIntroOpen(true)}
               introOnLaunch={introOnLaunch}
               onToggleIntroOnLaunch={toggleIntroOnLaunch}
@@ -6718,7 +6817,8 @@ function ProfilePage({
   onProfileChange,
   onSaveProfile,
   onSaveCardAlert,
-  onThemeToggle
+  onThemeToggle,
+  onSignOut
 }: {
   onPlayIntro: () => void;
   introOnLaunch: boolean;
@@ -6734,6 +6834,7 @@ function ProfilePage({
   onSaveProfile: () => Promise<void> | void;
   onSaveCardAlert: (percent: number) => Promise<void> | void;
   onThemeToggle: () => void;
+  onSignOut: () => void;
 }) {
   const displayName = profile.name || "Your profile";
   const displayEmail = profile.email || "Local profile";
@@ -6897,6 +6998,10 @@ function ProfilePage({
             <span>{theme === "dark" ? "Light theme" : "Dark theme"}</span>
             <strong>{theme === "dark" ? "Switch on" : "Switch on"}</strong>
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <button className="settings-row" onClick={onSignOut}>
+            <span>Signed in</span>
+            <strong>Sign out</strong>
           </button>
         </div>
       </div>

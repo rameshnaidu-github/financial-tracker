@@ -3695,16 +3695,21 @@ test("the database itself refuses a row that points across to another person", a
 
 let failed = 0;
 
-for (const item of tests) {
-  try {
-    await item.run();
-    console.log(`PASS ${item.name}`);
-  } catch (error) {
-    failed += 1;
-    console.error(`FAIL ${item.name}`);
-    console.error(error instanceof Error ? error.message : error);
+// The suite exercises the services directly rather than over HTTP, so there is no request to
+// carry whose rows these are. It acts as the owner, and says so once here rather than in every
+// test -- currentUserId() refuses to guess, which is the point of it.
+await dbModule.asOwner(async () => {
+  for (const item of tests) {
+    try {
+      await item.run();
+      console.log(`PASS ${item.name}`);
+    } catch (error) {
+      failed += 1;
+      console.error(`FAIL ${item.name}`);
+      console.error(error instanceof Error ? error.message : error);
+    }
   }
-}
+});
 
 dbModule.db.close();
 

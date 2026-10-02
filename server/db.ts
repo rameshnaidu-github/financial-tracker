@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -7,13 +8,15 @@ import {
   DEFAULTS_ADDED_AFTER_LEDGER,
   SELF_TRANSFER_SUBCATEGORY_ID,
   WEEK_START,
-  CURRENCY
+  CURRENCY,
 } from "../shared/finance.ts";
 import { ensureBackupDir, pruneBackupFiles } from "./backup-files.ts";
 
 const configuredDbPath = process.env.FINANCE_DB_PATH;
 const dataDir = path.join(process.cwd(), "data");
-export const dbPath = configuredDbPath ? path.resolve(configuredDbPath) : path.join(dataDir, "finance.db");
+export const dbPath = configuredDbPath
+  ? path.resolve(configuredDbPath)
+  : path.join(dataDir, "finance.db");
 
 mkdirSync(path.dirname(dbPath), { recursive: true });
 
@@ -68,15 +71,16 @@ function sqliteAdapter(): Adapter {
       const prepared = driver.prepare(translate(sql));
       return {
         all: (...params) => prepared.all(...(params as never[])) as Row[],
-        get: (...params) => prepared.get(...(params as never[])) as Row | undefined,
-        run: (...params) => prepared.run(...(params as never[]))
+        get: (...params) =>
+          prepared.get(...(params as never[])) as Row | undefined,
+        run: (...params) => prepared.run(...(params as never[])),
       };
     },
     exec: (sql) => driver.exec(sql),
     close: () => driver.close(),
     copyTo: (target) => {
       driver.prepare("VACUUM INTO ?").run(target);
-    }
+    },
   };
 }
 
@@ -92,7 +96,21 @@ export function initDatabase() {
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      -- Null until a password is set. Sign-in refuses an account without one rather than treating
+      -- the absence as a match, so an account that has never been given a password cannot be
+      -- signed into.
+      password_hash TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- One row per signed-in browser. The token is stored hashed: a stolen copy of this table is
+    -- not a set of working sessions.
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      expires_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS app_settings (
@@ -274,36 +292,44 @@ export function initDatabase() {
   // Stage 2 of the move to more than one person: the owner exists, and settings are split by
   // whom they belong to, before anything else reads or writes a row.
   ensureOwner();
-  splitSettings();
-  migrateAccountNameConstraint();
-  migrateAccountTypes();
-  migrateTransactionKinds();
-  migrateTransactionSplitsNullable();
-  ensureTaxonomySchema();
-  // The owner columns and the keys that carry them come before anything writes a taxonomy row,
-  // so every row written below belongs to somebody from the moment it exists.
-  addOwnerColumns();
-  rekeyForOwner();
-  seedTaxonomy();
-  // The legacy migration stays after seeding, because it maps old rows onto the default Types
-  // and SubTypes that seeding is what puts there.
-  migrateLegacyCategoriesToTaxonomy();
-  dropLegacyCategories();
-  ensureAccountIndexes();
-  ensureTransactionIndexes();
-  ensureLoanIndexes();
-  ensureAutopayIndexes();
-  ensureBudgetIndexes();
-  ensureDueDayColumns();
-  ensureInvestmentColumns();
-  migrateInvestmentTypes();
-  ensureInvestmentIndexes();
-  ensureVacationIndexes();
-  ensureTaxonomyIndexes();
-  seedSettings();
-  // D4 and D8, last: every other migration has finished moving rows by now, so the composite
-  // keys are checked against the schema as it will actually be used.
-  addCompositeOwnerKeys();
+
+  // Start-up has no request, so it says whose rows it is touching rather than letting
+  // currentUserId() guess. Everything below seeds or migrates the data of the single owner an
+  // installation starts with; on a database with two people none of it writes a row.
+  asOwner(() => {
+    splitSettings();
+    migrateAccountNameConstraint();
+    migrateAccountTypes();
+    migrateTransactionKinds();
+    migrateTransactionSplitsNullable();
+    ensureTaxonomySchema();
+    // The owner columns and the keys that carry them come before anything writes a taxonomy row,
+    // so every row written below belongs to somebody from the moment it exists.
+    addOwnerColumns();
+    rekeyForOwner();
+    seedTaxonomy();
+    // The legacy migration stays after seeding, because it maps old rows onto the default Types
+    // and SubTypes that seeding is what puts there.
+    migrateLegacyCategoriesToTaxonomy();
+    dropLegacyCategories();
+    addColumnIfMissing("users", "password_hash", "TEXT");
+    ensureSessionIndexes();
+    ensureAccountIndexes();
+    ensureTransactionIndexes();
+    ensureLoanIndexes();
+    ensureAutopayIndexes();
+    ensureBudgetIndexes();
+    ensureDueDayColumns();
+    ensureInvestmentColumns();
+    migrateInvestmentTypes();
+    ensureInvestmentIndexes();
+    ensureVacationIndexes();
+    ensureTaxonomyIndexes();
+    seedSettings();
+    // D4 and D8, last: every other migration has finished moving rows by now, so the composite
+    // keys are checked against the schema as it will actually be used.
+    addCompositeOwnerKeys();
+  });
   pruneBackupFiles();
 }
 
@@ -323,16 +349,28 @@ function dropLegacyCategories() {
 
   const stranded =
     (onTransactions
-      ? (db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE category_id IS NOT NULL").get() as { n: number }).n
+      ? (
+          db
+            .prepare(
+              "SELECT COUNT(*) AS n FROM transactions WHERE category_id IS NOT NULL",
+            )
+            .get() as { n: number }
+        ).n
       : 0) +
     (onSplits
-      ? (db.prepare("SELECT COUNT(*) AS n FROM transaction_splits WHERE category_id IS NOT NULL").get() as { n: number }).n
+      ? (
+          db
+            .prepare(
+              "SELECT COUNT(*) AS n FROM transaction_splits WHERE category_id IS NOT NULL",
+            )
+            .get() as { n: number }
+        ).n
       : 0);
 
   if (stranded > 0) {
     console.warn(
       `[db] ${stranded} row(s) still reference a legacy category, so the legacy columns were kept. ` +
-        "Recategorise them under a SubType and restart to complete the cleanup."
+        "Recategorise them under a SubType and restart to complete the cleanup.",
     );
     return;
   }
@@ -342,8 +380,10 @@ function dropLegacyCategories() {
     transaction(() => {
       // SQLite refuses to drop a column an index still references.
       db.exec("DROP INDEX IF EXISTS idx_transactions_category;");
-      if (onTransactions) db.exec("ALTER TABLE transactions DROP COLUMN category_id;");
-      if (onSplits) db.exec("ALTER TABLE transaction_splits DROP COLUMN category_id;");
+      if (onTransactions)
+        db.exec("ALTER TABLE transactions DROP COLUMN category_id;");
+      if (onSplits)
+        db.exec("ALTER TABLE transaction_splits DROP COLUMN category_id;");
       if (hasTable) db.exec("DROP TABLE categories;");
     });
   } finally {
@@ -372,7 +412,7 @@ const OWNED_TABLES = [
   "net_worth_snapshots",
   "budget_lines",
   "category_types",
-  "subcategories"
+  "subcategories",
 ] as const;
 
 /**
@@ -397,7 +437,7 @@ const PER_PERSON_SETTINGS = new Set([
   "currency",
   // A person's taxonomy is their own (D1), so the ledger of which defaults they have already
   // been given is theirs too.
-  "seeded_default_taxonomy_ids"
+  "seeded_default_taxonomy_ids",
 ]);
 
 /**
@@ -408,58 +448,100 @@ const PER_PERSON_SETTINGS = new Set([
 function ensureOwner() {
   const profileEmail = () => {
     const source = tableExists("settings") ? "settings" : "user_settings";
-    const stored = db.prepare(`SELECT value FROM ${source} WHERE key = 'profile_email'`).get() as
-      | { value: string }
-      | undefined;
+    const stored = db
+      .prepare(`SELECT value FROM ${source} WHERE key = 'profile_email'`)
+      .get() as { value: string } | undefined;
     return (stored?.value ?? "").trim();
   };
 
-  const existing = db.prepare("SELECT id, email FROM users ORDER BY created_at, id LIMIT 1").get() as
-    | { id: string; email: string }
-    | undefined;
+  const existing = db
+    .prepare("SELECT id, email FROM users ORDER BY created_at, id LIMIT 1")
+    .get() as { id: string; email: string } | undefined;
   if (existing) {
     // A database created before its owner filled in a profile holds the placeholder below. Once
     // the profile names them, the owner becomes that person rather than staying anonymous.
     const email = profileEmail();
     if (existing.email === PLACEHOLDER_OWNER_EMAIL && email) {
-      db.prepare("UPDATE users SET email = ? WHERE id = ?").run(email, existing.id);
+      db.prepare("UPDATE users SET email = ? WHERE id = ?").run(
+        email,
+        existing.id,
+      );
     }
-    rememberedOwner = existing.id;
     return existing.id;
   }
 
   const id = randomUUID();
-  db.prepare("INSERT INTO users (id, email) VALUES (?, ?)").run(id, profileEmail() || PLACEHOLDER_OWNER_EMAIL);
-  forgetOwner();
+  db.prepare("INSERT INTO users (id, email) VALUES (?, ?)").run(
+    id,
+    profileEmail() || PLACEHOLDER_OWNER_EMAIL,
+  );
   return id;
 }
 
 /**
  * The person every query is for. Stage 3 made this the single source the whole of services.ts
- * reads, so Stage 4 changes this one function to read the request instead of the table.
+ * reads -- 119 calls, most of them deep inside functions that have no idea a request exists -- so
+ * that this one function could later be made to ask the request. This is that change.
  *
- * It is remembered rather than looked up: a single page of the app runs hundreds of statements
- * and every one of them asks. The cache is cleared whenever the users table changes.
+ * It reads an AsyncLocalStorage established once per request, rather than taking a parameter: the
+ * alternative was threading the person through 182 functions.
+ *
+ * **Outside any request it throws.** The tempting version falls back to "the only user", and that
+ * default is a hole: any path that forgets to establish a session would read the owner's money
+ * instead of failing. The two callers that legitimately have no request -- the migrations at
+ * start-up and the account command -- say so by calling `asOwner`, which is a named act somebody
+ * can grep for rather than a silence.
  */
-let rememberedOwner: string | undefined;
+const requestUser = new AsyncLocalStorage<{ id: string }>();
 
 export function currentUserId(): string {
-  if (rememberedOwner) {
-    return rememberedOwner;
+  const person = requestUser.getStore();
+  if (!person) {
+    throw new Error(
+      "No user in scope. Every request must run inside forUser(); start-up and the account command use asOwner().",
+    );
   }
-  const row = db.prepare("SELECT id FROM users ORDER BY created_at, id LIMIT 1").get() as
-    | { id: string }
-    | undefined;
-  if (!row) {
-    throw new Error("No user exists: initDatabase must run before any row is written.");
-  }
-  rememberedOwner = row.id;
-  return rememberedOwner;
+  return person.id;
 }
 
-/** Called wherever the users table is written, so the id above is never stale. */
-function forgetOwner() {
-  rememberedOwner = undefined;
+/**
+ * Makes everything that follows on this async stack run as the given person.
+ *
+ * `enterWith` rather than `run`, because a request is not a callback: the handler and everything
+ * it awaits come after the hook returns, and a store set with `run` is gone by then. That was
+ * checked rather than assumed -- resolving a promise inside `run` leaves the store undefined --
+ * and so was the risk that comes with `enterWith`, which is one request seeing another's person:
+ * forty overlapping requests for five people, each awaiting several times, never saw the wrong
+ * one.
+ */
+export function forUser(userId: string): void {
+  requestUser.enterWith({ id: userId });
+}
+
+/** The callback form, for a caller that owns its own stack. */
+export function runAsUser<T>(userId: string, fn: () => T): T {
+  return requestUser.run({ id: userId }, fn);
+}
+
+/**
+ * For the two places with no request: the migrations that run at start-up, and the account
+ * command. Both legitimately act as the single owner of an installation that has one.
+ */
+export function asOwner<T>(fn: () => T): T {
+  const row = db
+    .prepare("SELECT id FROM users ORDER BY created_at, id LIMIT 1")
+    .get() as { id: string } | undefined;
+  if (!row) {
+    throw new Error(
+      "No user exists: initDatabase must run before any row is written.",
+    );
+  }
+  return requestUser.run({ id: row.id }, fn);
+}
+
+/** Whether a person is in scope, for the few places that have to ask rather than assume. */
+export function hasCurrentUser(): boolean {
+  return requestUser.getStore() !== undefined;
 }
 
 /** Keeps the owner's identity in step with the profile they edit. */
@@ -468,8 +550,10 @@ export function setOwnerEmail(email: string) {
   if (!trimmed) {
     return;
   }
-  db.prepare("UPDATE users SET email = ? WHERE id = ?").run(trimmed, currentUserId());
-  forgetOwner();
+  db.prepare("UPDATE users SET email = ? WHERE id = ?").run(
+    trimmed,
+    currentUserId(),
+  );
 }
 
 /**
@@ -488,12 +572,17 @@ function addOwnerColumns() {
         db.exec(
           `ALTER TABLE ${table}
              ADD COLUMN user_id TEXT NOT NULL DEFAULT '${UNATTRIBUTED}'
-             REFERENCES users(id) ON DELETE CASCADE`
+             REFERENCES users(id) ON DELETE CASCADE`,
         );
       }
-      db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(owner, UNATTRIBUTED);
+      db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(
+        owner,
+        UNATTRIBUTED,
+      );
       // Every owner-filtered query the app will grow needs this, or it reads the whole table.
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_owner ON ${table}(user_id)`);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_${table}_owner ON ${table}(user_id)`,
+      );
     }
   } finally {
     db.exec("PRAGMA foreign_keys = ON;");
@@ -508,16 +597,23 @@ function addOwnerColumns() {
 function rekeyForOwner() {
   const owner = ensureOwner();
   const keyed = (table: string, marker: string) => {
-    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as
-      | { sql: string }
-      | undefined;
+    const row = db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get(table) as { sql: string } | undefined;
     return !row || row.sql.replace(/\s+/g, " ").includes(marker);
   };
 
   const rebuild = (table: string, columns: string, create: string) => {
-    db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(owner, UNATTRIBUTED);
+    db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(
+      owner,
+      UNATTRIBUTED,
+    );
     db.exec(`CREATE TABLE ${table}_rekeyed (${create});`);
-    db.exec(`INSERT INTO ${table}_rekeyed (${columns}) SELECT ${columns} FROM ${table};`);
+    db.exec(
+      `INSERT INTO ${table}_rekeyed (${columns}) SELECT ${columns} FROM ${table};`,
+    );
     db.exec(`DROP TABLE ${table};`);
     db.exec(`ALTER TABLE ${table}_rekeyed RENAME TO ${table};`);
   };
@@ -536,14 +632,17 @@ function rekeyForOwner() {
            liabilities_paise INTEGER NOT NULL,
            net_worth_paise INTEGER NOT NULL,
            captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-           PRIMARY KEY (user_id, month)`
+           PRIMARY KEY (user_id, month)`,
         );
       }
 
       // D8 later replaces scope_id with two columns and keys the table on those instead, so a
       // database that has already been through that must not be dragged back to this shape.
       const splitAlready = columnExists("budget_lines", "scope_subcategory_id");
-      if (!splitAlready && !keyed("budget_lines", "UNIQUE (user_id, month, scope_type, scope_id)")) {
+      if (
+        !splitAlready &&
+        !keyed("budget_lines", "UNIQUE (user_id, month, scope_type, scope_id)")
+      ) {
         rebuild(
           "budget_lines",
           "id, user_id, month, scope_type, scope_id, amount_paise, created_at, updated_at",
@@ -555,7 +654,7 @@ function rekeyForOwner() {
            amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-           UNIQUE (user_id, month, scope_type, scope_id)`
+           UNIQUE (user_id, month, scope_type, scope_id)`,
         );
       }
 
@@ -573,7 +672,7 @@ function rekeyForOwner() {
            is_locked INTEGER NOT NULL DEFAULT 0,
            sort_order INTEGER NOT NULL DEFAULT 0,
            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-           UNIQUE (user_id, name)`
+           UNIQUE (user_id, name)`,
         );
       }
     });
@@ -582,8 +681,14 @@ function rekeyForOwner() {
   }
 
   // A rebuilt table keeps none of its indexes, so the ones it had come back.
-  for (const table of ["net_worth_snapshots", "budget_lines", "category_types"]) {
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_owner ON ${table}(user_id);`);
+  for (const table of [
+    "net_worth_snapshots",
+    "budget_lines",
+    "category_types",
+  ]) {
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_${table}_owner ON ${table}(user_id);`,
+    );
   }
   ensureBudgetIndexes();
   ensureTaxonomyIndexes();
@@ -601,9 +706,16 @@ function splitSettings() {
     return;
   }
   const owner = ensureOwner();
-  const rows = db.prepare("SELECT key, value FROM settings").all() as Array<{ key: string; value: string }>;
-  const mine = db.prepare("INSERT OR IGNORE INTO user_settings (user_id, key, value) VALUES (?, ?, ?)");
-  const shared = db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)");
+  const rows = db.prepare("SELECT key, value FROM settings").all() as Array<{
+    key: string;
+    value: string;
+  }>;
+  const mine = db.prepare(
+    "INSERT OR IGNORE INTO user_settings (user_id, key, value) VALUES (?, ?, ?)",
+  );
+  const shared = db.prepare(
+    "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
+  );
 
   transaction(() => {
     for (const row of rows) {
@@ -635,13 +747,15 @@ const OWNER_PARENTS = [
   "investments",
   "vacations",
   "category_types",
-  "subcategories"
+  "subcategories",
 ];
 
 function ensureParentOwnerKeys() {
   for (const table of OWNER_PARENTS) {
     if (!tableExists(table)) continue;
-    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_${table}_id_owner ON ${table}(id, user_id);`);
+    db.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_${table}_id_owner ON ${table}(id, user_id);`,
+    );
   }
 }
 
@@ -650,11 +764,18 @@ function ensureParentOwnerKeys() {
  * stops holding one polymorphic scope_id and holds two columns the database can actually check,
  * with a CHECK that exactly one of them is set.
  */
-const COMPOSITE_CHILDREN: Array<{ table: string; marker: string; columns: string; create: string; select?: string }> = [
+const COMPOSITE_CHILDREN: Array<{
+  table: string;
+  marker: string;
+  columns: string;
+  create: string;
+  select?: string;
+}> = [
   {
     table: "subcategories",
     marker: "REFERENCES category_types(id, user_id)",
-    columns: "id, user_id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at",
+    columns:
+      "id, user_id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at",
     create: `id TEXT PRIMARY KEY,
        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
        type_id TEXT NOT NULL,
@@ -666,7 +787,7 @@ const COMPOSITE_CHILDREN: Array<{ table: string; marker: string; columns: string
        sort_order INTEGER NOT NULL DEFAULT 0,
        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
        UNIQUE(type_id, name),
-       FOREIGN KEY (type_id, user_id) REFERENCES category_types(id, user_id) ON DELETE CASCADE`
+       FOREIGN KEY (type_id, user_id) REFERENCES category_types(id, user_id) ON DELETE CASCADE`,
   },
   {
     table: "transactions",
@@ -697,7 +818,7 @@ const COMPOSITE_CHILDREN: Array<{ table: string; marker: string; columns: string
        FOREIGN KEY (batch_id, user_id) REFERENCES entry_batches(id, user_id) ON DELETE SET NULL,
        FOREIGN KEY (type_id, user_id) REFERENCES category_types(id, user_id) ON DELETE RESTRICT,
        FOREIGN KEY (subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE RESTRICT,
-       FOREIGN KEY (linked_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE SET NULL`
+       FOREIGN KEY (linked_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE SET NULL`,
   },
   {
     table: "transaction_splits",
@@ -709,12 +830,13 @@ const COMPOSITE_CHILDREN: Array<{ table: string; marker: string; columns: string
        subcategory_id TEXT,
        amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
        FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE RESTRICT`
+       FOREIGN KEY (subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE RESTRICT`,
   },
   {
     table: "transaction_links",
     marker: "REFERENCES transactions(id, user_id)",
-    columns: "id, user_id, source_transaction_id, target_transaction_id, link_type, amount_paise, created_at",
+    columns:
+      "id, user_id, source_transaction_id, target_transaction_id, link_type, amount_paise, created_at",
     create: `id TEXT PRIMARY KEY,
        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
        source_transaction_id TEXT NOT NULL,
@@ -723,7 +845,7 @@ const COMPOSITE_CHILDREN: Array<{ table: string; marker: string; columns: string
        amount_paise INTEGER,
        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
        FOREIGN KEY (source_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (target_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`
+       FOREIGN KEY (target_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`,
   },
   {
     table: "loans",
@@ -745,7 +867,7 @@ const COMPOSITE_CHILDREN: Array<{ table: string; marker: string; columns: string
        is_archived INTEGER NOT NULL DEFAULT 0,
        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       FOREIGN KEY (subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE RESTRICT`
+       FOREIGN KEY (subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE RESTRICT`,
   },
   {
     table: "loan_payments",
@@ -765,7 +887,7 @@ const COMPOSITE_CHILDREN: Array<{ table: string; marker: string; columns: string
        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
        FOREIGN KEY (loan_id, user_id) REFERENCES loans(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`
+       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`,
   },
   {
     table: "autopay_payments",
@@ -777,7 +899,7 @@ const COMPOSITE_CHILDREN: Array<{ table: string; marker: string; columns: string
        transaction_id TEXT NOT NULL UNIQUE,
        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
        FOREIGN KEY (subscription_id, user_id) REFERENCES autopay_subscriptions(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`
+       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`,
   },
   {
     table: "investment_payments",
@@ -789,7 +911,7 @@ const COMPOSITE_CHILDREN: Array<{ table: string; marker: string; columns: string
        transaction_id TEXT NOT NULL UNIQUE,
        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
        FOREIGN KEY (investment_id, user_id) REFERENCES investments(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`
+       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`,
   },
   {
     table: "vacation_expenses",
@@ -801,7 +923,7 @@ const COMPOSITE_CHILDREN: Array<{ table: string; marker: string; columns: string
        transaction_id TEXT NOT NULL UNIQUE,
        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
        FOREIGN KEY (vacation_id, user_id) REFERENCES vacations(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`
+       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`,
   },
   {
     // D8. The one column the database could not check becomes two it can.
@@ -827,15 +949,15 @@ const COMPOSITE_CHILDREN: Array<{ table: string; marker: string; columns: string
            OR (scope_type = 'subcategory' AND scope_subcategory_id IS NOT NULL AND scope_type_id IS NULL)),
        UNIQUE (user_id, month, scope_type, scope_type_id, scope_subcategory_id),
        FOREIGN KEY (scope_type_id, user_id) REFERENCES category_types(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (scope_subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE CASCADE`
-  }
+       FOREIGN KEY (scope_subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE CASCADE`,
+  },
 ];
 
 /** True once the table's own definition carries the marker, so this runs once and then never. */
 function alreadyComposite(table: string, marker: string) {
-  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as
-    | { sql: string }
-    | undefined;
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(table) as { sql: string } | undefined;
   return !row || row.sql.replace(/\s+/g, " ").includes(marker);
 }
 
@@ -847,16 +969,20 @@ function addCompositeOwnerKeys() {
   // writes out an explicit column list, so it would take those columns, and the values in them, with
   // it. Nothing is rebuilt until that cleanup has happened; the keys arrive on the next start.
   const legacyRemains =
-    columnExists("transactions", "category_id") || columnExists("transaction_splits", "category_id");
+    columnExists("transactions", "category_id") ||
+    columnExists("transaction_splits", "category_id");
   if (legacyRemains) {
     console.warn(
       "[db] Legacy category columns are still present, so the owner keys were not added yet. " +
-        "Recategorise the rows that still reference a legacy category and restart."
+        "Recategorise the rows that still reference a legacy category and restart.",
     );
     return;
   }
 
-  const pending = COMPOSITE_CHILDREN.filter((child) => tableExists(child.table) && !alreadyComposite(child.table, child.marker));
+  const pending = COMPOSITE_CHILDREN.filter(
+    (child) =>
+      tableExists(child.table) && !alreadyComposite(child.table, child.marker),
+  );
   if (pending.length === 0) {
     return;
   }
@@ -870,7 +996,7 @@ function addCompositeOwnerKeys() {
         db.exec(`CREATE TABLE ${child.table}_owned (${child.create});`);
         db.exec(
           `INSERT INTO ${child.table}_owned (${columns})
-           SELECT ${(child.select ?? columns).replace(/\s+/g, " ").trim()} FROM ${child.table};`
+           SELECT ${(child.select ?? columns).replace(/\s+/g, " ").trim()} FROM ${child.table};`,
         );
         db.exec(`DROP TABLE ${child.table};`);
         db.exec(`ALTER TABLE ${child.table}_owned RENAME TO ${child.table};`);
@@ -884,7 +1010,9 @@ function addCompositeOwnerKeys() {
   // index its own children depend on.
   ensureParentOwnerKeys();
   for (const child of pending) {
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_${child.table}_owner ON ${child.table}(user_id);`);
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_${child.table}_owner ON ${child.table}(user_id);`,
+    );
   }
   ensureAccountIndexes();
   ensureTransactionIndexes();
@@ -896,10 +1024,16 @@ function addCompositeOwnerKeys() {
   ensureTaxonomyIndexes();
 
   // Nothing may have been orphaned on the way through.
-  const broken = db.prepare("PRAGMA foreign_key_check").all() as Array<{ table?: string }>;
+  const broken = db.prepare("PRAGMA foreign_key_check").all() as Array<{
+    table?: string;
+  }>;
   if (broken.length > 0) {
-    const where = [...new Set(broken.map((row) => row.table ?? "?"))].join(", ");
-    throw new Error(`Composite owner keys left ${broken.length} broken reference(s) in ${where}.`);
+    const where = [...new Set(broken.map((row) => row.table ?? "?"))].join(
+      ", ",
+    );
+    throw new Error(
+      `Composite owner keys left ${broken.length} broken reference(s) in ${where}.`,
+    );
   }
 }
 
@@ -921,7 +1055,9 @@ function ensureAutopayIndexes() {
 }
 
 function ensureBudgetIndexes() {
-  db.exec("CREATE INDEX IF NOT EXISTS idx_budget_lines_month ON budget_lines(month);");
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_budget_lines_month ON budget_lines(month);",
+  );
   // D8 replaced the single polymorphic scope_id with one column per kind, so the index that
   // served lookups by scope follows it. An older database still has the old column until the
   // migration below has run on it.
@@ -932,7 +1068,9 @@ function ensureBudgetIndexes() {
       CREATE INDEX IF NOT EXISTS idx_budget_lines_subcategory_scope ON budget_lines(scope_subcategory_id);
     `);
   } else if (columnExists("budget_lines", "scope_id")) {
-    db.exec("CREATE INDEX IF NOT EXISTS idx_budget_lines_scope ON budget_lines(scope_type, scope_id);");
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_budget_lines_scope ON budget_lines(scope_type, scope_id);",
+    );
   }
 }
 
@@ -963,7 +1101,9 @@ function ensureInvestmentColumns() {
 
 function migrateInvestmentTypes() {
   const row = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'investments'")
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'investments'",
+    )
     .get() as { sql?: string } | undefined;
 
   // Only rebuild older tables whose CHECK constraint predates the newest type ('bonds').
@@ -1012,7 +1152,9 @@ function migrateInvestmentTypes() {
 
 function migrateAccountNameConstraint() {
   const row = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'")
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'",
+    )
     .get() as { sql?: string } | undefined;
 
   if (!row?.sql?.includes("name TEXT NOT NULL COLLATE NOCASE UNIQUE")) {
@@ -1055,7 +1197,9 @@ function migrateAccountNameConstraint() {
 
 function migrateAccountTypes() {
   const row = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'")
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'",
+    )
     .get() as { sql?: string } | undefined;
 
   if (row?.sql?.includes("'food_card'")) {
@@ -1098,7 +1242,9 @@ function migrateAccountTypes() {
 
 function migrateTransactionKinds() {
   const row = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transactions'")
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transactions'",
+    )
     .get() as { sql?: string } | undefined;
 
   if (row?.sql?.includes("'investment'") && row.sql.includes("'emi'")) {
@@ -1151,7 +1297,9 @@ function migrateTransactionKinds() {
 
 function migrateTransactionSplitsNullable() {
   const row = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transaction_splits'")
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transaction_splits'",
+    )
     .get() as { sql?: string } | undefined;
 
   if (!row?.sql?.includes("category_id TEXT NOT NULL")) {
@@ -1184,6 +1332,20 @@ function migrateTransactionSplitsNullable() {
   } finally {
     db.exec("PRAGMA foreign_keys = ON;");
   }
+}
+
+function ensureSessionIndexes() {
+  if (!tableExists("sessions")) {
+    return;
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
+  `);
+  // A session that has run out is of no use to anybody and is one more row to leak.
+  db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(
+    new Date().toISOString(),
+  );
 }
 
 function ensureAccountIndexes() {
@@ -1255,17 +1417,17 @@ function ensureTaxonomySchema() {
   addColumnIfMissing(
     "transactions",
     "type_id",
-    "TEXT REFERENCES category_types(id) ON DELETE RESTRICT"
+    "TEXT REFERENCES category_types(id) ON DELETE RESTRICT",
   );
   addColumnIfMissing(
     "transactions",
     "subcategory_id",
-    "TEXT REFERENCES subcategories(id) ON DELETE RESTRICT"
+    "TEXT REFERENCES subcategories(id) ON DELETE RESTRICT",
   );
   addColumnIfMissing(
     "transaction_splits",
     "subcategory_id",
-    "TEXT REFERENCES subcategories(id) ON DELETE RESTRICT"
+    "TEXT REFERENCES subcategories(id) ON DELETE RESTRICT",
   );
 }
 
@@ -1288,7 +1450,9 @@ function seedTaxonomy() {
       (id, user_id, type_id, name, icon, color, is_system, is_locked, sort_order)
     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
   `);
-  const typeExists = db.prepare("SELECT 1 FROM category_types WHERE id = ? AND user_id = ?");
+  const typeExists = db.prepare(
+    "SELECT 1 FROM category_types WHERE id = ? AND user_id = ?",
+  );
 
   const recorded = getSetting(SEEDED_DEFAULTS_SETTING);
   let seeded: Set<string>;
@@ -1296,16 +1460,22 @@ function seedTaxonomy() {
     seeded = new Set(JSON.parse(recorded) as string[]);
   } else {
     const hasTaxonomy =
-      (db.prepare("SELECT COUNT(*) AS count FROM category_types WHERE user_id = ?").get(owner) as { count: number })
-        .count > 0;
+      (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM category_types WHERE user_id = ?",
+          )
+          .get(owner) as { count: number }
+      ).count > 0;
     // Before this ledger existed every original default was inserted on each boot, so an
     // original default missing from an existing database is one the user deleted.
     seeded = new Set(
       hasTaxonomy
-        ? DEFAULT_CATEGORY_TYPES.flatMap((type) => [type.id, ...type.subcategories.map((sub) => sub.id)]).filter(
-            (id) => !DEFAULTS_ADDED_AFTER_LEDGER.has(id)
-          )
-        : []
+        ? DEFAULT_CATEGORY_TYPES.flatMap((type) => [
+            type.id,
+            ...type.subcategories.map((sub) => sub.id),
+          ]).filter((id) => !DEFAULTS_ADDED_AFTER_LEDGER.has(id))
+        : [],
     );
   }
 
@@ -1320,7 +1490,7 @@ function seedTaxonomy() {
         type.color,
         // Card payments and refunds are wired into the app's logic, so their Types can't be deleted.
         type.id === "type_card_payment" || type.id === "type_refund" ? 1 : 0,
-        typeIndex + 1
+        typeIndex + 1,
       );
       seeded.add(type.id);
     }
@@ -1341,7 +1511,7 @@ function seedTaxonomy() {
         subcategory.icon,
         subcategory.color,
         subcategory.id === SELF_TRANSFER_SUBCATEGORY_ID ? 1 : 0,
-        subIndex + 1
+        subIndex + 1,
       );
       seeded.add(subcategory.id);
     });
@@ -1368,7 +1538,7 @@ function migrateLegacyCategoriesToTaxonomy() {
        SET type_id = 'type_card_payment',
            subcategory_id = NULL
        WHERE type_id IS NULL
-         AND kind = 'card_payment'`
+         AND kind = 'card_payment'`,
     ).run();
 
     db.prepare(
@@ -1378,7 +1548,7 @@ function migrateLegacyCategoriesToTaxonomy() {
            status = CASE WHEN status = 'split' THEN status ELSE 'categorized' END
        WHERE type_id IS NULL
          AND (kind = 'emi'
-              OR category_id IN (SELECT id FROM categories WHERE name = 'EMI' COLLATE NOCASE))`
+              OR category_id IN (SELECT id FROM categories WHERE name = 'EMI' COLLATE NOCASE))`,
     ).run();
 
     db.prepare(
@@ -1387,7 +1557,7 @@ function migrateLegacyCategoriesToTaxonomy() {
            subcategory_id = 'sub_other_income',
            status = CASE WHEN status = 'split' THEN status ELSE 'categorized' END
        WHERE type_id IS NULL
-         AND kind = 'income'`
+         AND kind = 'income'`,
     ).run();
 
     db.prepare(
@@ -1395,7 +1565,7 @@ function migrateLegacyCategoriesToTaxonomy() {
        SET type_id = 'type_investment',
            subcategory_id = NULL
        WHERE type_id IS NULL
-         AND kind = 'investment'`
+         AND kind = 'investment'`,
     ).run();
 
     db.prepare(
@@ -1403,7 +1573,7 @@ function migrateLegacyCategoriesToTaxonomy() {
        SET type_id = 'type_transfer',
            subcategory_id = NULL
        WHERE type_id IS NULL
-         AND kind = 'transfer'`
+         AND kind = 'transfer'`,
     ).run();
 
     db.prepare(
@@ -1430,7 +1600,7 @@ function migrateLegacyCategoriesToTaxonomy() {
              ELSE 'categorized'
            END
        WHERE type_id IS NULL
-         AND kind = 'expense'`
+         AND kind = 'expense'`,
     ).run();
 
     db.prepare(
@@ -1442,14 +1612,14 @@ function migrateLegacyCategoriesToTaxonomy() {
          WHERE c.id = transaction_splits.category_id
          LIMIT 1
        )
-       WHERE subcategory_id IS NULL`
+       WHERE subcategory_id IS NULL`,
     ).run();
 
     db.prepare(
       `UPDATE transactions
        SET status = CASE WHEN status = 'split' THEN status ELSE 'uncategorized' END
        WHERE type_id IS NULL
-          OR (kind IN ('expense', 'investment') AND subcategory_id IS NULL)`
+          OR (kind IN ('expense', 'investment') AND subcategory_id IS NULL)`,
     ).run();
 
     setSetting("taxonomy_migration_v1", "complete");
@@ -1464,7 +1634,9 @@ function tableExists(name: string) {
 }
 
 function columnExists(table: string, column: string) {
-  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+    name: string;
+  }>;
   return rows.some((row) => row.name === column);
 }
 
@@ -1492,7 +1664,7 @@ function createMigrationBackup(label: string) {
   const backupDir = ensureBackupDir();
   const target = path.join(
     backupDir,
-    `finance-before-${label}-${new Date().toISOString().replace(/[:.]/g, "-")}.db`
+    `finance-before-${label}-${new Date().toISOString().replace(/[:.]/g, "-")}.db`,
   );
 
   if (existsSync(target)) {
@@ -1510,11 +1682,13 @@ function createMigrationBackup(label: string) {
 function getSetting(key: string) {
   const row = (
     PER_PERSON_SETTINGS.has(key)
-      ? db.prepare("SELECT value FROM user_settings WHERE user_id = ? AND key = ?").get(currentUserId(), key)
+      ? db
+          .prepare(
+            "SELECT value FROM user_settings WHERE user_id = ? AND key = ?",
+          )
+          .get(currentUserId(), key)
       : db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key)
-  ) as
-    | { value: string }
-    | undefined;
+  ) as { value: string } | undefined;
   return row?.value;
 }
 
@@ -1523,14 +1697,14 @@ function setSetting(key: string, value: string) {
     db.prepare(
       `INSERT INTO user_settings (user_id, key, value)
        VALUES (?, ?, ?)
-       ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`
+       ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`,
     ).run(currentUserId(), key, value);
     return;
   }
   db.prepare(
     `INSERT INTO app_settings (key, value)
      VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
   ).run(key, value);
 }
 
