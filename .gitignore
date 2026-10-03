@@ -15,3 +15,8 @@ brag-output/work/*
 !brag-output/work/*.mjs
 !brag-output/work/*.html
 !brag-output/work/scene-data.json
+
+# The database password never belongs in a public repository.
+.env
+.env.*
+!.env.example
