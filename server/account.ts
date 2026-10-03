@@ -8,7 +8,6 @@
 //
 // A password may be piped in (`echo … | node server/account.ts create a@b.c`) for a script; typed
 // interactively it is not echoed and is asked for twice.
-import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Adapter } from "./db.ts";
 
@@ -20,7 +19,10 @@ import type { Adapter } from "./db.ts";
  * there, a refusal would still have left an empty database sitting at the path it had just
  * refused to touch: a small lie in a message that says nothing has been changed.
  */
-let db: Adapter;
+// Assigned in main(), after the guard has let the command through. The non-null assertion at the
+// use sites is honest here: nothing reads it before main() opens it, and the `finally` that closes
+// it checks.
+let db!: Adapter;
 let hashPassword: (password: string) => Promise<string>;
 let passwordComplaint: (password: string) => string | null;
 
@@ -49,16 +51,26 @@ function usage(): never {
 function refuseAnUnaskedForDatabase(command: string, argv: string[]): void {
   // `list` only reads. Everything else writes, including `sessions`, which signs people out.
   if (command === "list") return;
-  if (process.env.FINANCE_DB_PATH) return;
   if (argv.includes(DELIBERATE)) return;
 
-  // Resolved the same way db.ts resolves it, but without importing it: naming the file must not
-  // be what creates the file.
-  const wouldBe = path.join(process.cwd(), "data", "finance.db");
-  console.error(`Refusing to change accounts in a database nobody asked for:\n`);
-  console.error(`    ${wouldBe}\n`);
-  console.error("Nothing has been changed. Say where you mean, or say you mean this one:\n");
-  console.error(`    FINANCE_DB_PATH=/tmp/scratch.db node server/account.ts ${command} <email>`);
+  // The risk inverted when the database moved off this machine. It used to be that an unset
+  // variable meant the owner's real file; now an unset variable means a throwaway database in this
+  // process, and it is a *set* DATABASE_URL that points at the money -- production, over the
+  // network, from a laptop. That is the one worth refusing.
+  const url = process.env.DATABASE_URL?.trim();
+  if (!url) return;
+
+  // The host, never the credentials: this is printed, and a connection string carries a password.
+  let where = "a hosted database";
+  try {
+    where = new URL(url).host;
+  } catch {
+    /* an unparseable URL stays unnamed rather than echoed */
+  }
+  console.error("Refusing to change accounts in the hosted database:\n");
+  console.error(`    ${where}\n`);
+  console.error("Nothing has been changed. Say you mean it, or leave DATABASE_URL unset to work");
+  console.error("against a local database instead:\n");
   console.error(`    node server/account.ts ${command} <email> ${DELIBERATE}`);
   process.exit(2);
 }
@@ -154,7 +166,10 @@ async function main() {
   db = database.db;
   hashPassword = auth.hashPassword;
   passwordComplaint = auth.passwordComplaint;
-  database.initDatabase();
+  // Awaited: the migrations and seeding are statements over a connection now, and without this the
+  // command's own first query races them -- it printed its answer while initDatabase was still
+  // running, then failed against a database the `finally` below had already closed.
+  await database.initDatabase();
 
   if (command === "list") {
     const people = (await db
@@ -228,4 +243,11 @@ async function main() {
   usage();
 }
 
-await main();
+// The database holds the event loop open, so a command that has finished its work would otherwise
+// sit there forever with nothing to do. Measured: `account.ts list` printed its answer and never
+// exited.
+try {
+  await main();
+} finally {
+  if (db) await db.close();
+}

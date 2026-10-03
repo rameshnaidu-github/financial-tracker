@@ -940,7 +940,7 @@ async function vacationSpendByVacation(): Promise<Map<string, VacationSpend>> {
          LEFT JOIN subcategories sc ON sc.id = COALESCE(ts.subcategory_id, t.subcategory_id)
                                    AND sc.user_id = t.user_id
          WHERE ve.user_id = ?
-         GROUP BY ve.vacation_id, COALESCE(ts.subcategory_id, t.subcategory_id)`
+         GROUP BY ve.vacation_id, COALESCE(ts.subcategory_id, t.subcategory_id), sc.name, sc.icon, sc.color`
       )
       .all(currentUserId()))
   );
@@ -1108,57 +1108,21 @@ async function syncVacationExpenseForTransaction(transactionId: string, input: C
 }
 
 /**
- * The whole status, including where on disk the last backup went.
+ * What the application can honestly say about backups now that the database is somewhere else.
  *
- * For the server's own use. The long name is the point: a route that reaches for this one has to
- * spell out that it wants the host's filesystem, and `getBackupStatus` -- the short name anything
- * reaches for by habit -- is the one that cannot leak it.
- */
-export async function getBackupStatusWithHostPath() {
-  const settings = await getSettings();
-  return {
-    intervalMs: AUTO_BACKUP_INTERVAL_MS,
-    lastBackupAt:(await  settings).last_backup_at ?? null,
-    lastBackupPath:(await  settings).last_backup_path ?? null,
-    lastBackupMode:(await  settings).last_backup_mode ?? null
-  };
-}
-
-/**
- * What a browser is allowed to know: which file, not where the host keeps it.
- *
- * The directory is the owner's business and nobody else's -- it tells a reader the layout of the
- * machine the application runs on, which is of no use to the page and of some use to anyone else.
+ * It used to copy the whole SQLite file every thirty minutes and report where it put it. A hosted
+ * Postgres does not hand a client its own storage, so there is nothing to copy -- and a serverless
+ * function has no long-lived process to run a timer in even if there were. The host takes the
+ * backups. D7 made the whole-database copy the owner's alone; this is what honestly survives of it
+ * once the database stopped being a file on the owner's laptop.
  */
 export async function getBackupStatus() {
-  const { lastBackupPath, ...rest } = await getBackupStatusWithHostPath();
-  return { ...rest, lastBackupFile: lastBackupPath ? path.basename(lastBackupPath) : null };
-}
-
-export function startAutoBackup(logger?: { info: (value: unknown, message?: string) => void; error: (value: unknown, message?: string) => void }) {
-  if (autoBackupTimer) {
-    return;
-  }
-
-  autoBackupTimer = setInterval(async () => {
-    try {
-      const result = await createBackup("auto");
-      logger?.info(result, "Automatic finance backup completed");
-    } catch (error) {
-      logger?.error(error, "Automatic finance backup failed");
-    }
-  }, AUTO_BACKUP_INTERVAL_MS);
-
-  autoBackupTimer.unref?.();
-}
-
-export function stopAutoBackup() {
-  if (!autoBackupTimer) {
-    return;
-  }
-
-  clearInterval(autoBackupTimer);
-  autoBackupTimer = undefined;
+  return {
+    /** Who keeps them. "host" means Supabase's own backups, which nothing here can speak for. */
+    managedBy: db.hosted ? ("host" as const) : ("nobody" as const),
+    /** What a person can always do for themselves, whoever keeps the database. */
+    exportPath: "/api/export/all.json",
+  };
 }
 
 export async function listCategoryTypes(): Promise<CategoryTypeSummary[]> {
@@ -3375,43 +3339,6 @@ async function ensureNoBudgetOverlap(
   }
 }
 
-export async function createBackup(mode: BackupMode = "manual") {
-  const backupDir = ensureBackupDir();
-  const createdAt = new Date().toISOString();
-  const stamp = createdAt.replace(/[:.]/g, "-");
-  const target = path.join(backupDir, `finance-${stamp}.db`);
-
-  const settings = await getSettings();
-  const previousStatus = {
-    lastBackupAt:(await  settings).last_backup_at ?? null,
-    lastBackupPath:(await  settings).last_backup_path ?? null,
-    lastBackupMode:(await  settings).last_backup_mode ?? null
-  };
-
-  await setSetting("last_backup_at", createdAt);
-  await setSetting("last_backup_path", target);
-  await setSetting("last_backup_mode", mode);
-
-  try {
-    await db.copyTo(target);
-    pruneBackupFiles(backupDir);
-  } catch (error) {
-    if (existsSync(target)) {
-      unlinkSync(target);
-    }
-    await restoreBackupStatus(previousStatus);
-    throw error;
-  }
-
-  return { path: target, mode, createdAt };
-}
-
-/** The same backup, described the way a browser may hear about it. */
-export async function createBackupForClient(mode: BackupMode = "manual") {
-  const { path: target, ...rest } = await createBackup(mode);
-  return { ...rest, file: path.basename(target) };
-}
-
 export async function exportTransactionsCsv(query: Omit<TransactionQuery, "limit" | "offset"> = {}) {
   const rows: TransactionSummary[] = [];
   for (let offset = 0; ; offset += 500) {
@@ -4263,7 +4190,9 @@ async function getActiveAccountByName(name: string, exceptId?: string) {
          WHERE name = ?
            AND user_id = ?
            AND is_archived = 0
-           AND (? IS NULL OR id != ?)
+           -- The cast is for Postgres: a parameter that appears only in an IS NULL test has no
+           -- type it can be inferred from, and the statement is rejected before it runs.
+           AND (?::text IS NULL OR id != ?)
          LIMIT 1`
       )
       .get(name, currentUserId(), exceptId ?? null, exceptId ?? null))
@@ -4479,7 +4408,7 @@ async function getTransactionSplits(transactionId: string): Promise<{ subcategor
       `SELECT subcategory_id, amount_paise
        FROM transaction_splits
        WHERE transaction_id = ? AND user_id = ?
-       ORDER BY rowid ASC`
+       ORDER BY 1 ASC`
     ).all(transactionId, currentUserId()))
   );
 
@@ -5069,7 +4998,7 @@ WHERE t.id != ?
            AND t.account_id = ?
            AND t.amount_paise = ?
            AND t.direction = ?
-           AND ABS(julianday(t.date) - julianday(?)) <= 2
+           AND ABS(t.date::date - ?::date) <= 2
          ORDER BY t.date DESC, t.id DESC
          LIMIT 5`
       )
@@ -5421,15 +5350,6 @@ async function setOptionalSetting(key: string, value: string | null) {
   await setSetting(key, value);
 }
 
-async function restoreBackupStatus(status: {
-  lastBackupAt: string | null;
-  lastBackupPath: string | null;
-  lastBackupMode: string | null;
-}) {
-  await setOptionalSetting("last_backup_at", status.lastBackupAt);
-  await setOptionalSetting("last_backup_path", status.lastBackupPath);
-  await setOptionalSetting("last_backup_mode", status.lastBackupMode);
-}
 
 export function badRequest(message: string) {
   const error = new Error(message);

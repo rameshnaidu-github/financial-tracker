@@ -856,11 +856,6 @@ export default function App() {
               settings={bootstrap.settings}
               backupStatus={backupStatus}
               isOwner={isOwner}
-              onBackupNow={async () => {
-                const result = await Api.backup();
-                setBackupStatus(await Api.backupStatus());
-                return result.file;
-              }}
               theme={theme}
               saving={profileSaving}
               cardAlertPercent={cardAlertPercent}
@@ -6842,7 +6837,6 @@ function ProfilePage({
   settings,
   backupStatus,
   isOwner,
-  onBackupNow,
   theme,
   saving,
   cardAlertPercent,
@@ -6860,7 +6854,6 @@ function ProfilePage({
   settings: Record<string, string>;
   backupStatus: BackupStatus | null;
   isOwner: boolean | null;
-  onBackupNow: () => Promise<string>;
   theme: Theme;
   saving: boolean;
   cardAlertPercent: number;
@@ -6872,8 +6865,6 @@ function ProfilePage({
 }) {
   const displayName = profile.name || "Your profile";
   const displayEmail = profile.email || "Local profile";
-  const [backingUp, setBackingUp] = useState(false);
-  const [backupNote, setBackupNote] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [cardAlertDraft, setCardAlertDraft] = useState(String(cardAlertPercent));
   // Only a real difference counts as unsaved: opening the editor changes nothing by itself.
@@ -7036,24 +7027,10 @@ function ProfilePage({
             </small>
           </div>
           {isOwner === true ? (
-            <div className="settings-row backup-row has-action">
-              <span>Backup status</span>
+            <div className="settings-row backup-row">
+              <span>Backups</span>
               <strong>{formatBackupStatus(backupStatus)}</strong>
-              <button
-                type="button"
-                className="secondary-action"
-                disabled={backingUp}
-                onClick={() => {
-                  setBackingUp(true);
-                  void onBackupNow()
-                    .then((file) => setBackupNote(`Saved ${file}`))
-                    .catch((error: Error) => setBackupNote(error.message))
-                    .finally(() => setBackingUp(false));
-                }}
-              >
-                {backingUp ? "Backing up..." : "Back up now"}
-              </button>
-              <small>{backupNote ?? formatBackupDetail(backupStatus)}</small>
+              <small>{formatBackupDetail(backupStatus)}</small>
             </div>
           ) : null}
           <button className="settings-row theme-row" onClick={onThemeToggle}>
@@ -7936,27 +7913,13 @@ function creditUtilization(account: Account) {
 }
 
 function formatBackupStatus(status: BackupStatus | null) {
-  if (!status?.lastBackupAt) return "No backup yet";
-  const date = new Date(status.lastBackupAt);
-  return `Last backup: ${date.toLocaleString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit"
-  })}`;
+  if (!status) return "Unknown";
+  return status.managedBy === "host" ? "Kept by the database host" : "Not being kept";
 }
 
 function formatBackupDetail(status: BackupStatus | null) {
-  const intervalMinutes = Math.round((status?.intervalMs ?? 30 * 60 * 1000) / 60_000);
-  if (!status?.lastBackupAt) {
-    return `Pending: automatic backup runs every ${intervalMinutes} minutes while the app is open.`;
-  }
-
-  const mode =
-    status.lastBackupMode === "auto"
-      ? "Automatic"
-      : status.lastBackupMode === "shutdown"
-        ? "Shutdown"
-        : "Manual";
-  return `${mode} backup · every ${intervalMinutes} minutes`;
+  if (!status) return "The app could not reach the database to ask.";
+  return status.managedBy === "host"
+    ? "The database is hosted, and its host takes the backups. The app does not copy it, and could not: a hosted database does not hand a client its own storage. Download your data above for a copy you keep yourself."
+    : "This database is running locally and nothing is backing it up. Download your data above for a copy you keep yourself.";
 }

@@ -24,17 +24,31 @@ export const UNOWNED: Record<string, string> = {
   users: "the accounts themselves. A person's own row is exported separately, without its password hash."
 };
 
+// Postgres' own catalogue, not SQLite's. The inventory is still derived rather than listed -- the
+// point of it is that a table which grows a user_id is exported the day it appears -- but the
+// place it is derived from had to move with the database.
 const tableNames = async (): Promise<string[]> =>
   (
     (await db
       .prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        `SELECT table_name AS name
+           FROM information_schema.tables
+          WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+          ORDER BY table_name`
       )
       .all()) as Array<{ name: string }>
   ).map((row) => row.name);
 
 const columnsOf = async (table: string): Promise<string[]> =>
-  ((await db.prepare(`PRAGMA table_info("${table}")`).all()) as Array<{ name: string }>).map((row) => row.name);
+  (
+    (await db
+      .prepare(
+        `SELECT column_name AS name
+           FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = ?`
+      )
+      .all(table)) as Array<{ name: string }>
+  ).map((row) => row.name);
 
 /** Every table in this database that carries an owner. */
 export async function ownedTables(): Promise<string[]> {
@@ -123,9 +137,9 @@ export async function buildExport(): Promise<PersonExport> {
   const tables: Record<string, Array<Record<string, unknown>>> = {};
   const rowCounts: Record<string, number> = {};
   for (const table of await exportedTables()) {
-    // Ordered by rowid so two exports of the same unchanged data are the same file.
+    // Ordered by the first column so two exports of the same unchanged data are the same file.
     const rows = (await db
-      .prepare(`SELECT * FROM "${table}" WHERE user_id = ? ORDER BY rowid`)
+      .prepare(`SELECT * FROM "${table}" WHERE user_id = ? ORDER BY 1`)
       .all(userId)) as Array<Record<string, unknown>>;
     tables[table] = rows;
     rowCounts[table] = rows.length;

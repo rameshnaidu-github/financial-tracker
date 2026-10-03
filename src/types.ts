@@ -197,11 +197,10 @@ export type UserProfile = {
 };
 
 export type BackupStatus = {
-  intervalMs: number;
-  lastBackupAt: string | null;
-  /** The file's name. Not its directory: where the host keeps it is not the page's business. */
-  lastBackupFile: string | null;
-  lastBackupMode: "manual" | "auto" | "shutdown" | null;
+  /** "host" means the database's host keeps them; "nobody" means nothing is keeping any. */
+  managedBy: "host" | "nobody";
+  /** What a person can always do for themselves, whoever keeps the database. */
+  exportPath: string;
 };
 
 export type Batch = {

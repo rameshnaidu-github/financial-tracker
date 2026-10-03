@@ -14,6 +14,10 @@ const testDbPath = path.join(tmpdir(), `finance-tracker-qa-${Date.now()}.db`);
 const testBackupDir = path.join(tmpdir(), `finance-tracker-backups-${Date.now()}`);
 process.env.FINANCE_DB_PATH = testDbPath;
 process.env.FINANCE_BACKUP_DIR = testBackupDir;
+// Postgres in process, in memory: the same engine Supabase runs and the same schema file, so the
+// suite measures the database the application will actually meet rather than a local stand-in.
+delete process.env.DATABASE_URL;
+delete process.env.FINANCE_DATA_DIR;
 
 const dbModule = await import("../server/db.ts");
 const services = await import("../server/services.ts");
@@ -385,9 +389,7 @@ test("creates, saves, and reloads a weekly batch", async () => {
   assert(saved.status === "saved", "Batch should save.");
 });
 
-test("the account command refuses a database nobody asked for, and obeys one that was", async () => {
-  // Run from a scratch directory, so the default the command falls back to is a throwaway rather
-  // than the project's own data. If this guard ever breaks, the damage lands here.
+test("the account command refuses the hosted database unless you say you mean it", () => {
   const home = path.join(tmpdir(), `finance-tracker-guard-${randomUUID()}`);
   mkdirSync(home, { recursive: true });
   const script = path.join(process.cwd(), "server", "account.ts");
@@ -396,79 +398,76 @@ test("the account command refuses a database nobody asked for, and obeys one tha
       cwd: home,
       encoding: "utf8",
       input: "a long enough passphrase for testing\n",
-      env: { ...process.env, FINANCE_DB_PATH: undefined, FINANCE_BACKUP_DIR: undefined, ...env }
+      env: { ...process.env, DATABASE_URL: undefined, FINANCE_DATA_DIR: undefined, ...env }
     });
 
-  const refused = run(["password", "someone@example.com"]);
-  assert(refused.status !== 0, "A mutating account command should refuse an unasked-for database.");
+  // The database now lives somewhere else, so the dangerous command is the one aimed at it.
+  const hosted = "postgresql://someone:secret@db.example.supabase.co:5432/postgres";
+  const refused = run(["password", "someone@example.com"], { DATABASE_URL: hosted });
+  assert(refused.status !== 0, "A mutating command should refuse the hosted database.");
   assert(
-    /Refusing to change accounts/.test(refused.stderr),
+    /Refusing to change accounts in the hosted database/.test(refused.stderr),
     `The refusal should say so plainly, got: ${refused.stderr.slice(0, 200)}`
   );
   assert(
-    !/Password:/.test(refused.stdout),
-    "The refusal should come before the password prompt, so nothing is typed into a prompt that was never going to be used."
+    refused.stderr.includes("db.example.supabase.co") && !refused.stderr.includes("secret"),
+    "The refusal names the host and never the password in the connection string."
   );
   assert(
-    !existsSync(path.join(home, "data", "finance.db")),
-    "A refused command should not leave a database behind at the path it refused."
+    !/Password:/.test(refused.stdout),
+    "The refusal comes before the prompt, so nothing is typed into a command that will not run."
   );
 
-  // Said explicitly, it proceeds: the guard is about the silent fallback, not about the command.
-  const named = path.join(home, "named.db");
-  const created = run(["create", "someone@example.com"], { FINANCE_DB_PATH: named, FINANCE_BACKUP_DIR: path.join(home, "backups") });
-  assert(created.status === 0, `An explicitly named database should be accepted, got: ${created.stderr.slice(0, 300)}`);
-  assert(existsSync(named), "The explicitly named database should have been created.");
+  // Against a local database there is nothing to protect, so it simply works.
+  const created = run(["create", "someone@example.com"], { FINANCE_DATA_DIR: path.join(home, "pg") });
+  assert(created.status === 0, `A local database should be accepted, got: ${created.stderr.slice(0, 300)}`);
 
   // And reading is never guarded.
-  const listed = run(["list"]);
+  const listed = run(["list"], { FINANCE_DATA_DIR: path.join(home, "pg") });
   assert(listed.status === 0, `Listing accounts should not be refused, got: ${listed.stderr.slice(0, 200)}`);
 });
 
-test("creates backup, stores last-backup status, and removes empty backups", async () => {
-  const result = await services.createBackup("manual");
-  const status = await services.getBackupStatus();
-  const backupDb = new DatabaseSync(result.path);
-  const accountCount = backupDb.prepare("SELECT COUNT(*) AS count FROM accounts").get() as {
-    count: number;
-  };
-  const backupStatus = backupDb
-    .prepare("SELECT key, value FROM app_settings WHERE key IN ('last_backup_at', 'last_backup_path', 'last_backup_mode')")
-    .all() as Array<{ key: string; value: string }>;
+test("the per-person export derives its tables from the database and carries no credential", async () => {
+  const exportModule = await import("../server/export.ts");
 
-  assert(result.path.startsWith(testBackupDir), "Backup should be written to configured backup dir.");
-  assert(existsSync(result.path), "Backup file should exist.");
-  assert(status.lastBackupAt === result.createdAt, "Backup status should track created timestamp.");
-  assert(status.lastBackupFile === path.basename(result.path), "Backup status should name the file.");
-  assert(
-    !JSON.stringify(status).includes(testBackupDir),
-    "Backup status must not carry the host's backup directory: it is what a browser receives."
-  );
-  assert(
-    (await services.getBackupStatusWithHostPath()).lastBackupPath === result.path,
-    "The host-path variant should still track the full path, for the server's own use."
-  );
-  assert(status.lastBackupMode === "manual", "Backup status should track mode.");
-  assert(accountCount.count === 2, "Backup should include committed account data.");
-  assert(
-    backupStatus.some((row) => row.key === "last_backup_at" && row.value === result.createdAt),
-    "Backup should include its own backup timestamp."
-  );
+  // Derived, not listed: this is the check that a table added later is exported the day it appears.
+  const owned = await exportModule.ownedTables();
+  const exported = await exportModule.exportedTables();
+  assert(owned.length >= 18, `Only ${owned.length} owned tables were found; the inventory is not reading the catalogue.`);
+  assert(owned.includes("transactions") && owned.includes("accounts"), "The obvious tables must be in it.");
+  assert(!exported.includes("sessions"), "Session tokens are a credential, not financial history.");
+  assert(exported.length === owned.length - Object.keys(exportModule.EXCLUDED).length, "Exported is owned minus the exclusions.");
 
-  backupDb.close();
+  const complaints = await exportModule.inventoryComplaints();
+  assert(complaints.length === 0, `The module does not agree with the schema: ${complaints.join("; ")}`);
 
-  writeFileSync(path.join(testBackupDir, "finance-before-taxonomy-2000-01-01T00-00-00-000Z.db"), "old");
-  writeFileSync(path.join(testBackupDir, "finance-2099-01-01T00-00-00-000Z.db"), "");
-
-  for (let index = 0; index < 3; index += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await services.createBackup(index % 2 === 0 ? "auto" : "manual");
-  }
-
-  const backups = readdirSync(testBackupDir).filter((name) => /^finance.*\.db$/.test(name));
-  assert(backups.length === 5, `The five newest backups should be kept, found ${backups.length}.`);
-  assert(!backups.includes("finance-2099-01-01T00-00-00-000Z.db"), "Zero-byte backups should be removed.");
+  const file = await exportModule.buildExport();
+  assert(file.format === "financial-tracker-export", "The file says what it is.");
+  assert(Object.keys(file.tables).length === exported.length, "Every exported table is present.");
+  assert(!JSON.stringify(file).includes("password_hash"), "An export never carries a password hash.");
+  assert(!JSON.stringify(file).includes("token_hash"), "An export never carries a session token.");
 });
+
+test("backups are the database host's, and the app says so rather than pretending", async () => {
+  const status = await services.getBackupStatus();
+
+  // In the suite the database runs in this process, so nothing is keeping backups of it -- and the
+  // app says that plainly instead of reporting a file it did not write.
+  assert(status.managedBy === "nobody", `A local database has no host keeping backups, got ${status.managedBy}.`);
+  assert(status.exportPath === "/api/export/all.json", "A person can always take their own data.");
+  assert(
+    !("lastBackupPath" in status) && !("lastBackupFile" in status),
+    "The status names no file, because there is none."
+  );
+
+  // The old whole-file copy is gone, not merely unused: a hosted database does not hand a client
+  // its own storage, so there is nothing for it to copy.
+  assert(
+    !("createBackup" in services),
+    "createBackup should not exist once the database is not a file this process can read."
+  );
+});
+
 
 test("creates food-card accounts and tracks them as prepaid balance", async () => {
   const foodCard = await services.createAccount({
@@ -3396,8 +3395,15 @@ test("bonds are an investment type with their own allocation slice", async () =>
   assert(bond.type === "bonds" && bond.typeLabel === "Bonds", "A bond holding should be stored with its label.");
   const slice = (await services.getWealthSummary()).allocation.find((segment) => segment.key === "bonds");
   assert(slice?.label === "Bonds" && slice.valuePaise >= 1_03_150_00, "Bonds should get their own allocation slice.");
-  const table = (await dbModule.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'investments'").get()) as { sql: string };
-  assert(table.sql.includes("'bonds'"), "The investments table should accept bonds.");
+  const constraint = (await dbModule.db
+    .prepare(
+      `SELECT pg_get_constraintdef(c.oid) AS definition
+         FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+        WHERE t.relname = 'investments' AND c.contype = 'c'
+          AND pg_get_constraintdef(c.oid) LIKE '%bonds%'`
+    )
+    .get()) as { definition: string } | undefined;
+  assert(constraint?.definition.includes("'bonds'"), "The investments table should accept bonds.");
 });
 
 test("historical interest never exceeds what the loan's rate charges", async () => {
@@ -3562,7 +3568,6 @@ async function plantSecondPerson() {
 
 /** Removes the planted person; every row of theirs goes with them. */
 async function removeSecondPerson(userId: string) {
-  await dbModule.db.exec("PRAGMA foreign_keys = ON;");
   (await dbModule.db.prepare("DELETE FROM users WHERE id = ?").run(userId));
 }
 
@@ -3715,7 +3720,6 @@ test("nothing new can be attached to a second person's rows", async () => {
 test("the database itself refuses a row that points across to another person", async () => {
   const { other, rows } = await plantSecondPerson();
   const db = dbModule.db;
-  db.exec("PRAGMA foreign_keys = ON;");
   const owner = dbModule.currentUserId();
 
   try {

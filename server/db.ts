@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { createClient, type Client } from "@libsql/client";
 import {
   DEFAULT_CATEGORY_TYPES,
   DEFAULTS_ADDED_AFTER_LEDGER,
@@ -10,34 +10,20 @@ import {
   WEEK_START,
   CURRENCY,
 } from "../shared/finance.ts";
-import { ensureBackupDir, pruneBackupFiles } from "./backup-files.ts";
-
-const configuredDbPath = process.env.FINANCE_DB_PATH;
-const dataDir = path.join(process.cwd(), "data");
-export const dbPath = configuredDbPath
-  ? path.resolve(configuredDbPath)
-  : path.join(dataDir, "finance.db");
 
 /**
- * Where the database is, as libSQL wants to hear it.
+ * Where the database is.
  *
- * `FINANCE_DB_URL` is a hosted database -- `libsql://…` with `FINANCE_DB_TOKEN`. Without it, the
- * same client opens the same local file the application has always used. One client and one code
- * path either way: a second driver for development is a second thing to be wrong, and the bug it
- * hides is always the one that only appears in production.
+ * `DATABASE_URL` is a hosted Postgres -- Supabase in production, and whatever a developer points
+ * it at otherwise. Without it the application runs Postgres in process, which is the same engine
+ * rather than a different one that behaves like it on a good day. One schema file serves both.
  */
-const remoteUrl = process.env.FINANCE_DB_URL?.trim();
-export const isRemoteDatabase = Boolean(remoteUrl);
+const connectionString = process.env.DATABASE_URL?.trim();
+export const isHostedDatabase = Boolean(connectionString);
 
-if (!isRemoteDatabase) {
-  mkdirSync(path.dirname(dbPath), { recursive: true });
-}
+/** Where an in-process database keeps its files. Unset means memory, which is what tests want. */
+const localDataDir = process.env.FINANCE_DATA_DIR?.trim();
 
-/**
- * What the application needs from a database, and nothing else. The 127 statements in
- * `server/services.ts` already speak exactly this shape, so naming it costs no call sites and
- * buys one place that knows which engine is underneath.
- */
 export type Row = Record<string, unknown>;
 
 export type Statement = {
@@ -47,165 +33,184 @@ export type Statement = {
 };
 
 export type Adapter = {
-  /** What engine this is, for the few places that legitimately have to know. */
-  readonly dialect: "sqlite";
+  readonly dialect: "postgres";
   /** Whether the database is across a network, which decides what it can be asked to do. */
-  readonly remote: boolean;
+  readonly hosted: boolean;
   prepare: (sql: string) => Statement;
   exec: (sql: string) => Promise<void>;
   /**
    * Runs `fn` with every statement inside one transaction.
    *
-   * Not BEGIN and COMMIT as statements. libSQL does not hold a transaction open across separate
-   * calls -- measured: BEGIN, INSERT, COMMIT in sequence fails at the COMMIT with "no transaction
-   * is active", so every statement had been committing on its own. The client has its own
-   * transaction object, and the adapter points statements at it while one is open.
+   * The adapter owns this rather than the caller sending BEGIN and COMMIT, because a pooled
+   * connection hands out a different socket per statement: a BEGIN sent on one and a COMMIT on
+   * another are two unrelated events, and the work in between commits itself.
    */
   transaction: <T>(fn: () => T | Promise<T>) => Promise<T>;
-  close: () => void;
-  /**
-   * Copy the whole database to a file. This is the one thing the application asks for that is not
-   * a statement: SQLite does it with VACUUM INTO, which only works where the client can see the
-   * storage. Against a local file it does; against a hosted database it cannot, and the adapter
-   * says so plainly rather than letting unportable SQL sit in the middle of the backup code.
-   */
-  copyTo: (target: string) => Promise<void>;
+  close: () => Promise<void>;
 };
 
-const driver: Client = createClient(
-  remoteUrl
-    ? { url: remoteUrl, authToken: process.env.FINANCE_DB_TOKEN, intMode: "number" }
-    : { url: `file:${dbPath}`, intMode: "number" },
-);
-
-// Local files need these said out loud. A hosted database has them already and refuses to be
-// told: journal mode and busy timeouts are the host's business, not a client's.
-if (!isRemoteDatabase) {
-  await driver.executeMultiple(
-    "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
-  );
-}
+type Driver = {
+  query: (sql: string, params: unknown[]) => Promise<{ rows: Row[]; rowCount: number }>;
+  exec: (sql: string) => Promise<void>;
+  reserve: () => Promise<{
+    query: (sql: string, params: unknown[]) => Promise<{ rows: Row[]; rowCount: number }>;
+    release: () => void;
+  }>;
+  close: () => Promise<void>;
+};
 
 /**
- * libSQL, behind the shape above -- which is SQLite, so every constraint this schema relies on
- * carries over: the composite foreign keys, COLLATE NOCASE, D8's one-scope CHECK.
+ * The hosted driver: a pooled `pg` client.
  *
- * The methods return promises because the client speaks over a socket even when that socket is a
- * local file. That is the whole cost of the move, and it is paid here once rather than in 170
- * places deciding for themselves.
- *
- * `args` as an array, not varargs: libSQL takes positional parameters that way, and the 170 call
- * sites already pass them as varargs, so the adapter is where the two meet.
+ * A transaction reserves one connection for its whole life, because the statements in a
+ * transaction have to reach the same backend to be in it at all.
  */
-async function runTransactionWith<T>(
-  driverRef: Client,
-  setOpen: (tx: Awaited<ReturnType<Client["transaction"]>> | undefined) => void,
-  fn: () => T | Promise<T>,
-): Promise<T> {
-  const tx = await driverRef.transaction("write");
-  setOpen(tx);
-  try {
-    const result = await fn();
-    await tx.commit();
-    return result;
-  } catch (error) {
-    try {
-      await tx.rollback();
-    } catch {
-      /* the error the body threw is the one worth reporting */
-    }
-    throw error;
-  } finally {
-    setOpen(undefined);
-    // close() releases the transaction whatever happened above. Without it, a body that threw and
-    // a rollback that also threw leave the write lock held for the life of the process, and every
-    // statement after it fails with "database is locked" -- which reads as a dozen unrelated
-    // failures rather than the one that actually went wrong.
-    try {
-      tx.close();
-    } catch {
-      /* already finished */
-    }
-  }
+async function postgresDriver(url: string): Promise<Driver> {
+  const { default: pg } = await import("pg");
+  // Paise are BIGINT, and SUM over BIGINT is NUMERIC. Both arrive as strings by default, which
+  // turns every amount into text and every total into concatenation -- measured: a net-worth
+  // snapshot arrived as "010000000-110000050000000-...". They are integer paise and fit in a
+  // double long before they fit in a rupee.
+  pg.types.setTypeParser(20, (value: string) => Number(value));
+  pg.types.setTypeParser(1700, (value: string) => Number(value));
+  const pool = new pg.Pool({
+    connectionString: url,
+    // Serverless means many short-lived instances, each of which would otherwise hold connections
+    // a hosted Postgres counts against one small limit.
+    max: Number(process.env.DATABASE_POOL_MAX ?? 3),
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 15_000,
+  });
+  return {
+    query: async (sql, params) => {
+      const result = await pool.query(sql, params as never[]);
+      return { rows: result.rows as Row[], rowCount: result.rowCount ?? 0 };
+    },
+    exec: async (sql) => {
+      await pool.query(sql);
+    },
+    reserve: async () => {
+      const client = await pool.connect();
+      return {
+        query: async (sql, params) => {
+          const result = await client.query(sql, params as never[]);
+          return { rows: result.rows as Row[], rowCount: result.rowCount ?? 0 };
+        },
+        release: () => client.release(),
+      };
+    },
+    close: () => pool.end(),
+  };
 }
 
-function libsqlAdapter(): Adapter {
-  const toParams = (params: unknown[]) => params as never[];
-  // While a transaction is open every statement goes through it. Anything that kept using the
-  // client would run outside the transaction and commit on its own, which is the quiet version of
-  // having no transaction at all.
-  let open: Awaited<ReturnType<Client["transaction"]>> | undefined;
-  const runner = () => open ?? driver;
-  // One client holds one write lock, so two transactions must not overlap: the second would be
-  // refused with "database is locked" and, worse, statements belonging to one could reach the
-  // other. They queue instead, which costs nothing here -- requests are short, and SQLite
-  // serialises writers anyway.
-  let queue: Promise<unknown> = Promise.resolve();
+/** The in-process driver: Postgres compiled to WebAssembly, with the citext the schema needs. */
+async function pgliteDriver(): Promise<Driver> {
+  const { PGlite } = await import("@electric-sql/pglite");
+  const { citext } = await import("@electric-sql/pglite/contrib/citext");
+  // One options object, not (dataDir, options): the two-argument form drops the extensions when
+  // the directory is undefined, and the schema's citext columns then fail to create.
+  const instance = await new PGlite({
+    ...(localDataDir ? { dataDir: localDataDir } : {}),
+    extensions: { citext },
+  });
+  // The same two types, for the same reason: NUMERIC and BIGINT are money here, not text.
+  const parsers = { 20: Number, 1700: Number };
+  const query = async (sql: string, params: unknown[]) => {
+    const result = await instance.query(sql, params as never[], { parsers });
+    return { rows: (result.rows ?? []) as Row[], rowCount: result.affectedRows ?? 0 };
+  };
+  // One process, one database: a reservation is the same instance, so a transaction's statements
+  // are already on the only connection there is.
   return {
-    dialect: "sqlite",
-    remote: isRemoteDatabase,
+    query,
+    exec: (sql) => instance.exec(sql).then(() => undefined),
+    reserve: async () => ({ query, release: () => undefined }),
+    close: () => instance.close(),
+  };
+}
+
+const driver: Driver = connectionString
+  ? await postgresDriver(connectionString)
+  : await pgliteDriver();
+
+function postgresAdapter(): Adapter {
+  // While a transaction is open every statement goes through its reserved connection. Anything
+  // still using the pool would run outside the transaction and commit on its own.
+  let reserved: Awaited<ReturnType<Driver["reserve"]>> | undefined;
+  const run = async (sql: string, params: unknown[]) => {
+    try {
+      return await (reserved ? reserved.query(sql, params) : driver.query(sql, params));
+    } catch (error) {
+      // The driver reports the parameter number and nothing about the statement, which is of no
+      // use at all when 126 of them are in play. Naming it is how every dialect difference in this
+      // move was found; it stays for the next one.
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${detail}\n  statement: ${sql.replace(/\s+/g, " ").slice(0, 400)}\n  params: ${JSON.stringify(params).slice(0, 200)}`);
+    }
+  };
+  // One reserved connection at a time, so two transactions never interleave on it.
+  let queue: Promise<unknown> = Promise.resolve();
+
+  return {
+    dialect: "postgres",
+    hosted: isHostedDatabase,
     prepare: (sql) => {
       const text = translate(sql);
       return {
-        all: async (...params) =>
-          (await runner().execute({ sql: text, args: toParams(params) })).rows as unknown as Row[],
-        get: async (...params) =>
-          ((await runner().execute({ sql: text, args: toParams(params) })).rows[0] ?? undefined) as
-            | Row
-            | undefined,
-        run: async (...params) => ({
-          changes: (await runner().execute({ sql: text, args: toParams(params) })).rowsAffected,
-        }),
+        all: async (...params) => (await run(text, params)).rows,
+        get: async (...params) => (await run(text, params)).rows[0] ?? undefined,
+        run: async (...params) => ({ changes: (await run(text, params)).rowCount }),
       };
     },
+    exec: async (sql) => {
+      if (reserved) {
+        for (const statement of splitStatements(sql)) await reserved.query(statement, []);
+        return;
+      }
+      await driver.exec(sql);
+    },
     transaction: async (fn) => {
-      // SQLite has no nested transactions, so an inner call joins the one already open rather
-      // than starting a second one that would commit the outer one's work early.
-      if (open) return fn();
-      const mine = queue.then(() => runTransactionWith(driver, (tx) => { open = tx; }, fn));
-      // The queue must not stop at a failure: it carries the turn, not the result.
+      // Postgres has no nested transactions worth the name here, so an inner call joins the one
+      // already open rather than starting a second that would commit the outer one's work early.
+      if (reserved) return fn();
+      const mine = queue.then(async () => {
+        const client = await driver.reserve();
+        reserved = client;
+        try {
+          await client.query("BEGIN", []);
+          const result = await fn();
+          await client.query("COMMIT", []);
+          return result;
+        } catch (error) {
+          try {
+            await client.query("ROLLBACK", []);
+          } catch {
+            /* the error the body threw is the one worth reporting */
+          }
+          throw error;
+        } finally {
+          reserved = undefined;
+          client.release();
+        }
+      });
+      // The queue carries the turn, not the result, so one failure does not stop the next.
       queue = mine.catch(() => undefined);
       return mine;
     },
-
-    // One statement at a time, not `executeMultiple`.
-    //
-    // The migrations arrive as whole scripts, and the obvious call for that wraps the script in a
-    // transaction of its own and commits it. Inside a `transaction()` that ends the outer one
-    // silently, and the COMMIT that follows fails with "no transaction is active" -- which is how
-    // a rebuild that was meant to be all-or-nothing becomes a sequence of separate commits.
-    exec: async (sql) => {
-      for (const statement of splitStatements(sql)) {
-        await runner().execute(statement);
-      }
-    },
     close: () => driver.close(),
-    copyTo: async (target) => {
-      if (isRemoteDatabase) {
-        // Saying so beats writing an empty file and calling it a backup. A hosted database does
-        // not hand a client its own storage, so this is the host's job, not the application's.
-        throw new Error(
-          "A hosted database cannot copy itself to a file. Use the host's own backups, or the " +
-            "per-person export at /api/export/all.json.",
-        );
-      }
-      await driver.execute({ sql: "VACUUM INTO ?", args: [target] });
-    },
   };
 }
 
 /**
- * Splits a SQL script into its statements.
- *
- * Aware of strings and comments, because a `;` inside either is not the end of anything -- the
- * schema has both, and a naive split on `;` would cut a CHECK constraint's message in half.
+ * Splits a SQL script into its statements, aware of strings and comments -- a `;` inside either is
+ * not the end of anything, and the schema has both.
  */
 function splitStatements(sql: string): string[] {
   const statements: string[] = [];
   let current = "";
   for (let i = 0; i < sql.length; i += 1) {
     const c = sql[i];
-    if (c === "'" || c === '"' || c === "`") {
+    if (c === "'" || c === '"') {
       const quote = c;
       current += c;
       i += 1;
@@ -232,349 +237,61 @@ function splitStatements(sql: string): string[] {
   return statements;
 }
 
-/** The one place a statement is adjusted for the engine underneath. */
+/**
+ * The one place a statement is adjusted for the engine underneath.
+ *
+ * Five forms, counted from the application rather than guessed at: SQLite's `?` placeholders, its
+ * `INSERT OR IGNORE`, and nothing else. Everything the application writes is already standard SQL,
+ * which is what portable-5 measured when it proved all 126 statements parse as Postgres.
+ */
 function translate(sql: string): string {
-  return sql;
+  let out = sql.replace(/\bINSERT\s+OR\s+IGNORE\s+INTO\b/gi, "INSERT INTO");
+  const needsOnConflict = out !== sql;
+
+  // `?` becomes $1, $2 … but only outside string literals, where a question mark is just text.
+  let index = 0;
+  let positional = "";
+  for (let i = 0; i < out.length; i += 1) {
+    const c = out[i];
+    if (c === "'") {
+      positional += c;
+      i += 1;
+      while (i < out.length) { positional += out[i]; if (out[i] === "'") break; i += 1; }
+      continue;
+    }
+    positional += c === "?" ? `$${(index += 1)}` : c;
+  }
+  out = positional;
+
+  if (needsOnConflict && !/ON\s+CONFLICT/i.test(out)) {
+    out = `${out.replace(/;\s*$/, "")} ON CONFLICT DO NOTHING`;
+  }
+  return out;
 }
 
-export const db: Adapter = libsqlAdapter();
+export const db: Adapter = postgresAdapter();
 
+/** The schema, as one file, applied as a whole. Derived by .unlazy/ship-7/derive-schema.mjs. */
+const schemaPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "schema.sql");
+
+/**
+ * Brings the database up to the shape the application needs, and seeds what it must contain.
+ *
+ * No migration chain. The twenty steps `server/db.ts` used to run existed to carry a SQLite file
+ * written by an older release forward; a hosted Postgres starts empty, so it gets the finished
+ * schema in one piece. Every statement is IF NOT EXISTS, so running this on every cold start costs
+ * a round trip and changes nothing.
+ */
 export async function initDatabase() {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT NOT NULL COLLATE NOCASE UNIQUE,
-      -- Null until a password is set. Sign-in refuses an account without one rather than treating
-      -- the absence as a match, so an account that has never been given a password cannot be
-      -- signed into.
-      password_hash TEXT,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    -- One row per signed-in browser. The token is stored hashed: a stolen copy of this table is
-    -- not a set of working sessions.
-    CREATE TABLE IF NOT EXISTS sessions (
-      token_hash TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      expires_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS app_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS user_settings (
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      key TEXT NOT NULL,
-      value TEXT NOT NULL,
-      PRIMARY KEY (user_id, key)
-    );
-
-
-    CREATE TABLE IF NOT EXISTS accounts (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL COLLATE NOCASE,
-      type TEXT NOT NULL CHECK (type IN ('bank', 'credit_card', 'food_card')),
-      starting_balance_paise INTEGER NOT NULL DEFAULT 0,
-      credit_limit_paise INTEGER,
-      is_archived INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS entry_batches (
-      id TEXT PRIMARY KEY,
-      week_start TEXT NOT NULL,
-      week_end TEXT NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('draft', 'saved')) DEFAULT 'draft',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      saved_at TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS transactions (
-      id TEXT PRIMARY KEY,
-      batch_id TEXT REFERENCES entry_batches(id) ON DELETE SET NULL,
-      date TEXT NOT NULL,
-      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-      method TEXT NOT NULL CHECK (method IN ('upi', 'credit_card', 'bank_transfer', 'cash', 'other')),
-      merchant TEXT,
-      note TEXT,
-      amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
-      direction TEXT NOT NULL CHECK (direction IN ('inflow', 'outflow')),
-      kind TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'refund', 'transfer', 'card_payment', 'reversal', 'investment', 'emi')),
-      status TEXT NOT NULL CHECK (status IN ('categorized', 'uncategorized', 'split')) DEFAULT 'categorized',
-      transfer_account_id TEXT REFERENCES accounts(id) ON DELETE RESTRICT,
-      linked_transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS transaction_splits (
-      id TEXT PRIMARY KEY,
-      transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
-      amount_paise INTEGER NOT NULL CHECK (amount_paise > 0)
-    );
-
-    CREATE TABLE IF NOT EXISTS transaction_links (
-      id TEXT PRIMARY KEY,
-      source_transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
-      target_transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
-      link_type TEXT NOT NULL CHECK (link_type IN ('refund', 'reversal', 'duplicate', 'card_payment')),
-      amount_paise INTEGER,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS loans (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL COLLATE NOCASE,
-      subcategory_id TEXT NOT NULL REFERENCES subcategories(id) ON DELETE RESTRICT,
-      principal_amount_paise INTEGER NOT NULL CHECK (principal_amount_paise > 0),
-      starting_outstanding_paise INTEGER NOT NULL CHECK (starting_outstanding_paise >= 0),
-      start_month TEXT NOT NULL CHECK (start_month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
-      annual_interest_rate_bps INTEGER NOT NULL CHECK (annual_interest_rate_bps >= 0),
-      tenure_months INTEGER NOT NULL CHECK (tenure_months > 0),
-      monthly_emi_paise INTEGER NOT NULL CHECK (monthly_emi_paise > 0),
-      is_archived INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS loan_payments (
-      id TEXT PRIMARY KEY,
-      loan_id TEXT NOT NULL REFERENCES loans(id) ON DELETE CASCADE,
-      transaction_id TEXT NOT NULL UNIQUE REFERENCES transactions(id) ON DELETE CASCADE,
-      payment_type TEXT NOT NULL CHECK (payment_type IN ('emi', 'prepayment')),
-      amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
-      principal_paise INTEGER NOT NULL CHECK (principal_paise >= 0),
-      interest_paise INTEGER NOT NULL CHECK (interest_paise >= 0),
-      outstanding_before_paise INTEGER NOT NULL CHECK (outstanding_before_paise >= 0),
-      outstanding_after_paise INTEGER NOT NULL CHECK (outstanding_after_paise >= 0),
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS autopay_subscriptions (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL COLLATE NOCASE,
-      amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
-      start_date TEXT NOT NULL,
-      duration_months INTEGER NOT NULL CHECK (duration_months > 0),
-      is_archived INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS autopay_payments (
-      id TEXT PRIMARY KEY,
-      subscription_id TEXT NOT NULL REFERENCES autopay_subscriptions(id) ON DELETE CASCADE,
-      transaction_id TEXT NOT NULL UNIQUE REFERENCES transactions(id) ON DELETE CASCADE,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS investments (
-      id TEXT PRIMARY KEY,
-      type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'other')),
-      name TEXT NOT NULL,
-      invested_paise INTEGER NOT NULL CHECK (invested_paise >= 0),
-      current_value_paise INTEGER NOT NULL CHECK (current_value_paise >= 0),
-      shares REAL,
-      purchase_date TEXT,
-      note TEXT,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS investment_payments (
-      id TEXT PRIMARY KEY,
-      investment_id TEXT NOT NULL REFERENCES investments(id) ON DELETE CASCADE,
-      transaction_id TEXT NOT NULL UNIQUE REFERENCES transactions(id) ON DELETE CASCADE,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS vacations (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      start_date TEXT,
-      end_date TEXT,
-      budget_paise INTEGER CHECK (budget_paise IS NULL OR budget_paise > 0),
-      note TEXT,
-      is_archived INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS vacation_expenses (
-      id TEXT PRIMARY KEY,
-      vacation_id TEXT NOT NULL REFERENCES vacations(id) ON DELETE CASCADE,
-      transaction_id TEXT NOT NULL UNIQUE REFERENCES transactions(id) ON DELETE CASCADE,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS net_worth_snapshots (
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
-      liquid_paise INTEGER NOT NULL,
-      investments_paise INTEGER NOT NULL,
-      liabilities_paise INTEGER NOT NULL,
-      net_worth_paise INTEGER NOT NULL,
-      captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (user_id, month)
-    );
-
-    CREATE TABLE IF NOT EXISTS budget_lines (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
-      scope_type TEXT NOT NULL CHECK (scope_type IN ('type', 'subcategory')),
-      scope_id TEXT NOT NULL,
-      amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE (user_id, month, scope_type, scope_id)
-    );
-  `);
-
-  // Stage 2 of the move to more than one person: the owner exists, and settings are split by
-  // whom they belong to, before anything else reads or writes a row.
+  await db.exec(readFileSync(schemaPath, "utf8"));
   await ensureOwner();
-
-  // Start-up has no request, so it says whose rows it is touching rather than letting
-  // currentUserId() guess. Everything below seeds or migrates the data of the single owner an
-  // installation starts with; on a database with two people none of it writes a row.
   await asOwner(async () => {
-    await splitSettings();
-    await migrateAccountNameConstraint();
-    await migrateAccountTypes();
-    await migrateTransactionKinds();
-    await migrateTransactionSplitsNullable();
-    await ensureTaxonomySchema();
-    // The owner columns and the keys that carry them come before anything writes a taxonomy row,
-    // so every row written below belongs to somebody from the moment it exists.
-    await addOwnerColumns();
-    await rekeyForOwner();
     await seedTaxonomy();
-    // The legacy migration stays after seeding, because it maps old rows onto the default Types
-    // and SubTypes that seeding is what puts there.
-    await migrateLegacyCategoriesToTaxonomy();
-    await dropLegacyCategories();
-    await addColumnIfMissing("users", "password_hash", "TEXT");
-    await ensureSessionIndexes();
-    await ensureAccountIndexes();
-    await ensureTransactionIndexes();
-    await ensureLoanIndexes();
-    await ensureAutopayIndexes();
-    await ensureBudgetIndexes();
-    await ensureDueDayColumns();
-    await ensureInvestmentColumns();
-    await migrateInvestmentTypes();
-    await ensureInvestmentIndexes();
-    await ensureVacationIndexes();
-    await ensureTaxonomyIndexes();
     await seedSettings();
-    // D4 and D8, last: every other migration has finished moving rows by now, so the composite
-    // keys are checked against the schema as it will actually be used.
-    await addCompositeOwnerKeys();
   });
-  pruneBackupFiles();
 }
 
-/**
- * Removes the legacy categories storage, but only once the database proves it holds nothing
- * in it. migrateLegacyCategoriesToTaxonomy runs first and has already had its chance to move
- * anything across; if a value survived that, something is unaccounted for and dropping the
- * column would destroy it. In that case this leaves every column and every row alone.
- */
-async function dropLegacyCategories() {
-  const hasTable = await tableExists("categories");
-  const onTransactions = await columnExists("transactions", "category_id");
-  const onSplits = await columnExists("transaction_splits", "category_id");
-  if (!hasTable && !onTransactions && !onSplits) {
-    return;
-  }
 
-  const stranded =
-    (await onTransactions
-      ? (
-          (await db
-            .prepare(
-              "SELECT COUNT(*) AS n FROM transactions WHERE category_id IS NOT NULL",
-            )
-            .get()) as { n: number }
-        ).n
-      : 0) +
-    (await onSplits
-      ? (
-          (await db
-            .prepare(
-              "SELECT COUNT(*) AS n FROM transaction_splits WHERE category_id IS NOT NULL",
-            )
-            .get()) as { n: number }
-        ).n
-      : 0);
-
-  if (stranded > 0) {
-    console.warn(
-      `[db] ${stranded} row(s) still reference a legacy category, so the legacy columns were kept. ` +
-        "Recategorise them under a SubType and restart to complete the cleanup.",
-    );
-    return;
-  }
-
-  await db.exec("PRAGMA foreign_keys = OFF;");
-  try {
-    await transaction(async () => {
-      // SQLite refuses to drop a column an index still references.
-      await db.exec("DROP INDEX IF EXISTS idx_transactions_category;");
-      if (onTransactions)
-        await db.exec("ALTER TABLE transactions DROP COLUMN category_id;");
-      if (onSplits)
-        await db.exec("ALTER TABLE transaction_splits DROP COLUMN category_id;");
-      if (hasTable) await db.exec("DROP TABLE categories;");
-    });
-  } finally {
-    await db.exec("PRAGMA foreign_keys = ON;");
-  }
-}
-
-/**
- * Every table whose rows belong to one person. app_settings is deliberately absent -- it holds
- * installation-wide state -- and users is the table doing the owning.
- */
-const OWNED_TABLES = [
-  "accounts",
-  "entry_batches",
-  "transactions",
-  "transaction_splits",
-  "transaction_links",
-  "loans",
-  "loan_payments",
-  "autopay_subscriptions",
-  "autopay_payments",
-  "investments",
-  "investment_payments",
-  "vacations",
-  "vacation_expenses",
-  "net_worth_snapshots",
-  "budget_lines",
-  "category_types",
-  "subcategories",
-] as const;
-
-/**
- * An owner id no user can ever have, used only as the default a NOT NULL column needs while it
- * is being added to a table that already has rows. Every such row is attributed to its owner
- * immediately afterwards, and because the sentinel satisfies no foreign key, a later INSERT that
- * forgets to name an owner fails loudly instead of quietly creating an unowned row.
- */
-const UNATTRIBUTED = "";
-
-/** What the owner is called until the profile says who they are. */
-const PLACEHOLDER_OWNER_EMAIL = "owner@localhost";
-
-/** D2: the settings keys that describe a person, as opposed to the installation. */
 const PER_PERSON_SETTINGS = new Set([
   "profile_name",
   "profile_email",
@@ -593,11 +310,16 @@ const PER_PERSON_SETTINGS = new Set([
  * whoever the stored profile describes. Their id is generated once and then never changes, so
  * every row attributed to them stays attributed across restarts.
  */
+
+/** Until a profile names them, the owner is anonymous rather than absent. */
+const PLACEHOLDER_OWNER_EMAIL = "owner@localhost";
+
 async function ensureOwner() {
+  // `user_settings` only: the single `settings` table belonged to a release before Stage 2, and a
+  // database that starts on Postgres has never had one.
   const profileEmail = async () => {
-    const source = (await tableExists("settings")) ? "settings" : "user_settings";
     const stored = (await db
-      .prepare(`SELECT value FROM ${source} WHERE key = 'profile_email'`)
+      .prepare("SELECT value FROM user_settings WHERE key = 'profile_email' LIMIT 1")
       .get()) as { value: string } | undefined;
     return (stored?.value ?? "").trim();
   };
@@ -628,6 +350,7 @@ async function ensureOwner() {
 
 /**
  * The person every query is for. Stage 3 made this the single source the whole of services.ts
+
  * reads -- 119 calls, most of them deep inside functions that have no idea a request exists -- so
  * that this one function could later be made to ask the request. This is that change.
  *
@@ -720,887 +443,6 @@ export async function setOwnerEmail(email: string) {
   ));
 }
 
-/**
- * Gives every owned table a user_id. SQLite cannot add a NOT NULL column without a default, and
- * refuses a default on a column that references another table, so the column is added with
- * foreign keys off and the sentinel default; the existing rows are then attributed to the owner.
- * What a table gains is an owner it cannot lose, not a nullable column somebody has to remember.
- */
-async function addOwnerColumns() {
-  const owner = await ensureOwner();
-  await db.exec("PRAGMA foreign_keys = OFF;");
-  try {
-    for (const table of OWNED_TABLES) {
-      if (!(await tableExists(table))) continue;
-      if (!(await columnExists(table, "user_id"))) {
-        await db.exec(
-          `ALTER TABLE ${table}
-             ADD COLUMN user_id TEXT NOT NULL DEFAULT '${UNATTRIBUTED}'
-             REFERENCES users(id) ON DELETE CASCADE`,
-        );
-      }
-      (await db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(
-        owner,
-        UNATTRIBUTED,
-      ));
-      // Every owner-filtered query the app will grow needs this, or it reads the whole table.
-      await db.exec(
-        `CREATE INDEX IF NOT EXISTS idx_${table}_owner ON ${table}(user_id)`,
-      );
-    }
-  } finally {
-    await db.exec("PRAGMA foreign_keys = ON;");
-  }
-}
-
-/**
- * The three tables whose keys make a second person impossible: one month, one budget line per
- * scope and one Type name per *database* rather than per person. SQLite cannot alter a primary
- * key or drop an inline UNIQUE, so each is rebuilt with the owner inside its key.
- */
-async function rekeyForOwner() {
-  const owner = await ensureOwner();
-  const keyed = async (table: string, marker: string) => {
-    const row = (await db
-      .prepare(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
-      )
-      .get(table)) as { sql: string } | undefined;
-    return !row || row.sql.replace(/\s+/g, " ").includes(marker);
-  };
-
-  const rebuild = async (table: string, columns: string, create: string) => {
-    (await db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(
-      owner,
-      UNATTRIBUTED,
-    ));
-    await db.exec(`CREATE TABLE ${table}_rekeyed (${create});`);
-    await db.exec(
-      `INSERT INTO ${table}_rekeyed (${columns}) SELECT ${columns} FROM ${table};`,
-    );
-    await db.exec(`DROP TABLE ${table};`);
-    await db.exec(`ALTER TABLE ${table}_rekeyed RENAME TO ${table};`);
-  };
-
-  await db.exec("PRAGMA foreign_keys = OFF;");
-  try {
-    await transaction(async () => {
-      if (!(await keyed("net_worth_snapshots", "PRIMARY KEY (user_id, month)"))) {
-        await rebuild(
-          "net_worth_snapshots",
-          "user_id, month, liquid_paise, investments_paise, liabilities_paise, net_worth_paise, captured_at",
-          `user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-           month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
-           liquid_paise INTEGER NOT NULL,
-           investments_paise INTEGER NOT NULL,
-           liabilities_paise INTEGER NOT NULL,
-           net_worth_paise INTEGER NOT NULL,
-           captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-           PRIMARY KEY (user_id, month)`,
-        );
-      }
-
-      // D8 later replaces scope_id with two columns and keys the table on those instead, so a
-      // database that has already been through that must not be dragged back to this shape.
-      const splitAlready = await columnExists("budget_lines", "scope_subcategory_id");
-      if (
-        !splitAlready &&
-        !(await keyed("budget_lines", "UNIQUE (user_id, month, scope_type, scope_id)"))
-      ) {
-        await rebuild(
-          "budget_lines",
-          "id, user_id, month, scope_type, scope_id, amount_paise, created_at, updated_at",
-          `id TEXT PRIMARY KEY,
-           user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-           month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
-           scope_type TEXT NOT NULL CHECK (scope_type IN ('type', 'subcategory')),
-           scope_id TEXT NOT NULL,
-           amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
-           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-           UNIQUE (user_id, month, scope_type, scope_id)`,
-        );
-      }
-
-      if (!(await keyed("category_types", "UNIQUE (user_id, name)"))) {
-        await rebuild(
-          "category_types",
-          "id, user_id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at",
-          `id TEXT PRIMARY KEY,
-           user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-           name TEXT NOT NULL COLLATE NOCASE,
-           behavior TEXT NOT NULL CHECK (behavior IN ('expense', 'income', 'loan', 'investment', 'transfer', 'card_payment', 'refund')),
-           icon TEXT NOT NULL,
-           color TEXT NOT NULL,
-           is_system INTEGER NOT NULL DEFAULT 0,
-           is_locked INTEGER NOT NULL DEFAULT 0,
-           sort_order INTEGER NOT NULL DEFAULT 0,
-           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-           UNIQUE (user_id, name)`,
-        );
-      }
-    });
-  } finally {
-    await db.exec("PRAGMA foreign_keys = ON;");
-  }
-
-  // A rebuilt table keeps none of its indexes, so the ones it had come back.
-  for (const table of [
-    "net_worth_snapshots",
-    "budget_lines",
-    "category_types",
-  ]) {
-    await db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_${table}_owner ON ${table}(user_id);`,
-    );
-  }
-  await ensureBudgetIndexes();
-  await ensureTaxonomyIndexes();
-}
-
-/**
- * D2: one settings table held both the owner's profile and installation-wide bookkeeping, keyed
- * so only one of each could exist. It becomes two tables whose names say which kind they hold,
- * so no future reader has to know the difference by heart.
- */
-async function splitSettings() {
-  // Only a database written by an earlier release still has the single settings table; this is the
-  // one place that knows it ever existed, which is why nothing above creates it.
-  if (!(await tableExists("settings"))) {
-    return;
-  }
-  const owner = await ensureOwner();
-  const rows = (await db.prepare("SELECT key, value FROM settings").all()) as Array<{
-    key: string;
-    value: string;
-  }>;
-  const mine = db.prepare(
-    "INSERT OR IGNORE INTO user_settings (user_id, key, value) VALUES (?, ?, ?)",
-  );
-  const shared = db.prepare(
-    "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
-  );
-
-  await transaction(async () => {
-    for (const row of rows) {
-      if (PER_PERSON_SETTINGS.has(row.key)) {
-        await mine.run(owner, row.key, row.value);
-      } else {
-        await shared.run(row.key, row.value);
-      }
-    }
-    await db.exec("DROP TABLE settings;");
-  });
-}
-
-/**
- * D4, the half Stage 2 could not do. A child row now references its parent by (id, user_id), so
- * the database itself rejects a row that points at somebody else's: the guarantee stops depending
- * on which code path remembered to check.
- *
- * SQLite needs the parent side of a composite foreign key to be uniquely indexed, which a plain
- * index on (id, user_id) satisfies -- no parent has to be rebuilt. The children do, because a
- * constraint cannot be added to an existing table.
- */
-const OWNER_PARENTS = [
-  "accounts",
-  "entry_batches",
-  "transactions",
-  "loans",
-  "autopay_subscriptions",
-  "investments",
-  "vacations",
-  "category_types",
-  "subcategories",
-];
-
-async function ensureParentOwnerKeys() {
-  for (const table of OWNER_PARENTS) {
-    if (!(await tableExists(table))) continue;
-    await db.exec(
-      `CREATE UNIQUE INDEX IF NOT EXISTS uq_${table}_id_owner ON ${table}(id, user_id);`,
-    );
-  }
-}
-
-/**
- * Each child, as it must look once its references carry the owner. D8 is here too: budget_lines
- * stops holding one polymorphic scope_id and holds two columns the database can actually check,
- * with a CHECK that exactly one of them is set.
- */
-const COMPOSITE_CHILDREN: Array<{
-  table: string;
-  marker: string;
-  columns: string;
-  create: string;
-  select?: string;
-}> = [
-  {
-    table: "subcategories",
-    marker: "REFERENCES category_types(id, user_id)",
-    columns:
-      "id, user_id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at",
-    create: `id TEXT PRIMARY KEY,
-       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-       type_id TEXT NOT NULL,
-       name TEXT NOT NULL COLLATE NOCASE,
-       icon TEXT NOT NULL,
-       color TEXT NOT NULL,
-       is_system INTEGER NOT NULL DEFAULT 0,
-       is_locked INTEGER NOT NULL DEFAULT 0,
-       sort_order INTEGER NOT NULL DEFAULT 0,
-       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       UNIQUE(type_id, name),
-       FOREIGN KEY (type_id, user_id) REFERENCES category_types(id, user_id) ON DELETE CASCADE`,
-  },
-  {
-    table: "transactions",
-    marker: "REFERENCES accounts(id, user_id)",
-    columns: `id, user_id, batch_id, date, account_id, method, merchant, note, type_id, subcategory_id,
-              amount_paise, direction, kind, status, transfer_account_id, linked_transaction_id,
-              created_at, updated_at`,
-    create: `id TEXT PRIMARY KEY,
-       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-       batch_id TEXT,
-       date TEXT NOT NULL,
-       account_id TEXT NOT NULL,
-       method TEXT NOT NULL CHECK (method IN ('upi', 'credit_card', 'bank_transfer', 'cash', 'other')),
-       merchant TEXT,
-       note TEXT,
-       type_id TEXT,
-       subcategory_id TEXT,
-       amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
-       direction TEXT NOT NULL CHECK (direction IN ('inflow', 'outflow')),
-       kind TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'refund', 'transfer', 'card_payment', 'reversal', 'investment', 'emi')),
-       status TEXT NOT NULL CHECK (status IN ('categorized', 'uncategorized', 'split')) DEFAULT 'categorized',
-       transfer_account_id TEXT,
-       linked_transaction_id TEXT,
-       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       FOREIGN KEY (account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT,
-       FOREIGN KEY (transfer_account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT,
-       FOREIGN KEY (batch_id, user_id) REFERENCES entry_batches(id, user_id) ON DELETE SET NULL,
-       FOREIGN KEY (type_id, user_id) REFERENCES category_types(id, user_id) ON DELETE RESTRICT,
-       FOREIGN KEY (subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE RESTRICT,
-       FOREIGN KEY (linked_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE SET NULL`,
-  },
-  {
-    table: "transaction_splits",
-    marker: "REFERENCES transactions(id, user_id)",
-    columns: "id, user_id, transaction_id, subcategory_id, amount_paise",
-    create: `id TEXT PRIMARY KEY,
-       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-       transaction_id TEXT NOT NULL,
-       subcategory_id TEXT,
-       amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
-       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE RESTRICT`,
-  },
-  {
-    table: "transaction_links",
-    marker: "REFERENCES transactions(id, user_id)",
-    columns:
-      "id, user_id, source_transaction_id, target_transaction_id, link_type, amount_paise, created_at",
-    create: `id TEXT PRIMARY KEY,
-       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-       source_transaction_id TEXT NOT NULL,
-       target_transaction_id TEXT NOT NULL,
-       link_type TEXT NOT NULL CHECK (link_type IN ('refund', 'reversal', 'duplicate', 'card_payment')),
-       amount_paise INTEGER,
-       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       FOREIGN KEY (source_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (target_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`,
-  },
-  {
-    table: "loans",
-    marker: "REFERENCES subcategories(id, user_id)",
-    columns: `id, user_id, name, subcategory_id, principal_amount_paise, starting_outstanding_paise,
-              start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day,
-              is_archived, created_at, updated_at`,
-    create: `id TEXT PRIMARY KEY,
-       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-       name TEXT NOT NULL COLLATE NOCASE,
-       subcategory_id TEXT NOT NULL,
-       principal_amount_paise INTEGER NOT NULL CHECK (principal_amount_paise > 0),
-       starting_outstanding_paise INTEGER NOT NULL CHECK (starting_outstanding_paise >= 0),
-       start_month TEXT NOT NULL CHECK (start_month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
-       annual_interest_rate_bps INTEGER NOT NULL CHECK (annual_interest_rate_bps >= 0),
-       tenure_months INTEGER NOT NULL CHECK (tenure_months > 0),
-       monthly_emi_paise INTEGER NOT NULL CHECK (monthly_emi_paise > 0),
-       emi_due_day INTEGER,
-       is_archived INTEGER NOT NULL DEFAULT 0,
-       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       FOREIGN KEY (subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE RESTRICT`,
-  },
-  {
-    table: "loan_payments",
-    marker: "REFERENCES loans(id, user_id)",
-    columns: `id, user_id, loan_id, transaction_id, payment_type, amount_paise, principal_paise,
-              interest_paise, outstanding_before_paise, outstanding_after_paise, created_at, updated_at`,
-    create: `id TEXT PRIMARY KEY,
-       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-       loan_id TEXT NOT NULL,
-       transaction_id TEXT NOT NULL UNIQUE,
-       payment_type TEXT NOT NULL CHECK (payment_type IN ('emi', 'prepayment')),
-       amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
-       principal_paise INTEGER NOT NULL CHECK (principal_paise >= 0),
-       interest_paise INTEGER NOT NULL CHECK (interest_paise >= 0),
-       outstanding_before_paise INTEGER NOT NULL CHECK (outstanding_before_paise >= 0),
-       outstanding_after_paise INTEGER NOT NULL CHECK (outstanding_after_paise >= 0),
-       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       FOREIGN KEY (loan_id, user_id) REFERENCES loans(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`,
-  },
-  {
-    table: "autopay_payments",
-    marker: "REFERENCES autopay_subscriptions(id, user_id)",
-    columns: "id, user_id, subscription_id, transaction_id, created_at",
-    create: `id TEXT PRIMARY KEY,
-       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-       subscription_id TEXT NOT NULL,
-       transaction_id TEXT NOT NULL UNIQUE,
-       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       FOREIGN KEY (subscription_id, user_id) REFERENCES autopay_subscriptions(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`,
-  },
-  {
-    table: "investment_payments",
-    marker: "REFERENCES investments(id, user_id)",
-    columns: "id, user_id, investment_id, transaction_id, created_at",
-    create: `id TEXT PRIMARY KEY,
-       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-       investment_id TEXT NOT NULL,
-       transaction_id TEXT NOT NULL UNIQUE,
-       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       FOREIGN KEY (investment_id, user_id) REFERENCES investments(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`,
-  },
-  {
-    table: "vacation_expenses",
-    marker: "REFERENCES vacations(id, user_id)",
-    columns: "id, user_id, vacation_id, transaction_id, created_at",
-    create: `id TEXT PRIMARY KEY,
-       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-       vacation_id TEXT NOT NULL,
-       transaction_id TEXT NOT NULL UNIQUE,
-       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       FOREIGN KEY (vacation_id, user_id) REFERENCES vacations(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE`,
-  },
-  {
-    // D8. The one column the database could not check becomes two it can.
-    table: "budget_lines",
-    marker: "scope_subcategory_id",
-    columns: `id, user_id, month, scope_type, scope_type_id, scope_subcategory_id, amount_paise,
-              created_at, updated_at`,
-    select: `id, user_id, month, scope_type,
-             CASE WHEN scope_type = 'type' THEN scope_id END,
-             CASE WHEN scope_type = 'subcategory' THEN scope_id END,
-             amount_paise, created_at, updated_at`,
-    create: `id TEXT PRIMARY KEY,
-       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-       month TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
-       scope_type TEXT NOT NULL CHECK (scope_type IN ('type', 'subcategory')),
-       scope_type_id TEXT,
-       scope_subcategory_id TEXT,
-       amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
-       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       -- Exactly one scope, and it must be the one scope_type names.
-       CHECK ((scope_type = 'type' AND scope_type_id IS NOT NULL AND scope_subcategory_id IS NULL)
-           OR (scope_type = 'subcategory' AND scope_subcategory_id IS NOT NULL AND scope_type_id IS NULL)),
-       UNIQUE (user_id, month, scope_type, scope_type_id, scope_subcategory_id),
-       FOREIGN KEY (scope_type_id, user_id) REFERENCES category_types(id, user_id) ON DELETE CASCADE,
-       FOREIGN KEY (scope_subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE CASCADE`,
-  },
-];
-
-/** True once the table's own definition carries the marker, so this runs once and then never. */
-async function alreadyComposite(table: string, marker: string) {
-  const row = (await db
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(table)) as { sql: string } | undefined;
-  return !row || row.sql.replace(/\s+/g, " ").includes(marker);
-}
-
-async function addCompositeOwnerKeys() {
-  await ensureParentOwnerKeys();
-
-  // A database that still holds a legacy category keeps its category_id columns -- dropLegacyCategories
-  // leaves them alone and asks the owner to recategorise those rows first. Rebuilding a table here
-  // writes out an explicit column list, so it would take those columns, and the values in them, with
-  // it. Nothing is rebuilt until that cleanup has happened; the keys arrive on the next start.
-  const legacyRemains =
-    (await columnExists("transactions", "category_id")) ||
-    (await columnExists("transaction_splits", "category_id"));
-  if (legacyRemains) {
-    console.warn(
-      "[db] Legacy category columns are still present, so the owner keys were not added yet. " +
-        "Recategorise the rows that still reference a legacy category and restart.",
-    );
-    return;
-  }
-
-  // A loop, not `filter`: an async predicate hands `filter` a promise, which is always truthy, so
-  // every child would look pending and every table would be rebuilt.
-  const pending: typeof COMPOSITE_CHILDREN = [];
-  for (const child of COMPOSITE_CHILDREN) {
-    if (
-      (await tableExists(child.table)) &&
-      !(await alreadyComposite(child.table, child.marker))
-    ) {
-      pending.push(child);
-    }
-  }
-  if (pending.length === 0) {
-    return;
-  }
-  await createMigrationBackup("composite-owner-keys");
-
-  await db.exec("PRAGMA foreign_keys = OFF;");
-  try {
-    await transaction(async () => {
-      for (const child of pending) {
-        const columns = child.columns.replace(/\s+/g, " ").trim();
-        await db.exec(`CREATE TABLE ${child.table}_owned (${child.create});`);
-        await db.exec(
-          `INSERT INTO ${child.table}_owned (${columns})
-           SELECT ${(child.select ?? columns).replace(/\s+/g, " ").trim()} FROM ${child.table};`,
-        );
-        await db.exec(`DROP TABLE ${child.table};`);
-        await db.exec(`ALTER TABLE ${child.table}_owned RENAME TO ${child.table};`);
-      }
-    });
-  } finally {
-    await db.exec("PRAGMA foreign_keys = ON;");
-  }
-
-  // A rebuilt table keeps none of its indexes, and a parent that was rebuilt loses the unique
-  // index its own children depend on.
-  await ensureParentOwnerKeys();
-  for (const child of pending) {
-    await db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_${child.table}_owner ON ${child.table}(user_id);`,
-    );
-  }
-  await ensureAccountIndexes();
-  await ensureTransactionIndexes();
-  await ensureLoanIndexes();
-  await ensureAutopayIndexes();
-  await ensureBudgetIndexes();
-  await ensureInvestmentIndexes();
-  await ensureVacationIndexes();
-  await ensureTaxonomyIndexes();
-
-  // Nothing may have been orphaned on the way through.
-  const broken = (await db.prepare("PRAGMA foreign_key_check").all()) as Array<{
-    table?: string;
-  }>;
-  if (broken.length > 0) {
-    const where = [...new Set(broken.map((row) => row.table ?? "?"))].join(
-      ", ",
-    );
-    throw new Error(
-      `Composite owner keys left ${broken.length} broken reference(s) in ${where}.`,
-    );
-  }
-}
-
-async function ensureLoanIndexes() {
-  await db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_loans_subcategory ON loans(subcategory_id);
-    CREATE INDEX IF NOT EXISTS idx_loans_archived ON loans(is_archived);
-    CREATE INDEX IF NOT EXISTS idx_loan_payments_loan ON loan_payments(loan_id);
-    CREATE INDEX IF NOT EXISTS idx_loan_payments_transaction ON loan_payments(transaction_id);
-  `);
-}
-
-async function ensureAutopayIndexes() {
-  await db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_autopay_subscriptions_archived ON autopay_subscriptions(is_archived);
-    CREATE INDEX IF NOT EXISTS idx_autopay_payments_subscription ON autopay_payments(subscription_id);
-    CREATE INDEX IF NOT EXISTS idx_autopay_payments_transaction ON autopay_payments(transaction_id);
-  `);
-}
-
-async function ensureBudgetIndexes() {
-  await db.exec(
-    "CREATE INDEX IF NOT EXISTS idx_budget_lines_month ON budget_lines(month);",
-  );
-  // D8 replaced the single polymorphic scope_id with one column per kind, so the index that
-  // served lookups by scope follows it. An older database still has the old column until the
-  // migration below has run on it.
-  if (await columnExists("budget_lines", "scope_subcategory_id")) {
-    await db.exec(`
-      DROP INDEX IF EXISTS idx_budget_lines_scope;
-      CREATE INDEX IF NOT EXISTS idx_budget_lines_type_scope ON budget_lines(scope_type_id);
-      CREATE INDEX IF NOT EXISTS idx_budget_lines_subcategory_scope ON budget_lines(scope_subcategory_id);
-    `);
-  } else if (await columnExists("budget_lines", "scope_id")) {
-    await db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_budget_lines_scope ON budget_lines(scope_type, scope_id);",
-    );
-  }
-}
-
-async function ensureVacationIndexes() {
-  await db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_vacations_archived ON vacations(is_archived);
-    CREATE INDEX IF NOT EXISTS idx_vacation_expenses_vacation ON vacation_expenses(vacation_id);
-    CREATE INDEX IF NOT EXISTS idx_vacation_expenses_transaction ON vacation_expenses(transaction_id);
-  `);
-}
-
-async function ensureInvestmentIndexes() {
-  await db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_investments_type ON investments(type);
-    CREATE INDEX IF NOT EXISTS idx_investment_payments_investment ON investment_payments(investment_id);
-    CREATE INDEX IF NOT EXISTS idx_investment_payments_transaction ON investment_payments(transaction_id);
-  `);
-}
-
-async function ensureInvestmentColumns() {
-  await addColumnIfMissing("investments", "shares", "REAL");
-  await addColumnIfMissing("investments", "purchase_date", "TEXT");
-  // The day the user last entered each figure; linked SIPs dated after it are added on top.
-  // NULL (holdings from before this) means "the day the holding was added".
-  await addColumnIfMissing("investments", "invested_as_of", "TEXT");
-  await addColumnIfMissing("investments", "value_as_of", "TEXT");
-}
-
-async function migrateInvestmentTypes() {
-  const row = (await db
-    .prepare(
-      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'investments'",
-    )
-    .get()) as { sql?: string } | undefined;
-
-  // Only rebuild older tables whose CHECK constraint predates the newest type ('bonds').
-  if (!row?.sql || row.sql.includes("'bonds'")) {
-    return;
-  }
-
-  await createMigrationBackup("investment-types");
-  await db.exec("PRAGMA foreign_keys = OFF;");
-  await db.exec("BEGIN;");
-  try {
-    await db.exec(`
-      CREATE TABLE investments_new (
-        id TEXT PRIMARY KEY,
-        type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'other')),
-        name TEXT NOT NULL,
-        invested_paise INTEGER NOT NULL CHECK (invested_paise >= 0),
-        current_value_paise INTEGER NOT NULL CHECK (current_value_paise >= 0),
-        shares REAL,
-        purchase_date TEXT,
-        note TEXT,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        invested_as_of TEXT,
-        value_as_of TEXT
-      );
-
-      INSERT INTO investments_new
-        (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at,
-         invested_as_of, value_as_of)
-      SELECT id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at,
-             invested_as_of, value_as_of
-      FROM investments;
-
-      DROP TABLE investments;
-      ALTER TABLE investments_new RENAME TO investments;
-    `);
-    await db.exec("COMMIT;");
-  } catch (error) {
-    await db.exec("ROLLBACK;");
-    throw error;
-  } finally {
-    await db.exec("PRAGMA foreign_keys = ON;");
-  }
-}
-
-async function migrateAccountNameConstraint() {
-  const row = (await db
-    .prepare(
-      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'",
-    )
-    .get()) as { sql?: string } | undefined;
-
-  if (!row?.sql?.includes("name TEXT NOT NULL COLLATE NOCASE UNIQUE")) {
-    return;
-  }
-
-  await db.exec("PRAGMA foreign_keys = OFF;");
-  await db.exec("BEGIN;");
-  try {
-    await db.exec(`
-      CREATE TABLE accounts_new (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL COLLATE NOCASE,
-        type TEXT NOT NULL CHECK (type IN ('bank', 'credit_card', 'food_card')),
-        starting_balance_paise INTEGER NOT NULL DEFAULT 0,
-        credit_limit_paise INTEGER,
-        is_archived INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      );
-
-      INSERT INTO accounts_new
-        (id, name, type, starting_balance_paise, credit_limit_paise,
-         is_archived, created_at, updated_at)
-      SELECT id, name, type, starting_balance_paise, credit_limit_paise,
-             is_archived, created_at, updated_at
-      FROM accounts;
-
-      DROP TABLE accounts;
-      ALTER TABLE accounts_new RENAME TO accounts;
-    `);
-    await db.exec("COMMIT;");
-  } catch (error) {
-    await db.exec("ROLLBACK;");
-    throw error;
-  } finally {
-    await db.exec("PRAGMA foreign_keys = ON;");
-  }
-}
-
-async function migrateAccountTypes() {
-  const row = (await db
-    .prepare(
-      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'",
-    )
-    .get()) as { sql?: string } | undefined;
-
-  if (row?.sql?.includes("'food_card'")) {
-    return;
-  }
-
-  await db.exec("PRAGMA foreign_keys = OFF;");
-  await db.exec("BEGIN;");
-  try {
-    await db.exec(`
-      CREATE TABLE accounts_new (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL COLLATE NOCASE,
-        type TEXT NOT NULL CHECK (type IN ('bank', 'credit_card', 'food_card')),
-        starting_balance_paise INTEGER NOT NULL DEFAULT 0,
-        credit_limit_paise INTEGER,
-        is_archived INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      );
-
-      INSERT INTO accounts_new
-        (id, name, type, starting_balance_paise, credit_limit_paise,
-         is_archived, created_at, updated_at)
-      SELECT id, name, type, starting_balance_paise, credit_limit_paise,
-             is_archived, created_at, updated_at
-      FROM accounts;
-
-      DROP TABLE accounts;
-      ALTER TABLE accounts_new RENAME TO accounts;
-    `);
-    await db.exec("COMMIT;");
-  } catch (error) {
-    await db.exec("ROLLBACK;");
-    throw error;
-  } finally {
-    await db.exec("PRAGMA foreign_keys = ON;");
-  }
-}
-
-async function migrateTransactionKinds() {
-  const row = (await db
-    .prepare(
-      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transactions'",
-    )
-    .get()) as { sql?: string } | undefined;
-
-  if (row?.sql?.includes("'investment'") && row.sql.includes("'emi'")) {
-    return;
-  }
-
-  await db.exec("PRAGMA foreign_keys = OFF;");
-  await db.exec("BEGIN;");
-  try {
-    await db.exec(`
-      CREATE TABLE transactions_new (
-        id TEXT PRIMARY KEY,
-        batch_id TEXT REFERENCES entry_batches(id) ON DELETE SET NULL,
-        date TEXT NOT NULL,
-        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-        method TEXT NOT NULL CHECK (method IN ('upi', 'credit_card', 'bank_transfer', 'cash', 'other')),
-        merchant TEXT,
-        note TEXT,
-        category_id TEXT REFERENCES categories(id) ON DELETE RESTRICT,
-        amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
-        direction TEXT NOT NULL CHECK (direction IN ('inflow', 'outflow')),
-        kind TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'refund', 'transfer', 'card_payment', 'reversal', 'investment', 'emi')),
-        status TEXT NOT NULL CHECK (status IN ('categorized', 'uncategorized', 'split')) DEFAULT 'categorized',
-        transfer_account_id TEXT REFERENCES accounts(id) ON DELETE RESTRICT,
-        linked_transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      );
-
-      INSERT INTO transactions_new
-        (id, batch_id, date, account_id, method, merchant, note, category_id,
-         amount_paise, direction, kind, status, transfer_account_id,
-         linked_transaction_id, created_at, updated_at)
-      SELECT id, batch_id, date, account_id, method, merchant, note, category_id,
-             amount_paise, direction, kind, status, transfer_account_id,
-             linked_transaction_id, created_at, updated_at
-      FROM transactions;
-
-      DROP TABLE transactions;
-      ALTER TABLE transactions_new RENAME TO transactions;
-    `);
-    await db.exec("COMMIT;");
-  } catch (error) {
-    await db.exec("ROLLBACK;");
-    throw error;
-  } finally {
-    await db.exec("PRAGMA foreign_keys = ON;");
-  }
-}
-
-async function migrateTransactionSplitsNullable() {
-  const row = (await db
-    .prepare(
-      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transaction_splits'",
-    )
-    .get()) as { sql?: string } | undefined;
-
-  if (!row?.sql?.includes("category_id TEXT NOT NULL")) {
-    return;
-  }
-
-  await db.exec("PRAGMA foreign_keys = OFF;");
-  await db.exec("BEGIN;");
-  try {
-    await db.exec(`
-      CREATE TABLE transaction_splits_new (
-        id TEXT PRIMARY KEY,
-        transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
-        category_id TEXT REFERENCES categories(id) ON DELETE RESTRICT,
-        amount_paise INTEGER NOT NULL CHECK (amount_paise > 0)
-      );
-
-      INSERT INTO transaction_splits_new
-        (id, transaction_id, category_id, amount_paise)
-      SELECT id, transaction_id, category_id, amount_paise
-      FROM transaction_splits;
-
-      DROP TABLE transaction_splits;
-      ALTER TABLE transaction_splits_new RENAME TO transaction_splits;
-    `);
-    await db.exec("COMMIT;");
-  } catch (error) {
-    await db.exec("ROLLBACK;");
-    throw error;
-  } finally {
-    await db.exec("PRAGMA foreign_keys = ON;");
-  }
-}
-
-async function ensureSessionIndexes() {
-  if (!(await tableExists("sessions"))) {
-    return;
-  }
-  await db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(user_id);
-    CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
-  `);
-  // A session that has run out is of no use to anybody and is one more row to leak.
-  (await db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(
-    new Date().toISOString(),
-  ));
-}
-
-async function ensureAccountIndexes() {
-  await db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_accounts_active_name ON accounts(is_archived, name);
-    CREATE INDEX IF NOT EXISTS idx_accounts_type ON accounts(type);
-  `);
-}
-
-async function ensureTransactionIndexes() {
-  await db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
-    CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id);
-    CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type_id);
-    CREATE INDEX IF NOT EXISTS idx_transactions_subcategory ON transactions(subcategory_id);
-    CREATE INDEX IF NOT EXISTS idx_transactions_batch ON transactions(batch_id);
-    CREATE INDEX IF NOT EXISTS idx_transactions_transfer_account ON transactions(transfer_account_id);
-  `);
-}
-
-async function ensureTaxonomyIndexes() {
-  await db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_subcategories_type ON subcategories(type_id);
-    CREATE INDEX IF NOT EXISTS idx_category_types_behavior ON category_types(behavior);
-  `);
-}
-
-async function ensureTaxonomySchema() {
-  const needsBackup =
-    !(await tableExists("category_types")) ||
-    !(await tableExists("subcategories")) ||
-    !(await columnExists("transactions", "type_id")) ||
-    !(await columnExists("transactions", "subcategory_id"));
-
-  if (needsBackup) {
-    await createMigrationBackup("taxonomy");
-  }
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS category_types (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      name TEXT NOT NULL COLLATE NOCASE,
-      behavior TEXT NOT NULL CHECK (behavior IN ('expense', 'income', 'loan', 'investment', 'transfer', 'card_payment', 'refund')),
-      icon TEXT NOT NULL,
-      color TEXT NOT NULL,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      is_locked INTEGER NOT NULL DEFAULT 0,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE (user_id, name)
-    );
-
-    CREATE TABLE IF NOT EXISTS subcategories (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      type_id TEXT NOT NULL REFERENCES category_types(id) ON DELETE CASCADE,
-      name TEXT NOT NULL COLLATE NOCASE,
-      icon TEXT NOT NULL,
-      color TEXT NOT NULL,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      is_locked INTEGER NOT NULL DEFAULT 0,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(type_id, name)
-    );
-  `);
-
-  await addColumnIfMissing(
-    "transactions",
-    "type_id",
-    "TEXT REFERENCES category_types(id) ON DELETE RESTRICT",
-  );
-  await addColumnIfMissing(
-    "transactions",
-    "subcategory_id",
-    "TEXT REFERENCES subcategories(id) ON DELETE RESTRICT",
-  );
-  await addColumnIfMissing(
-    "transaction_splits",
-    "subcategory_id",
-    "TEXT REFERENCES subcategories(id) ON DELETE RESTRICT",
-  );
-}
 
 const SEEDED_DEFAULTS_SETTING = "seeded_default_taxonomy_ids";
 
@@ -1699,165 +541,7 @@ async function seedTaxonomy() {
   await setSetting(SEEDED_DEFAULTS_SETTING, JSON.stringify([...seeded].sort()));
 }
 
-async function migrateLegacyCategoriesToTaxonomy() {
-  if ((await getSetting("taxonomy_migration_v1")) === "complete") {
-    return;
-  }
 
-  // A database created after the legacy table was removed has nothing to migrate from, and
-  // every statement below joins it. Record the migration as done and leave.
-  if (!(await tableExists("categories"))) {
-    await setSetting("taxonomy_migration_v1", "complete");
-    return;
-  }
-
-  await transaction(async () => {
-    (await db.prepare(
-      `UPDATE transactions
-       SET type_id = 'type_card_payment',
-           subcategory_id = NULL
-       WHERE type_id IS NULL
-         AND kind = 'card_payment'`,
-    ).run());
-
-    (await db.prepare(
-      `UPDATE transactions
-       SET type_id = 'type_loan',
-           subcategory_id = 'sub_other_loan',
-           status = CASE WHEN status = 'split' THEN status ELSE 'categorized' END
-       WHERE type_id IS NULL
-         AND (kind = 'emi'
-              OR category_id IN (SELECT id FROM categories WHERE name = 'EMI' COLLATE NOCASE))`,
-    ).run());
-
-    (await db.prepare(
-      `UPDATE transactions
-       SET type_id = 'type_income',
-           subcategory_id = 'sub_other_income',
-           status = CASE WHEN status = 'split' THEN status ELSE 'categorized' END
-       WHERE type_id IS NULL
-         AND kind = 'income'`,
-    ).run());
-
-    (await db.prepare(
-      `UPDATE transactions
-       SET type_id = 'type_investment',
-           subcategory_id = NULL
-       WHERE type_id IS NULL
-         AND kind = 'investment'`,
-    ).run());
-
-    (await db.prepare(
-      `UPDATE transactions
-       SET type_id = 'type_transfer',
-           subcategory_id = NULL
-       WHERE type_id IS NULL
-         AND kind = 'transfer'`,
-    ).run());
-
-    (await db.prepare(
-      `UPDATE transactions
-       SET type_id = 'type_expense',
-           subcategory_id = (
-             SELECT s.id
-             FROM subcategories s
-             JOIN categories c ON c.name = s.name COLLATE NOCASE
-             WHERE c.id = transactions.category_id
-               AND s.type_id = 'type_expense'
-             LIMIT 1
-           ),
-           status = CASE
-             WHEN status = 'split' THEN status
-             WHEN (
-               SELECT s.id
-               FROM subcategories s
-               JOIN categories c ON c.name = s.name COLLATE NOCASE
-               WHERE c.id = transactions.category_id
-                 AND s.type_id = 'type_expense'
-               LIMIT 1
-             ) IS NULL THEN 'uncategorized'
-             ELSE 'categorized'
-           END
-       WHERE type_id IS NULL
-         AND kind = 'expense'`,
-    ).run());
-
-    (await db.prepare(
-      `UPDATE transaction_splits
-       SET subcategory_id = (
-         SELECT s.id
-         FROM subcategories s
-         JOIN categories c ON c.name = s.name COLLATE NOCASE
-         WHERE c.id = transaction_splits.category_id
-         LIMIT 1
-       )
-       WHERE subcategory_id IS NULL`,
-    ).run());
-
-    (await db.prepare(
-      `UPDATE transactions
-       SET status = CASE WHEN status = 'split' THEN status ELSE 'uncategorized' END
-       WHERE type_id IS NULL
-          OR (kind IN ('expense', 'investment') AND subcategory_id IS NULL)`,
-    ).run());
-
-    await setSetting("taxonomy_migration_v1", "complete");
-  });
-}
-
-async function tableExists(name: string) {
-  const row = (await db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(name)) as { name?: string } | undefined;
-  return Boolean(row);
-}
-
-async function columnExists(table: string, column: string) {
-  const rows = (await db.prepare(`PRAGMA table_info(${table})`).all()) as Array<{
-    name: string;
-  }>;
-  return rows.some((row) => row.name === column);
-}
-
-async function addColumnIfMissing(table: string, column: string, definition: string) {
-  if (await columnExists(table, column)) {
-    return;
-  }
-  await db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
-}
-
-/**
- * Due days are optional and were added later, so the columns are appended in place. Existing rows
- * keep NULL, which means "no reminder", exactly how they behaved before.
- */
-async function ensureDueDayColumns() {
-  await addColumnIfMissing("loans", "emi_due_day", "INTEGER");
-  await addColumnIfMissing("accounts", "payment_due_day", "INTEGER");
-}
-
-async function createMigrationBackup(label: string) {
-  if (process.env.FINANCE_SKIP_MIGRATION_BACKUP === "1") {
-    return;
-  }
-
-  const backupDir = ensureBackupDir();
-  const target = path.join(
-    backupDir,
-    `finance-before-${label}-${new Date().toISOString().replace(/[:.]/g, "-")}.db`,
-  );
-
-  if (existsSync(target)) {
-    return;
-  }
-
-  (await db.prepare("VACUUM INTO ?").run(target));
-  pruneBackupFiles(backupDir);
-}
-
-/**
- * Reads a setting from whichever of the two tables owns that kind of key (D2), so every existing
- * caller keeps working without having to know which is which.
- */
 async function getSetting(key: string) {
   const row = (
     PER_PERSON_SETTINGS.has(key)
@@ -1888,9 +572,11 @@ async function setSetting(key: string, value: string) {
 }
 
 /** The split in D2, as one list the server can ask about rather than two tables to remember. */
+
 export function isPerPersonSetting(key: string) {
   return PER_PERSON_SETTINGS.has(key);
 }
+
 
 async function seedSettings() {
   const owner = currentUserId();
@@ -1916,6 +602,8 @@ async function seedSettings() {
  * without it the COMMIT would be sent while the body's own statements were still in flight, and
  * the rollback on failure would arrive after the thing it was meant to undo had already committed.
  */
+
+/** Runs `fn` between BEGIN and COMMIT, rolling back if it throws. */
 export async function transaction<T>(fn: () => T | Promise<T>): Promise<T> {
   return db.transaction(fn);
 }
@@ -1927,3 +615,4 @@ export function asRecord<T>(row: unknown): T {
 export function asRecords<T>(rows: unknown[]): T[] {
   return rows as T[];
 }
+

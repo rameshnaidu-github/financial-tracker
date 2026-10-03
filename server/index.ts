@@ -8,14 +8,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZodError } from "zod";
 import { currentBatchQuerySchema } from "../shared/finance.ts";
-import { currentUserIsOwner, forUser, initDatabase } from "./db.ts";
+import { currentUserIsOwner, db, forUser, initDatabase } from "./db.ts";
 import { buildExport, exportFilename } from "./export.ts";
 import { isTrustedRequestOrigin, securityHeaders } from "./security.ts";
 import { SESSION_COOKIE, SESSION_DAYS, endSession, signIn, userForToken } from "./auth.ts";
 import {
   createAccount,
   createAutopaySubscription,
-  createBackup,
   copyBudgetFromPreviousMonth,
   createBudgetLine,
   createCategoryType,
@@ -36,7 +35,6 @@ import {
   buildImportTemplate,
   exportTransactionsCsv,
   getBackupStatus,
-  createBackupForClient,
   getBudgetPlan,
   getCurrentBatch,
   getMonthlyReport,
@@ -58,8 +56,6 @@ import {
   summarizeTransactions,
   listVacations,
   saveBatch,
-  startAutoBackup,
-  stopAutoBackup,
   updateAccount,
   updateAppSettings,
   updateAutopaySubscription,
@@ -76,7 +72,6 @@ const distDir = path.resolve(__dirname, "../dist");
 const app = Fastify({ logger: true });
 
 initDatabase();
-startAutoBackup(app.log);
 
 /**
  * The only paths that answer without a session. Everything else is refused by default, so a route
@@ -531,7 +526,6 @@ app.delete("/api/vacations/:id", async (request) => {
 
 app.get("/api/backup/status", async () => getBackupStatus());
 
-app.post("/api/backup", expensiveRouteLimit, async () => createBackupForClient("manual"));
 
 app.get("/api/import/template.xlsx", expensiveRouteLimit, async (_request, reply) => {
   const buffer = await buildImportTemplate();
@@ -621,12 +615,12 @@ async function shutdown(signal: string) {
 
   shuttingDown = true;
   app.log.info({ signal }, "Shutting down finance tracker");
-  stopAutoBackup();
 
+  // No backup on the way out. There is nothing here to copy -- the database is somewhere else and
+  // its host keeps the backups -- and a shutdown is the worst moment to start a long operation.
   try {
-    const result = createBackup("shutdown");
-    app.log.info(result, "Shutdown backup completed");
     await app.close();
+    await db.close();
     process.exit(0);
   } catch (error) {
     app.log.error(error, "Shutdown failed");
