@@ -1,8 +1,6 @@
-import path from "node:path";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { SCHEMA_SQL } from "./schema.ts";
 import {
   DEFAULT_CATEGORY_TYPES,
   DEFAULTS_ADDED_AFTER_LEDGER,
@@ -103,10 +101,17 @@ async function postgresDriver(url: string): Promise<Driver> {
   };
 }
 
+// A bundler resolves `await import("literal")` at build time, so naming the package here put the
+// whole WebAssembly engine -- a devDependency, several megabytes of it -- inside the production
+// function that never runs this branch. Going through a variable keeps it a runtime import.
+const PGLITE_PACKAGE = "@electric-sql/pglite";
+
 /** The in-process driver: Postgres compiled to WebAssembly, with the citext the schema needs. */
 async function pgliteDriver(): Promise<Driver> {
-  const { PGlite } = await import("@electric-sql/pglite");
-  const { citext } = await import("@electric-sql/pglite/contrib/citext");
+  const { PGlite } = (await import(PGLITE_PACKAGE)) as typeof import("@electric-sql/pglite");
+  const { citext } = (await import(`${PGLITE_PACKAGE}/contrib/citext`)) as typeof import(
+    "@electric-sql/pglite/contrib/citext"
+  );
   // One options object, not (dataDir, options): the two-argument form drops the extensions when
   // the directory is undefined, and the schema's citext columns then fail to create.
   const instance = await new PGlite({
@@ -127,6 +132,19 @@ async function pgliteDriver(): Promise<Driver> {
     reserve: async () => ({ query, release: () => undefined }),
     close: () => instance.close(),
   };
+}
+
+// Refusing beats starting. A serverless instance has no disk to keep a database on, so the
+// in-process engine would be a new empty database on every invocation: the application would show
+// no accounts, accept a transaction, and lose it. DATABASE_URL was set for Production only, which
+// is exactly how a Preview deployment would have behaved this way.
+if (!connectionString && process.env.VERCEL) {
+  throw new Error(
+    "DATABASE_URL is not set, and this is a hosted runtime with no disk to keep a database on. " +
+      "The in-process engine would start empty on every request and discard anything written to " +
+      "it. Set DATABASE_URL for this environment -- Production, Preview and Development each need " +
+      "their own -- and redeploy.",
+  );
 }
 
 const driver: Driver = connectionString
@@ -271,8 +289,7 @@ function translate(sql: string): string {
 
 export const db: Adapter = postgresAdapter();
 
-/** The schema, as one file, applied as a whole. Derived by .unlazy/ship-7/derive-schema.mjs. */
-const schemaPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "schema.sql");
+
 
 /**
  * Brings the database up to the shape the application needs, and seeds what it must contain.
@@ -283,7 +300,7 @@ const schemaPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "sche
  * a round trip and changes nothing.
  */
 export async function initDatabase() {
-  await db.exec(readFileSync(schemaPath, "utf8"));
+  await db.exec(SCHEMA_SQL);
   await ensureOwner();
   await asOwner(async () => {
     await seedTaxonomy();
