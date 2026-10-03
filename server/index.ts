@@ -71,7 +71,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, "../dist");
 const app = Fastify({ logger: true });
 
-initDatabase();
+// Awaited: the schema and the seeding are statements over a connection now, so without this the
+// server starts answering requests against a database that does not have its tables yet.
+await initDatabase();
 
 /**
  * The only paths that answer without a session. Everything else is refused by default, so a route
@@ -596,13 +598,34 @@ if (existsSync(distDir)) {
   // that was never going to work, and answering it with the page means the caller gets 200 and a
   // mouthful of HTML where it expected JSON, then fails later with a parse error that says nothing
   // about the real mistake.
-  app.setNotFoundHandler((request, reply) => {
-    if (request.url.startsWith("/api/")) {
-      return reply.status(404).send({ error: "Not found", method: request.method, path: request.url });
-    }
-    return reply.header("cache-control", "no-store").sendFile("index.html");
-  });
 }
+
+app.setNotFoundHandler((request, reply) => {
+  if (request.url.startsWith("/api/")) {
+    return reply.status(404).send({ error: "Not found", method: request.method, path: request.url });
+  }
+  // Where the built frontend is on disk -- running locally -- the single-page app owns every path
+  // the server does not. On Vercel it is never reached: the CDN serves the pages and this function
+  // only ever sees /api.
+  if (existsSync(distDir)) {
+    return reply.header("cache-control", "no-store").sendFile("index.html");
+  }
+  return reply.status(404).send({ error: "Not found" });
+});
+
+/**
+ * The application, ready to be handed a request.
+ *
+ * Exported so a serverless function can import it: there, nothing listens on a port -- the platform
+ * hands the process one request at a time and expects an answer. Listening belongs to running this
+ * file directly, which is what local development does.
+ */
+export { app };
+export const ready = app.ready();
+
+/** True when this file was started, rather than imported by something that was. */
+const startedDirectly =
+  Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 const port = Number(process.env.PORT ?? 4000);
 const host = process.env.HOST ?? "127.0.0.1";
@@ -628,6 +651,7 @@ async function shutdown(signal: string) {
   }
 }
 
+if (startedDirectly) {
 process.once("SIGINT", () => {
   void shutdown("SIGINT");
 });
@@ -649,6 +673,7 @@ process.once("unhandledRejection", (reason) => {
 });
 
 await app.listen({ port, host });
+}
 
 function blankToUndefined(value: string | undefined) {
   return value && value.trim() !== "" ? value : undefined;
