@@ -2,16 +2,19 @@ import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
+import type { FastifyRequest } from "fastify";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZodError } from "zod";
-import { initDatabase } from "./db.ts";
+import { currentBatchQuerySchema } from "../shared/finance.ts";
+import { currentUserIsOwner, db, forUser, initDatabase } from "./db.ts";
+import { buildExport, exportFilename } from "./export.ts";
 import { isTrustedRequestOrigin, securityHeaders } from "./security.ts";
+import { SESSION_COOKIE, SESSION_DAYS, endSession, signIn, userForToken } from "./auth.ts";
 import {
   createAccount,
   createAutopaySubscription,
-  createBackup,
   copyBudgetFromPreviousMonth,
   createBudgetLine,
   createCategoryType,
@@ -53,8 +56,6 @@ import {
   summarizeTransactions,
   listVacations,
   saveBatch,
-  startAutoBackup,
-  stopAutoBackup,
   updateAccount,
   updateAppSettings,
   updateAutopaySubscription,
@@ -70,13 +71,90 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, "../dist");
 const app = Fastify({ logger: true });
 
-initDatabase();
-startAutoBackup(app.log);
+// Awaited: the schema and the seeding are statements over a connection now, so without this the
+// server starts answering requests against a database that does not have its tables yet.
+await initDatabase();
+
+/**
+ * The only paths that answer without a session. Everything else is refused by default, so a route
+ * added later is closed until somebody deliberately opens it -- the opposite way round from a list
+ * of things to protect, which is one forgotten line away from an exposed route.
+ */
+const OPEN_PATHS = new Set(["/api/health", "/api/auth/sign-in", "/api/auth/sign-out", "/api/auth/me"]);
+
+/**
+ * Prefixes only the owner of this installation may reach.
+ *
+ * `/api/backup` copies the whole database file, every account's rows together, so it is not a
+ * per-person action and cannot be made into one: there is one file. It belongs to whoever runs the
+ * host. A prefix rather than exact paths, so `/api/backup/anything` added later is covered by
+ * this line instead of needing to remember it.
+ */
+const OWNER_PREFIXES = ["/api/backup"];
+
+const isOwnerOnlyPath = (url: string) =>
+  OWNER_PREFIXES.some((prefix) => url === prefix || url.startsWith(`${prefix}/`));
+
+const SESSION_MAX_AGE = SESSION_DAYS * 24 * 60 * 60;
+
+/** Reads our cookie out of the header without pulling in a parser for one value. */
+function sessionToken(cookieHeader: string | undefined): string | undefined {
+  for (const part of String(cookieHeader ?? "").split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === SESSION_COOKIE) {
+      return decodeURIComponent(rest.join("="));
+    }
+  }
+  return undefined;
+}
+
+/**
+ * httpOnly so script cannot read it, SameSite=Lax so another site cannot ride it, Secure whenever
+ * the request arrived over HTTPS -- which is how it will be served, and which cannot simply be
+ * hard-coded or sign-in would stop working over plain http on this machine.
+ */
+function sessionCookie(request: FastifyRequest, token: string, maxAge: number) {
+  const https = request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";
+  return [
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${maxAge}`,
+    https ? "Secure" : ""
+  ]
+    .filter(Boolean)
+    .join("; ");
+}
 
 app.addHook("onRequest", async (request, reply) => {
   if (!isTrustedRequestOrigin(request.headers.origin, request.headers.host)) {
     return reply.status(403).send({ error: "Cross-origin requests are not allowed." });
   }
+
+  const url = request.url.split("?")[0];
+  if (!url.startsWith("/api/")) {
+    return undefined;
+  }
+
+  const person = await userForToken(sessionToken(request.headers.cookie));
+  if (person) {
+    // enterWith, not run: the person has to stay in scope for the handler and everything it
+    // awaits, and a callback that returns cannot do that. Checked against 40 overlapping
+    // requests for five different people, each awaiting several times, with no bleed between
+    // them.
+    forUser(person.id);
+    (request as FastifyRequest & { person?: { id: string; email: string } }).person = person;
+    if (isOwnerOnlyPath(url) && !(await currentUserIsOwner())) {
+      return reply.status(403).send({ error: "Only the owner of this installation can do that." });
+    }
+    return undefined;
+  }
+
+  if (OPEN_PATHS.has(url)) {
+    return undefined;
+  }
+  return reply.status(401).send({ error: "Not signed in." });
 });
 
 app.addHook("onSend", async (_request, reply) => {
@@ -139,10 +217,46 @@ app.setErrorHandler((error, request, reply) => {
 
 app.get("/api/health", async () => ({ ok: true }));
 
+// --- signing in -------------------------------------------------------------
+// D5 is invite only, so there is no sign-up route here. Accounts are made by
+// `node server/account.ts create <email>`.
+
+const signInLimit = {
+  config: {
+    // Sign-in is the one route worth guessing at, and each attempt costs a scrypt hash.
+    rateLimit: { max: 10, timeWindow: "5 minutes" }
+  }
+};
+
+app.post("/api/auth/sign-in", signInLimit, async (request, reply) => {
+  const body = request.body as { email?: string; password?: string } | undefined;
+  const session = await signIn(String(body?.email ?? ""), String(body?.password ?? ""));
+  if (!session) {
+    // The same answer whether the account exists or not, and signIn does the same work either
+    // way, so neither the wording nor the timing says which email addresses have accounts.
+    return reply.status(401).send({ error: "That email and password do not match." });
+  }
+  return reply
+    .header("set-cookie", sessionCookie(request, session.token, SESSION_MAX_AGE))
+    .send({ ok: true });
+});
+
+app.post("/api/auth/sign-out", async (request, reply) => {
+  endSession(sessionToken(request.headers.cookie));
+  return reply.header("set-cookie", sessionCookie(request, "", 0)).send({ ok: true });
+});
+
+app.get("/api/auth/me", async (request) => {
+  const person = (request as FastifyRequest & { person?: { id: string; email: string } }).person;
+  // isOwner so the page can leave out what it would only be refused anyway. The refusal in the
+  // onRequest hook is what actually protects the backup; this is politeness, not the guard.
+  return person ? { signedIn: true, email: person.email, isOwner: currentUserIsOwner() } : { signedIn: false };
+});
+
 app.get("/api/bootstrap", async () => ({
   settings: getSettings(),
   profile: getProfile(),
-  accounts: listAccounts().filter((account) => !account.isArchived),
+  accounts: (await listAccounts()).filter((account) => !account.isArchived),
   categoryTypes: listCategoryTypes(),
   loans: listLoans(true),
   subscriptions: listAutopaySubscriptions(true),
@@ -161,7 +275,7 @@ app.get("/api/overview", async (request) => {
   return getOverview(blankToUndefined(query.accountId), query.month);
 });
 
-app.get("/api/accounts", async () => listAccounts().filter((account) => !account.isArchived));
+app.get("/api/accounts", async () => (await listAccounts()).filter((account) => !account.isArchived));
 
 app.post("/api/accounts", async (request, reply) => {
   const account = createAccount(request.body as never);
@@ -241,8 +355,8 @@ app.delete("/api/subscriptions/:id", async (request) => {
 });
 
 app.get("/api/batches/current", async (request) => {
-  const query = request.query as { weekStart: string; weekEnd: string };
-  return getCurrentBatch(query.weekStart, query.weekEnd);
+  const { weekStart, weekEnd } = currentBatchQuerySchema.parse(request.query);
+  return getCurrentBatch(weekStart, weekEnd);
 });
 
 app.post("/api/batches/:id/save", async (request) => {
@@ -254,7 +368,6 @@ app.get("/api/transactions/totals", async (request) => {
   const query = request.query as Record<string, string | undefined>;
   return summarizeTransactions({
     accountId: blankToUndefined(query.accountId),
-    categoryId: blankToUndefined(query.categoryId),
     typeId: blankToUndefined(query.typeId),
     subcategoryId: blankToUndefined(query.subcategoryId),
     status: blankToUndefined(query.status),
@@ -267,7 +380,6 @@ app.get("/api/transactions/totals", async (request) => {
 app.get("/api/transactions", async (request) => {
   const query = request.query as {
     accountId?: string;
-    categoryId?: string;
     typeId?: string;
     subcategoryId?: string;
     status?: string;
@@ -279,7 +391,6 @@ app.get("/api/transactions", async (request) => {
   };
   return listTransactions({
     accountId: blankToUndefined(query.accountId),
-    categoryId: blankToUndefined(query.categoryId),
     typeId: blankToUndefined(query.typeId),
     subcategoryId: blankToUndefined(query.subcategoryId),
     status: blankToUndefined(query.status),
@@ -417,7 +528,6 @@ app.delete("/api/vacations/:id", async (request) => {
 
 app.get("/api/backup/status", async () => getBackupStatus());
 
-app.post("/api/backup", expensiveRouteLimit, async () => createBackup("manual"));
 
 app.get("/api/import/template.xlsx", expensiveRouteLimit, async (_request, reply) => {
   const buffer = await buildImportTemplate();
@@ -435,6 +545,16 @@ app.post("/api/import/transactions", expensiveRouteLimit, async (request, reply)
   }
   const buffer = await file.toBuffer();
   return importTransactionsWorkbook(buffer, blankToUndefined(query.batchId));
+});
+
+app.get("/api/export/all.json", expensiveRouteLimit, async (_request, reply) => {
+  // Whoever is signed in gets their own data and nobody else's: `buildExport` filters by the
+  // person in scope, the same way every other query in the application does.
+  const body = buildExport();
+  return reply
+    .header("content-type", "application/json; charset=utf-8")
+    .header("content-disposition", `attachment; filename="${exportFilename()}"`)
+    .send(JSON.stringify(body, null, 2));
 });
 
 app.get("/api/export/transactions.csv", expensiveRouteLimit, async (request, reply) => {
@@ -473,10 +593,39 @@ if (existsSync(distDir)) {
     }
   });
 
-  app.setNotFoundHandler((_request, reply) => {
-    reply.header("cache-control", "no-store").sendFile("index.html");
-  });
+  // The single-page app owns every path the server does not, so an unknown page URL gets the app
+  // and the router sorts it out. An unknown /api path is a different thing entirely: it is a call
+  // that was never going to work, and answering it with the page means the caller gets 200 and a
+  // mouthful of HTML where it expected JSON, then fails later with a parse error that says nothing
+  // about the real mistake.
 }
+
+app.setNotFoundHandler((request, reply) => {
+  if (request.url.startsWith("/api/")) {
+    return reply.status(404).send({ error: "Not found", method: request.method, path: request.url });
+  }
+  // Where the built frontend is on disk -- running locally -- the single-page app owns every path
+  // the server does not. On Vercel it is never reached: the CDN serves the pages and this function
+  // only ever sees /api.
+  if (existsSync(distDir)) {
+    return reply.header("cache-control", "no-store").sendFile("index.html");
+  }
+  return reply.status(404).send({ error: "Not found" });
+});
+
+/**
+ * The application, ready to be handed a request.
+ *
+ * Exported so a serverless function can import it: there, nothing listens on a port -- the platform
+ * hands the process one request at a time and expects an answer. Listening belongs to running this
+ * file directly, which is what local development does.
+ */
+export { app };
+export const ready = app.ready();
+
+/** True when this file was started, rather than imported by something that was. */
+const startedDirectly =
+  Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 const port = Number(process.env.PORT ?? 4000);
 const host = process.env.HOST ?? "127.0.0.1";
@@ -489,12 +638,12 @@ async function shutdown(signal: string) {
 
   shuttingDown = true;
   app.log.info({ signal }, "Shutting down finance tracker");
-  stopAutoBackup();
 
+  // No backup on the way out. There is nothing here to copy -- the database is somewhere else and
+  // its host keeps the backups -- and a shutdown is the worst moment to start a long operation.
   try {
-    const result = createBackup("shutdown");
-    app.log.info(result, "Shutdown backup completed");
     await app.close();
+    await db.close();
     process.exit(0);
   } catch (error) {
     app.log.error(error, "Shutdown failed");
@@ -502,6 +651,7 @@ async function shutdown(signal: string) {
   }
 }
 
+if (startedDirectly) {
 process.once("SIGINT", () => {
   void shutdown("SIGINT");
 });
@@ -523,6 +673,7 @@ process.once("unhandledRejection", (reason) => {
 });
 
 await app.listen({ port, host });
+}
 
 function blankToUndefined(value: string | undefined) {
   return value && value.trim() !== "" ? value : undefined;

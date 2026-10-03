@@ -470,6 +470,11 @@ a {
   line-height: 1.35;
 }
 
+/* The owner's backup row carries a value and a button, so it needs a column for each. */
+.backup-row.has-action {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
 .theme-row {
   grid-template-columns: minmax(0, 1fr) auto auto;
   background: var(--accent-soft);
@@ -4830,4 +4835,68 @@ a {
 .investment-form-hint {
   grid-column: 1 / -1;
   margin: -4px 0 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Sign in
+   The first thing anyone sees, and the only screen before there is a person, so
+   it carries the app's weight rather than looking like a form that escaped.
+   --------------------------------------------------------------------------- */
+
+.sign-in-page {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 24px 16px;
+  /* The same quiet depth the app's own surfaces sit on. */
+  background: radial-gradient(120% 80% at 50% 0%, var(--bg-deep) 0%, var(--bg) 60%);
+}
+
+.sign-in-panel {
+  width: 100%;
+  max-width: 380px;
+  padding: 32px 28px;
+  display: grid;
+  gap: 4px;
+}
+
+.sign-in-panel h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+}
+
+.sign-in-lead {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.sign-in-form {
+  display: grid;
+  gap: 14px;
+}
+
+.sign-in-form .control-field {
+  width: 100%;
+}
+
+.sign-in-form input {
+  width: 100%;
+}
+
+.sign-in-error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+
+.sign-in-submit {
+  margin-top: 4px;
+  min-height: 44px;
+  font-weight: 700;
 }

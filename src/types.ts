@@ -77,7 +77,6 @@ export type Transaction = {
   method: PaymentMethod;
   merchant: string | null;
   note: string | null;
-  categoryId: string | null;
   categoryName: string | null;
   categoryIcon: string | null;
   categoryColor: string | null;
@@ -198,10 +197,10 @@ export type UserProfile = {
 };
 
 export type BackupStatus = {
-  intervalMs: number;
-  lastBackupAt: string | null;
-  lastBackupPath: string | null;
-  lastBackupMode: "manual" | "auto" | "shutdown" | null;
+  /** "host" means the database's host keeps them; "nobody" means nothing is keeping any. */
+  managedBy: "host" | "nobody";
+  /** What a person can always do for themselves, whoever keeps the database. */
+  exportPath: string;
 };
 
 export type Batch = {
@@ -255,7 +254,6 @@ export type UpcomingPayments = {
 };
 
 export type ReportCategory = {
-  categoryId: string;
   subcategoryId?: string;
   typeId?: string;
   name: string;
@@ -438,7 +436,6 @@ export type CreateTransactionPayload = {
   method: PaymentMethod;
   merchant?: string;
   note?: string;
-  categoryId?: string;
   typeId?: string;
   subcategoryId?: string;
   amountPaise: number;
@@ -452,7 +449,6 @@ export type CreateTransactionPayload = {
   investmentId?: string;
   vacationId?: string;
   splits?: Array<{
-    categoryId: string;
     amountPaise: number;
   }>;
 };

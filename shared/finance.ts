@@ -449,12 +449,8 @@ export const updateProfileSchema = z.object({
 });
 
 export const transactionSplitSchema = z.object({
-  categoryId: idSchema.optional(),
-  subcategoryId: idSchema.optional(),
+  subcategoryId: idSchema,
   amountPaise: positivePaiseSchema
-}).refine((value) => value.categoryId || value.subcategoryId, {
-  message: "Split must choose a SubType.",
-  path: ["subcategoryId"]
 });
 
 const transactionObjectSchema = z.object({
@@ -464,7 +460,6 @@ const transactionObjectSchema = z.object({
     method: paymentMethodSchema,
     merchant: optionalTextSchema,
     note: optionalTextSchema,
-    categoryId: idSchema.optional(),
     typeId: idSchema.optional(),
     subcategoryId: idSchema.optional(),
     amountPaise: positivePaiseSchema,
@@ -579,7 +574,6 @@ export const createTransactionSchema = transactionObjectSchema.superRefine((valu
 const clearableIdSchema = z.union([idSchema, z.literal("")]).optional().transform((value) => value || undefined);
 
 export const updateTransactionSchema = transactionObjectSchema.partial().extend({
-  categoryId: clearableIdSchema,
   typeId: clearableIdSchema,
   subcategoryId: clearableIdSchema,
   transferAccountId: clearableIdSchema,
@@ -598,6 +592,21 @@ export const createBatchSchema = z.object({
   weekEnd: dateSchema,
   status: z.enum(["draft", "saved"]).default("draft")
 });
+
+/**
+ * The week the entry screen is asking about. These two arrive on the query string and go straight
+ * into a prepared statement, so they are checked the way every other input is: a request missing
+ * one, or carrying something that is not a date, is answered with a 400 that says which.
+ */
+export const currentBatchQuerySchema = z
+  .object({
+    weekStart: dateSchema,
+    weekEnd: dateSchema
+  })
+  .refine((value) => value.weekStart <= value.weekEnd, {
+    message: "The week must start on or before it ends.",
+    path: ["weekEnd"]
+  });
 
 export type AccountType = z.infer<typeof accountTypeSchema>;
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;

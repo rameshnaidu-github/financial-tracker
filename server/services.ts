@@ -54,7 +54,7 @@ import {
   type UpdateTransactionInput,
   type UpdateVacationInput
 } from "../shared/finance.ts";
-import { asRecord, asRecords, db, transaction } from "./db.ts";
+import { asRecord, asRecords, currentUserId, db, isPerPersonSetting, setOwnerEmail, transaction } from "./db.ts";
 import { ensureBackupDir, pruneBackupFiles } from "./backup-files.ts";
 
 export type AccountRow = {
@@ -148,7 +148,6 @@ export type TransactionRow = {
   method: string;
   merchant: string | null;
   note: string | null;
-  category_id: string | null;
   type_id: string | null;
   subcategory_id: string | null;
   amount_paise: number;
@@ -171,7 +170,6 @@ export type TransactionSummary = {
   method: string;
   merchant: string | null;
   note: string | null;
-  categoryId: string | null;
   categoryName: string | null;
   categoryIcon: string | null;
   categoryColor: string | null;
@@ -341,7 +339,6 @@ export type BudgetPlan = {
 
 type TransactionQuery = {
   accountId?: string;
-  categoryId?: string;
   typeId?: string;
   subcategoryId?: string;
   status?: string;
@@ -358,62 +355,78 @@ const BUDGETABLE_BEHAVIORS = new Set<TaxonomyBehavior>(["expense", "loan", "inve
 const AUTO_BACKUP_INTERVAL_MS = 30 * 60 * 1000;
 let autoBackupTimer: ReturnType<typeof setInterval> | undefined;
 
-export function getSettings() {
+/**
+ * The settings the app reads as one map, drawn from both halves of the D2 split: what belongs to
+ * this person, and what belongs to the installation they are using.
+ */
+export async function getSettings() {
   const rows = asRecords<{ key: string; value: string }>(
-    db.prepare("SELECT key, value FROM settings ORDER BY key").all()
+    (await db
+      .prepare(
+        `SELECT key, value FROM app_settings
+         UNION ALL
+         SELECT key, value FROM user_settings WHERE user_id = ?
+         ORDER BY key`
+      )
+      .all(currentUserId()))
   );
 
   return Object.fromEntries(rows.map((row) => [row.key, row.value]));
 }
 
-export function getProfile(): UserProfile {
-  const settings = getSettings();
+export async function getProfile(): Promise<UserProfile> {
+  const settings = await getSettings();
   return {
-    name: settings.profile_name ?? "",
-    email: settings.profile_email ?? "",
-    age: settings.profile_age ?? ""
+    name:(await  settings).profile_name ?? "",
+    email:(await  settings).profile_email ?? "",
+    age:(await  settings).profile_age ?? ""
   };
 }
 
-export function updateAppSettings(input: UpdateSettingsInput) {
+export async function updateAppSettings(input: UpdateSettingsInput) {
   const parsed = updateSettingsSchema.parse(input);
-  setSetting("card_utilization_alert_percent", String(parsed.cardUtilizationAlertPercent));
+  await setSetting("card_utilization_alert_percent", String(parsed.cardUtilizationAlertPercent));
   return getSettings();
 }
 
-export function updateProfile(input: UpdateProfileInput): UserProfile {
+export async function updateProfile(input: UpdateProfileInput): Promise<UserProfile> {
   const parsed = updateProfileSchema.parse(input);
-  const current = getProfile();
+  const current = await getProfile();
   const next = {
-    name: parsed.name ?? current.name,
-    email: parsed.email ?? current.email,
-    age: parsed.age ?? current.age
+    name: parsed.name ??(await  current).name,
+    email: parsed.email ??(await  current).email,
+    age: parsed.age ??(await  current).age
   };
 
-  transaction(() => {
-    setSetting("profile_name", next.name);
-    setSetting("profile_email", next.email);
-    setSetting("profile_age", next.age);
+  await transaction(async () => {
+    await setSetting("profile_name", next.name);
+    await setSetting("profile_email", next.email);
+    await setSetting("profile_age", next.age);
+    // The stored profile is what identifies the owner, so the two cannot drift apart.
+    await setOwnerEmail(next.email);
   });
 
   return getProfile();
 }
 
-export function listLoans(includeArchived = false): LoanSummary[] {
+export async function listLoans(includeArchived = false): Promise<LoanSummary[]> {
   const rows = asRecords<LoanRow>(
-    db
+    (await db
       .prepare(
         `SELECT id, name, subcategory_id, principal_amount_paise, starting_outstanding_paise,
                 start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day,
                 is_archived, created_at, updated_at
          FROM loans
-         ${includeArchived ? "" : "WHERE is_archived = 0"}
-         ORDER BY is_archived ASC, name COLLATE NOCASE ASC`
+         WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
+         -- The name column is declared COLLATE NOCASE, which SQLite applies to the ordering as
+         -- well as to comparisons, so repeating it here changes nothing -- and it is the one
+         -- construct Postgres has no spelling for.
+         ORDER BY is_archived ASC, name ASC`
       )
-      .all()
+      .all(currentUserId()))
   );
 
-  return rows.map(mapLoan);
+  return Promise.all(rows.map(mapLoan));
 }
 
 /**
@@ -439,48 +452,48 @@ function rupees(paise: number) {
   return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 }
 
-export function createLoan(input: CreateLoanInput): LoanSummary {
+export async function createLoan(input: CreateLoanInput): Promise<LoanSummary> {
   const parsed = createLoanSchema.parse(input);
   validateLoanTerms(parsed);
-  const subcategory = requireLoanSubcategory(parsed.subcategoryId);
+  const subcategory = await requireLoanSubcategory(parsed.subcategoryId);
   const id = randomUUID();
 
-  db.prepare(
+  (await db.prepare(
     `INSERT INTO loans
       (id, name, subcategory_id, principal_amount_paise, starting_outstanding_paise,
-       start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
-    parsed.name,
-    subcategory.id,
+    parsed.name,(await subcategory).id,
     parsed.principalAmountPaise,
     parsed.startingOutstandingPaise,
     parsed.startMonth,
     parsed.annualInterestRateBps,
     parsed.tenureMonths,
     parsed.monthlyEmiPaise,
-    parsed.emiDueDay ?? null
-  );
+    parsed.emiDueDay ?? null,
+    currentUserId()
+  ));
 
   return requireLoanSummary(id);
 }
 
-export function updateLoan(id: string, input: UpdateLoanInput): LoanSummary {
-  const existing = requireLoanRow(id);
+export async function updateLoan(id: string, input: UpdateLoanInput): Promise<LoanSummary> {
+  const existing = await requireLoanRow(id);
   const patch = updateLoanSchema.parse(input);
   const merged = {
-    name: patch.name ?? existing.name,
-    subcategoryId: patch.subcategoryId ?? existing.subcategory_id,
-    principalAmountPaise: patch.principalAmountPaise ?? existing.principal_amount_paise,
-    startingOutstandingPaise: patch.startingOutstandingPaise ?? existing.starting_outstanding_paise,
-    startMonth: patch.startMonth ?? existing.start_month,
-    annualInterestRateBps: patch.annualInterestRateBps ?? existing.annual_interest_rate_bps,
-    tenureMonths: patch.tenureMonths ?? existing.tenure_months,
-    monthlyEmiPaise: patch.monthlyEmiPaise ?? existing.monthly_emi_paise,
+    name: patch.name ??(await existing).name,
+    subcategoryId: patch.subcategoryId ??(await existing).subcategory_id,
+    principalAmountPaise: patch.principalAmountPaise ??(await existing).principal_amount_paise,
+    startingOutstandingPaise: patch.startingOutstandingPaise ??(await existing).starting_outstanding_paise,
+    startMonth: patch.startMonth ??(await existing).start_month,
+    annualInterestRateBps: patch.annualInterestRateBps ??(await existing).annual_interest_rate_bps,
+    tenureMonths: patch.tenureMonths ??(await existing).tenure_months,
+    monthlyEmiPaise: patch.monthlyEmiPaise ??(await existing).monthly_emi_paise,
     // `undefined` leaves the stored day alone; an explicit null clears the reminder.
-    emiDueDay: patch.emiDueDay === undefined ? existing.emi_due_day : patch.emiDueDay ?? null,
-    isArchived: patch.isArchived ?? Boolean(existing.is_archived)
+    emiDueDay: patch.emiDueDay === undefined ?(await existing).emi_due_day : patch.emiDueDay ?? null,
+    isArchived: patch.isArchived ?? Boolean((await existing).is_archived)
   };
 
   const parsed = createLoanSchema.parse({
@@ -495,15 +508,15 @@ export function updateLoan(id: string, input: UpdateLoanInput): LoanSummary {
     emiDueDay: merged.emiDueDay
   });
   validateLoanTerms(parsed);
-  requireLoanSubcategory(parsed.subcategoryId);
+  await requireLoanSubcategory(parsed.subcategoryId);
 
-  transaction(() => {
-    db.prepare(
+  await transaction(async () => {
+    (await db.prepare(
       `UPDATE loans
        SET name = ?, subcategory_id = ?, principal_amount_paise = ?, starting_outstanding_paise = ?,
            start_month = ?, annual_interest_rate_bps = ?, tenure_months = ?, monthly_emi_paise = ?,
            emi_due_day = ?, is_archived = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`
+       WHERE id = ? AND user_id = ?`
     ).run(
       parsed.name,
       parsed.subcategoryId,
@@ -515,25 +528,30 @@ export function updateLoan(id: string, input: UpdateLoanInput): LoanSummary {
       parsed.monthlyEmiPaise,
       merged.emiDueDay ?? null,
       merged.isArchived ? 1 : 0,
-      id
-    );
+      id,
+      currentUserId()
+    ));
 
-    if (parsed.subcategoryId !== existing.subcategory_id) {
-      db.prepare(
+    if (parsed.subcategoryId !==(await existing).subcategory_id) {
+      (await db.prepare(
         `UPDATE transactions
          SET subcategory_id = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE id IN (SELECT transaction_id FROM loan_payments WHERE loan_id = ?)`
-      ).run(parsed.subcategoryId, id);
+         WHERE user_id = ?
+           AND id IN (SELECT transaction_id FROM loan_payments WHERE loan_id = ? AND user_id = ?)`
+      ).run(parsed.subcategoryId, currentUserId(), id, currentUserId()));
     }
 
-    refreshLoanPayments(id);
+    await refreshLoanPayments(id);
   });
   return requireLoanSummary(id);
 }
 
-export function archiveLoan(id: string) {
-  requireLoanRow(id);
-  db.prepare("UPDATE loans SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
+export async function archiveLoan(id: string) {
+  await requireLoanRow(id);
+  (await db.prepare("UPDATE loans SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?").run(
+    id,
+    currentUserId()
+  ));
   return { ok: true, mode: "archived" as const };
 }
 
@@ -560,46 +578,46 @@ export type AutopaySubscriptionSummary = {
   isArchived: boolean;
 };
 
-export function listAutopaySubscriptions(includeArchived = false): AutopaySubscriptionSummary[] {
+export async function listAutopaySubscriptions(includeArchived = false): Promise<AutopaySubscriptionSummary[]> {
   const rows = asRecords<AutopaySubscriptionRow>(
-    db
+    (await db
       .prepare(
         `SELECT id, name, amount_paise, start_date, duration_months, is_archived, created_at, updated_at
          FROM autopay_subscriptions
-         ${includeArchived ? "" : "WHERE is_archived = 0"}
-         ORDER BY is_archived ASC, name COLLATE NOCASE ASC`
+         WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
+         ORDER BY is_archived ASC, name ASC`
       )
-      .all()
+      .all(currentUserId()))
   );
 
-  return rows.map(mapAutopaySubscription);
+  return Promise.all(rows.map(mapAutopaySubscription));
 }
 
-export function createAutopaySubscription(input: CreateAutopaySubscriptionInput): AutopaySubscriptionSummary {
+export async function createAutopaySubscription(input: CreateAutopaySubscriptionInput): Promise<AutopaySubscriptionSummary> {
   const parsed = createAutopaySubscriptionSchema.parse(input);
   const id = randomUUID();
 
-  db.prepare(
+  (await db.prepare(
     `INSERT INTO autopay_subscriptions
-      (id, name, amount_paise, start_date, duration_months)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(id, parsed.name, parsed.amountPaise, parsed.startDate, parsed.durationMonths);
+      (id, name, amount_paise, start_date, duration_months, user_id)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, parsed.name, parsed.amountPaise, parsed.startDate, parsed.durationMonths, currentUserId()));
 
   return requireAutopaySummary(id);
 }
 
-export function updateAutopaySubscription(
+export async function updateAutopaySubscription(
   id: string,
   input: UpdateAutopaySubscriptionInput
-): AutopaySubscriptionSummary {
-  const existing = requireAutopayRow(id);
+): Promise<AutopaySubscriptionSummary> {
+  const existing = await requireAutopayRow(id);
   const patch = updateAutopaySubscriptionSchema.parse(input);
   const merged = {
-    name: patch.name ?? existing.name,
-    amountPaise: patch.amountPaise ?? existing.amount_paise,
-    startDate: patch.startDate ?? existing.start_date,
-    durationMonths: patch.durationMonths ?? existing.duration_months,
-    isArchived: patch.isArchived ?? Boolean(existing.is_archived)
+    name: patch.name ??(await existing).name,
+    amountPaise: patch.amountPaise ??(await existing).amount_paise,
+    startDate: patch.startDate ??(await existing).start_date,
+    durationMonths: patch.durationMonths ??(await existing).duration_months,
+    isArchived: patch.isArchived ?? Boolean((await existing).is_archived)
   };
 
   createAutopaySubscriptionSchema.parse({
@@ -609,28 +627,29 @@ export function updateAutopaySubscription(
     durationMonths: merged.durationMonths
   });
 
-  db.prepare(
+  (await db.prepare(
     `UPDATE autopay_subscriptions
      SET name = ?, amount_paise = ?, start_date = ?, duration_months = ?,
          is_archived = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
+     WHERE id = ? AND user_id = ?`
   ).run(
     merged.name,
     merged.amountPaise,
     merged.startDate,
     merged.durationMonths,
     merged.isArchived ? 1 : 0,
-    id
-  );
+    id,
+    currentUserId()
+  ));
 
   return requireAutopaySummary(id);
 }
 
-export function archiveAutopaySubscription(id: string) {
-  requireAutopayRow(id);
-  db.prepare(
-    "UPDATE autopay_subscriptions SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-  ).run(id);
+export async function archiveAutopaySubscription(id: string) {
+  await requireAutopayRow(id);
+  (await db.prepare(
+    "UPDATE autopay_subscriptions SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?"
+  ).run(id, currentUserId()));
   return { ok: true, mode: "archived" as const };
 }
 
@@ -678,26 +697,28 @@ export type InvestmentSummary = {
 const INVESTMENT_COLUMNS =
   "id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at, invested_as_of, value_as_of";
 
-export function listInvestments(): InvestmentSummary[] {
+export async function listInvestments(): Promise<InvestmentSummary[]> {
   const rows = asRecords<InvestmentRow>(
-    db
+    (await db
       .prepare(
         `SELECT ${INVESTMENT_COLUMNS}
          FROM investments
+         WHERE user_id = ?
          ORDER BY created_at, id`
       )
-      .all()
+      .all(currentUserId()))
   );
-  return rows.map(mapInvestment);
+  return Promise.all(rows.map(mapInvestment));
 }
 
-export function createInvestment(input: CreateInvestmentInput): InvestmentSummary {
+export async function createInvestment(input: CreateInvestmentInput): Promise<InvestmentSummary> {
   const parsed = createInvestmentSchema.parse(input);
   const id = randomUUID();
-  db.prepare(
+  (await db.prepare(
     `INSERT INTO investments
-       (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, invested_as_of, value_as_of)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, invested_as_of,
+        value_as_of, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     parsed.type,
@@ -708,38 +729,39 @@ export function createInvestment(input: CreateInvestmentInput): InvestmentSummar
     parsed.purchaseDate ?? null,
     parsed.note ?? null,
     currentIsoDate(),
-    currentIsoDate()
-  );
+    currentIsoDate(),
+    currentUserId()
+  ));
   return requireInvestmentSummary(id);
 }
 
-export function updateInvestment(id: string, input: UpdateInvestmentInput): InvestmentSummary {
-  const existing = requireInvestmentRow(id);
-  const current = mapInvestment(existing);
+export async function updateInvestment(id: string, input: UpdateInvestmentInput): Promise<InvestmentSummary> {
+  const existing = await requireInvestmentRow(id);
+  const current = await mapInvestment(await existing);
   const patch = updateInvestmentSchema.parse(input);
   // The edit form shows figures that already include SIPs logged since they were entered. A
   // changed figure becomes the new base as of today; an unchanged one keeps its base and SIPs.
-  const investedChanged = patch.investedPaise !== undefined && patch.investedPaise !== current.investedPaise;
-  const valueChanged = patch.currentValuePaise !== undefined && patch.currentValuePaise !== current.currentValuePaise;
+  const investedChanged = patch.investedPaise !== undefined && patch.investedPaise !==(await  current).investedPaise;
+  const valueChanged = patch.currentValuePaise !== undefined && patch.currentValuePaise !==(await  current).currentValuePaise;
   const today = currentIsoDate();
   const merged = {
-    type: patch.type ?? existing.type,
-    name: patch.name ?? existing.name,
-    investedPaise: investedChanged ? (patch.investedPaise as number) : existing.invested_paise,
-    currentValuePaise: valueChanged ? (patch.currentValuePaise as number) : existing.current_value_paise,
-    investedAsOf: investedChanged ? today : existing.invested_as_of,
-    valueAsOf: valueChanged ? today : existing.value_as_of,
-    shares: Object.prototype.hasOwnProperty.call(patch, "shares") ? patch.shares ?? null : existing.shares,
+    type: patch.type ??(await existing).type,
+    name: patch.name ??(await existing).name,
+    investedPaise: investedChanged ? (patch.investedPaise as number) :(await existing).invested_paise,
+    currentValuePaise: valueChanged ? (patch.currentValuePaise as number) :(await existing).current_value_paise,
+    investedAsOf: investedChanged ? today :(await existing).invested_as_of,
+    valueAsOf: valueChanged ? today :(await existing).value_as_of,
+    shares: Object.prototype.hasOwnProperty.call(patch, "shares") ? patch.shares ?? null :(await existing).shares,
     purchaseDate: Object.prototype.hasOwnProperty.call(patch, "purchaseDate")
       ? patch.purchaseDate ?? null
-      : existing.purchase_date,
-    note: Object.prototype.hasOwnProperty.call(patch, "note") ? patch.note ?? null : existing.note
+      :(await existing).purchase_date,
+    note: Object.prototype.hasOwnProperty.call(patch, "note") ? patch.note ?? null :(await existing).note
   };
-  db.prepare(
+  (await db.prepare(
     `UPDATE investments
      SET type = ?, name = ?, invested_paise = ?, current_value_paise = ?, shares = ?, purchase_date = ?, note = ?,
          invested_as_of = ?, value_as_of = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
+     WHERE id = ? AND user_id = ?`
   ).run(
     merged.type,
     merged.name,
@@ -750,28 +772,29 @@ export function updateInvestment(id: string, input: UpdateInvestmentInput): Inve
     merged.note,
     merged.investedAsOf,
     merged.valueAsOf,
-    id
-  );
+    id,
+    currentUserId()
+  ));
   return requireInvestmentSummary(id);
 }
 
-export function deleteInvestment(id: string) {
-  const result = db.prepare("DELETE FROM investments WHERE id = ?").run(id);
+export async function deleteInvestment(id: string) {
+  const result = (await db.prepare("DELETE FROM investments WHERE id = ? AND user_id = ?").run(id, currentUserId()));
   if (result.changes === 0) {
     throw notFound("Investment not found.");
   }
   return { ok: true };
 }
 
-function requireInvestmentRow(id: string) {
+async function requireInvestmentRow(id: string) {
   const row = asRecord<InvestmentRow | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT ${INVESTMENT_COLUMNS}
          FROM investments
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId()))
   );
   if (!row) {
     throw notFound("Investment not found.");
@@ -779,19 +802,19 @@ function requireInvestmentRow(id: string) {
   return row;
 }
 
-function requireInvestmentSummary(id: string) {
-  return mapInvestment(requireInvestmentRow(id));
+async function requireInvestmentSummary(id: string) {
+  return mapInvestment(await requireInvestmentRow(id));
 }
 
-function linkedSipsAfter(investmentId: string, afterDate: string) {
+async function linkedSipsAfter(investmentId: string, afterDate: string) {
   return asRecord<{ count: number; total: number }>(
-    db
+    (await db
       .prepare(
         `SELECT COUNT(*) AS count, COALESCE(SUM(t.amount_paise), 0) AS total
-         FROM investment_payments ip JOIN transactions t ON t.id = ip.transaction_id
-         WHERE ip.investment_id = ? AND t.direction = 'outflow' AND t.date > ?`
+         FROM investment_payments ip JOIN transactions t ON t.id = ip.transaction_id AND t.user_id = ip.user_id
+         WHERE ip.investment_id = ? AND ip.user_id = ? AND t.direction = 'outflow' AND t.date > ?`
       )
-      .get(investmentId, afterDate)
+      .get(investmentId, currentUserId(), afterDate))
   );
 }
 
@@ -801,15 +824,15 @@ function linkedSipsAfter(investmentId: string, afterDate: string) {
  * figure already, so backfilling old SIPs never double-counts. (A SIP buys units worth what
  * was paid, so it lifts the current value by the same amount until the next value update.)
  */
-function mapInvestment(row: InvestmentRow): InvestmentSummary {
+async function mapInvestment(row: InvestmentRow): Promise<InvestmentSummary> {
   const meta = INVESTMENT_TYPES.find((type) => type.id === row.type) ?? INVESTMENT_TYPES[INVESTMENT_TYPES.length - 1];
   const addedOn = localIsoDateFromSqliteTimestamp(row.created_at);
   const investedAsOf = row.invested_as_of ?? addedOn;
   const valueAsOf = row.value_as_of ?? addedOn;
-  const sipsForInvested = linkedSipsAfter(row.id, investedAsOf);
-  const sipsForValue = valueAsOf === investedAsOf ? sipsForInvested : linkedSipsAfter(row.id, valueAsOf);
-  const investedPaise = row.invested_paise + sipsForInvested.total;
-  const currentValuePaise = row.current_value_paise + sipsForValue.total;
+  const sipsForInvested = await linkedSipsAfter(row.id, investedAsOf);
+  const sipsForValue =await  await valueAsOf === investedAsOf ? sipsForInvested : await linkedSipsAfter(row.id, valueAsOf);
+  const investedPaise = row.invested_paise +sipsForInvested.total;
+  const currentValuePaise = row.current_value_paise +(await sipsForValue).total;
   const gainPaise = currentValuePaise - investedPaise;
   const gainPercent = investedPaise > 0 ? Math.round((gainPaise / investedPaise) * 100) : 0;
   return {
@@ -827,8 +850,8 @@ function mapInvestment(row: InvestmentRow): InvestmentSummary {
     enteredCurrentValuePaise: row.current_value_paise,
     investedAsOf,
     valueAsOf,
-    sipsSinceCount: sipsForInvested.count,
-    sipsSincePaise: sipsForInvested.total,
+    sipsSinceCount:sipsForInvested.count,
+    sipsSincePaise:sipsForInvested.total,
     shares: row.shares,
     purchaseDate: row.purchase_date,
     note: row.note,
@@ -875,19 +898,20 @@ export type VacationSummary = {
 
 type VacationSpend = { total: number; count: number; breakdown: VacationSubtypeBreakdown[] };
 
-function vacationSpendByVacation(): Map<string, VacationSpend> {
+async function vacationSpendByVacation(): Promise<Map<string, VacationSpend>> {
   const map = new Map<string, VacationSpend>();
 
   // Trip total and how many transactions are tagged (one row per tagged transaction).
   const totals = asRecords<{ vacation_id: string; total: number; cnt: number }>(
-    db
+    (await db
       .prepare(
         `SELECT ve.vacation_id AS vacation_id, SUM(t.amount_paise) AS total, COUNT(*) AS cnt
          FROM vacation_expenses ve
-         JOIN transactions t ON t.id = ve.transaction_id
+         JOIN transactions t ON t.id = ve.transaction_id AND t.user_id = ve.user_id
+         WHERE ve.user_id = ?
          GROUP BY ve.vacation_id`
       )
-      .all()
+      .all(currentUserId()))
   );
   for (const row of totals) {
     map.set(row.vacation_id, { total: row.total, count: row.cnt, breakdown: [] });
@@ -904,19 +928,21 @@ function vacationSpendByVacation(): Map<string, VacationSpend> {
     color: string | null;
     amount: number;
   }>(
-    db
+    (await db
       .prepare(
         `SELECT ve.vacation_id AS vacation_id,
                 COALESCE(ts.subcategory_id, t.subcategory_id) AS subcategory_id,
                 sc.name AS name, sc.icon AS icon, sc.color AS color,
                 SUM(COALESCE(ts.amount_paise, t.amount_paise)) AS amount
          FROM vacation_expenses ve
-         JOIN transactions t ON t.id = ve.transaction_id
-         LEFT JOIN transaction_splits ts ON ts.transaction_id = t.id
+         JOIN transactions t ON t.id = ve.transaction_id AND t.user_id = ve.user_id
+         LEFT JOIN transaction_splits ts ON ts.transaction_id = t.id AND ts.user_id = t.user_id
          LEFT JOIN subcategories sc ON sc.id = COALESCE(ts.subcategory_id, t.subcategory_id)
-         GROUP BY ve.vacation_id, COALESCE(ts.subcategory_id, t.subcategory_id)`
+                                   AND sc.user_id = t.user_id
+         WHERE ve.user_id = ?
+         GROUP BY ve.vacation_id, COALESCE(ts.subcategory_id, t.subcategory_id), sc.name, sc.icon, sc.color`
       )
-      .all()
+      .all(currentUserId()))
   );
   for (const row of rows) {
     const entry = map.get(row.vacation_id) ?? { total: 0, count: 0, breakdown: [] };
@@ -954,29 +980,29 @@ function mapVacation(row: VacationRow, spend?: VacationSpend): VacationSummary {
   };
 }
 
-export function listVacations(includeArchived = true): VacationSummary[] {
+export async function listVacations(includeArchived = true): Promise<VacationSummary[]> {
   const rows = asRecords<VacationRow>(
-    db
+    (await db
       .prepare(
         `SELECT id, name, start_date, end_date, budget_paise, note, is_archived, created_at, updated_at
          FROM vacations
-         ${includeArchived ? "" : "WHERE is_archived = 0"}
+         WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
          ORDER BY created_at DESC, id`
       )
-      .all()
+      .all(currentUserId()))
   );
-  const spend = vacationSpendByVacation();
-  return rows.map((row) => mapVacation(row, spend.get(row.id)));
+  const spend = await vacationSpendByVacation();
+  return rows.map((row) => mapVacation(row,spend.get(row.id)));
 }
 
-function requireVacationRow(id: string) {
+async function requireVacationRow(id: string) {
   const row = asRecord<VacationRow | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id, name, start_date, end_date, budget_paise, note, is_archived, created_at, updated_at
-         FROM vacations WHERE id = ?`
+         FROM vacations WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId()))
   );
   if (!row) {
     throw notFound("Vacation not found.");
@@ -984,140 +1010,141 @@ function requireVacationRow(id: string) {
   return row;
 }
 
-function requireVacationSummary(id: string): VacationSummary {
-  return mapVacation(requireVacationRow(id), vacationSpendByVacation().get(id));
+async function requireVacationSummary(id: string): Promise<VacationSummary> {
+  return mapVacation(await requireVacationRow(id), (await vacationSpendByVacation()).get(id));
 }
 
-export function createVacation(input: CreateVacationInput): VacationSummary {
+export async function createVacation(input: CreateVacationInput): Promise<VacationSummary> {
   const parsed = createVacationSchema.parse(input);
   if (parsed.startDate && parsed.endDate && parsed.startDate > parsed.endDate) {
     throw badRequest("Trip start date must be on or before the end date.");
   }
   const id = randomUUID();
-  db.prepare(
-    `INSERT INTO vacations (id, name, start_date, end_date, budget_paise, note)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, parsed.name, parsed.startDate ?? null, parsed.endDate ?? null, parsed.budgetPaise ?? null, parsed.note ?? null);
+  (await db.prepare(
+    `INSERT INTO vacations (id, name, start_date, end_date, budget_paise, note, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    parsed.name,
+    parsed.startDate ?? null,
+    parsed.endDate ?? null,
+    parsed.budgetPaise ?? null,
+    parsed.note ?? null,
+    currentUserId()
+  ));
   return requireVacationSummary(id);
 }
 
-export function updateVacation(id: string, input: UpdateVacationInput): VacationSummary {
-  const existing = requireVacationRow(id);
+export async function updateVacation(id: string, input: UpdateVacationInput): Promise<VacationSummary> {
+  const existing = await requireVacationRow(id);
   const patch = updateVacationSchema.parse(input);
   const merged = {
-    name: patch.name ?? existing.name,
+    name: patch.name ??(await existing).name,
     startDate: Object.prototype.hasOwnProperty.call(patch, "startDate")
       ? patch.startDate || null
-      : existing.start_date,
-    endDate: Object.prototype.hasOwnProperty.call(patch, "endDate") ? patch.endDate || null : existing.end_date,
+      :(await existing).start_date,
+    endDate: Object.prototype.hasOwnProperty.call(patch, "endDate") ? patch.endDate || null :(await existing).end_date,
     budgetPaise: Object.prototype.hasOwnProperty.call(patch, "budgetPaise")
       ? patch.budgetPaise || null
-      : existing.budget_paise,
-    note: Object.prototype.hasOwnProperty.call(patch, "note") ? patch.note ?? null : existing.note,
-    isArchived: patch.isArchived === undefined ? existing.is_archived : patch.isArchived ? 1 : 0
+      :(await existing).budget_paise,
+    note: Object.prototype.hasOwnProperty.call(patch, "note") ? patch.note ?? null :(await existing).note,
+    isArchived: patch.isArchived === undefined ?(await existing).is_archived : patch.isArchived ? 1 : 0
   };
   if (merged.startDate && merged.endDate && merged.startDate > merged.endDate) {
     throw badRequest("Trip start date must be on or before the end date.");
   }
-  db.prepare(
+  (await db.prepare(
     `UPDATE vacations
      SET name = ?, start_date = ?, end_date = ?, budget_paise = ?, note = ?, is_archived = ?,
          updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
-  ).run(merged.name, merged.startDate, merged.endDate, merged.budgetPaise, merged.note, merged.isArchived, id);
+     WHERE id = ? AND user_id = ?`
+  ).run(
+    merged.name,
+    merged.startDate,
+    merged.endDate,
+    merged.budgetPaise,
+    merged.note,
+    merged.isArchived,
+    id,
+    currentUserId()
+  ));
   return requireVacationSummary(id);
 }
 
-export function deleteVacation(id: string) {
+export async function deleteVacation(id: string) {
   // Cascades only remove the expense links; the tagged transactions stay as normal expenses.
-  const result = db.prepare("DELETE FROM vacations WHERE id = ?").run(id);
+  const result = (await db.prepare("DELETE FROM vacations WHERE id = ? AND user_id = ?").run(id, currentUserId()));
   if (result.changes === 0) {
     throw notFound("Vacation not found.");
   }
   return { ok: true };
 }
 
-function getVacationExpenseForTransaction(transactionId: string) {
+async function getVacationExpenseForTransaction(transactionId: string) {
   return asRecord<{ id: string; vacation_id: string; transaction_id: string } | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id, vacation_id, transaction_id
          FROM vacation_expenses
-         WHERE transaction_id = ?
+         WHERE transaction_id = ? AND user_id = ?
          LIMIT 1`
       )
-      .get(transactionId)
+      .get(transactionId, currentUserId()))
   );
 }
 
-function syncVacationExpenseForTransaction(transactionId: string, input: CreateTransactionInput) {
+async function syncVacationExpenseForTransaction(transactionId: string, input: CreateTransactionInput) {
   if (!input.vacationId) {
     return;
   }
   if (input.kind !== "expense") {
     throw badRequest("Only expenses can be tagged to a vacation.");
   }
-  const vacation = requireVacationRow(input.vacationId);
-  db.prepare(
-    `INSERT INTO vacation_expenses (id, vacation_id, transaction_id)
-     VALUES (?, ?, ?)`
-  ).run(randomUUID(), vacation.id, transactionId);
+  const vacation = await requireVacationRow(input.vacationId);
+  (await db.prepare(
+    `INSERT INTO vacation_expenses (id, vacation_id, transaction_id, user_id)
+     VALUES (?, ?, ?, ?)`
+  ).run(randomUUID(),vacation.id, transactionId, currentUserId()));
 }
 
-export function getBackupStatus() {
-  const settings = getSettings();
+/**
+ * What the application can honestly say about backups now that the database is somewhere else.
+ *
+ * It used to copy the whole SQLite file every thirty minutes and report where it put it. A hosted
+ * Postgres does not hand a client its own storage, so there is nothing to copy -- and a serverless
+ * function has no long-lived process to run a timer in even if there were. The host takes the
+ * backups. D7 made the whole-database copy the owner's alone; this is what honestly survives of it
+ * once the database stopped being a file on the owner's laptop.
+ */
+export async function getBackupStatus() {
   return {
-    intervalMs: AUTO_BACKUP_INTERVAL_MS,
-    lastBackupAt: settings.last_backup_at ?? null,
-    lastBackupPath: settings.last_backup_path ?? null,
-    lastBackupMode: settings.last_backup_mode ?? null
+    /** Who keeps them. "host" means Supabase's own backups, which nothing here can speak for. */
+    managedBy: db.hosted ? ("host" as const) : ("nobody" as const),
+    /** What a person can always do for themselves, whoever keeps the database. */
+    exportPath: "/api/export/all.json",
   };
 }
 
-export function startAutoBackup(logger?: { info: (value: unknown, message?: string) => void; error: (value: unknown, message?: string) => void }) {
-  if (autoBackupTimer) {
-    return;
-  }
-
-  autoBackupTimer = setInterval(() => {
-    try {
-      const result = createBackup("auto");
-      logger?.info(result, "Automatic finance backup completed");
-    } catch (error) {
-      logger?.error(error, "Automatic finance backup failed");
-    }
-  }, AUTO_BACKUP_INTERVAL_MS);
-
-  autoBackupTimer.unref?.();
-}
-
-export function stopAutoBackup() {
-  if (!autoBackupTimer) {
-    return;
-  }
-
-  clearInterval(autoBackupTimer);
-  autoBackupTimer = undefined;
-}
-
-export function listCategoryTypes(): CategoryTypeSummary[] {
+export async function listCategoryTypes(): Promise<CategoryTypeSummary[]> {
   const typeRows = asRecords<CategoryTypeRow>(
-    db
+    (await db
       .prepare(
         `SELECT id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at
          FROM category_types
+         WHERE user_id = ?
          ORDER BY sort_order, name`
       )
-      .all()
+      .all(currentUserId()))
   );
   const subcategoryRows = asRecords<SubcategoryRow>(
-    db
+    (await db
       .prepare(
         `SELECT id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at
          FROM subcategories
+         WHERE user_id = ?
          ORDER BY sort_order, name`
       )
-      .all()
+      .all(currentUserId()))
   );
   const grouped = new Map<string, SubcategorySummary[]>();
 
@@ -1133,57 +1160,59 @@ export function listCategoryTypes(): CategoryTypeSummary[] {
   }));
 }
 
-export function createCategoryType(input: CreateCategoryTypeInput) {
+export async function createCategoryType(input: CreateCategoryTypeInput) {
   const parsed = createCategoryTypeSchema.parse(input);
-  const duplicate = getCategoryTypeByName(parsed.name);
+  const duplicate = await getCategoryTypeByName(parsed.name);
 
-  if (duplicate) {
+  if (await duplicate) {
     throw badRequest("A Type with this name already exists.");
   }
 
   const maxSort = asRecord<{ max_sort: number | null }>(
-    db.prepare("SELECT MAX(sort_order) AS max_sort FROM category_types").get()
+    (await db.prepare("SELECT MAX(sort_order) AS max_sort FROM category_types WHERE user_id = ?").get(currentUserId()))
   );
   const id = randomUUID();
 
-  db.prepare(
+  (await db.prepare(
     `INSERT INTO category_types
-      (id, name, behavior, icon, color, is_system, is_locked, sort_order)
-     VALUES (?, ?, ?, ?, ?, 0, 0, ?)`
-  ).run(id, parsed.name, parsed.behavior, parsed.icon, parsed.color, (maxSort.max_sort ?? 0) + 1);
+      (id, name, behavior, icon, color, is_system, is_locked, sort_order, user_id)
+     VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)`
+  ).run(id, parsed.name, parsed.behavior, parsed.icon, parsed.color, (maxSort.max_sort ?? 0) + 1, currentUserId()));
 
   return getCategoryType(id);
 }
 
-export function createSubcategory(input: CreateSubcategoryInput) {
+export async function createSubcategory(input: CreateSubcategoryInput) {
   const parsed = createSubcategorySchema.parse(input);
-  const type = requireCategoryType(parsed.typeId);
+  const type = await requireCategoryType(parsed.typeId);
 
-  if (type.behavior === "card_payment") {
+  if ((await type).behavior === "card_payment") {
     throw badRequest("Credit Card Payment SubTypes come from active credit-card accounts.");
   }
 
-  const duplicate = getSubcategoryByName(parsed.typeId, parsed.name);
-  if (duplicate) {
+  const duplicate = await getSubcategoryByName(parsed.typeId, parsed.name);
+  if (await duplicate) {
     throw badRequest("A SubType with this name already exists under this Type.");
   }
 
   const maxSort = asRecord<{ max_sort: number | null }>(
-    db.prepare("SELECT MAX(sort_order) AS max_sort FROM subcategories WHERE type_id = ?").get(parsed.typeId)
+    (await db
+      .prepare("SELECT MAX(sort_order) AS max_sort FROM subcategories WHERE type_id = ? AND user_id = ?")
+      .get(parsed.typeId, currentUserId()))
   );
   const id = randomUUID();
 
-  db.prepare(
+  (await db.prepare(
     `INSERT INTO subcategories
-      (id, type_id, name, icon, color, is_system, is_locked, sort_order)
-     VALUES (?, ?, ?, ?, ?, 0, 0, ?)`
-  ).run(id, parsed.typeId, parsed.name, parsed.icon, parsed.color, (maxSort.max_sort ?? 0) + 1);
+      (id, type_id, name, icon, color, is_system, is_locked, sort_order, user_id)
+     VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)`
+  ).run(id, parsed.typeId, parsed.name, parsed.icon, parsed.color, (maxSort.max_sort ?? 0) + 1, currentUserId()));
 
   return getSubcategory(id);
 }
 
-export function deleteCategoryType(id: string) {
-  const categoryType = getCategoryTypeRow(id);
+export async function deleteCategoryType(id: string) {
+  const categoryType = await getCategoryTypeRow(id);
   if (!categoryType) {
     throw notFound("Type not found.");
   }
@@ -1191,94 +1220,101 @@ export function deleteCategoryType(id: string) {
     throw badRequest("This Type is locked and cannot be deleted.");
   }
   const loanUsage = asRecord<{ count: number }>(
-    db.prepare(
+    (await db.prepare(
       `SELECT COUNT(*) AS count
        FROM loans
-       WHERE subcategory_id IN (SELECT id FROM subcategories WHERE type_id = ?)`
-    ).get(id)
+       WHERE user_id = ?
+         AND subcategory_id IN (SELECT id FROM subcategories WHERE type_id = ? AND user_id = ?)`
+    ).get(currentUserId(), id, currentUserId()))
   );
   if (loanUsage.count > 0) {
     throw badRequest("This Type is used by a loan. Archive or reclassify the loan before deleting it.");
   }
 
-  transaction(() => {
-    db.prepare(
+  await transaction(async () => {
+    (await db.prepare(
       `UPDATE transactions
        SET type_id = NULL,
            subcategory_id = NULL,
            status = CASE WHEN status = 'split' THEN status ELSE 'uncategorized' END,
            updated_at = CURRENT_TIMESTAMP
-       WHERE type_id = ?`
-    ).run(id);
+       WHERE type_id = ? AND user_id = ?`
+    ).run(id, currentUserId()));
 
-    db.prepare(
+    (await db.prepare(
       `UPDATE transaction_splits
        SET subcategory_id = NULL
-       WHERE subcategory_id IN (SELECT id FROM subcategories WHERE type_id = ?)`
-    ).run(id);
+       WHERE user_id = ?
+         AND subcategory_id IN (SELECT id FROM subcategories WHERE type_id = ? AND user_id = ?)`
+    ).run(currentUserId(), id, currentUserId()));
 
-    db.prepare(
+    (await db.prepare(
       `DELETE FROM budget_lines
-       WHERE (scope_type = 'type' AND scope_id = ?)
-          OR (scope_type = 'subcategory' AND scope_id IN (SELECT id FROM subcategories WHERE type_id = ?))`
-    ).run(id, id);
+       WHERE user_id = ?
+         AND (scope_type_id = ?
+           OR scope_subcategory_id IN (SELECT id FROM subcategories WHERE type_id = ? AND user_id = ?))`
+    ).run(currentUserId(), id, id, currentUserId()));
 
-    db.prepare("DELETE FROM category_types WHERE id = ?").run(id);
+    (await db.prepare("DELETE FROM category_types WHERE id = ? AND user_id = ?").run(id, currentUserId()));
   });
 
   return { ok: true };
 }
 
-export function deleteSubcategory(id: string) {
-  const subcategory = getSubcategoryRow(id);
+export async function deleteSubcategory(id: string) {
+  const subcategory = await getSubcategoryRow(id);
   if (!subcategory) {
     throw notFound("SubType not found.");
   }
-  if (subcategory.is_locked) {
+  if ((await subcategory).is_locked) {
     throw badRequest("This SubType is locked and cannot be deleted.");
   }
   const loanUsage = asRecord<{ count: number }>(
-    db.prepare("SELECT COUNT(*) AS count FROM loans WHERE subcategory_id = ?").get(id)
+    (await db.prepare("SELECT COUNT(*) AS count FROM loans WHERE subcategory_id = ? AND user_id = ?").get(id, currentUserId()))
   );
   if (loanUsage.count > 0) {
     throw badRequest("This SubType is used by a loan. Archive or reclassify the loan before deleting it.");
   }
 
-  transaction(() => {
-    db.prepare(
+  await transaction(async () => {
+    (await db.prepare(
       `UPDATE transactions
        SET subcategory_id = NULL,
            status = CASE WHEN status = 'split' THEN status ELSE 'uncategorized' END,
            updated_at = CURRENT_TIMESTAMP
-       WHERE subcategory_id = ?`
-    ).run(id);
-    db.prepare("UPDATE transaction_splits SET subcategory_id = NULL WHERE subcategory_id = ?").run(id);
-    db.prepare("DELETE FROM budget_lines WHERE scope_type = 'subcategory' AND scope_id = ?").run(id);
-    db.prepare("DELETE FROM subcategories WHERE id = ?").run(id);
+       WHERE subcategory_id = ? AND user_id = ?`
+    ).run(id, currentUserId()));
+    (await db
+      .prepare("UPDATE transaction_splits SET subcategory_id = NULL WHERE subcategory_id = ? AND user_id = ?")
+      .run(id, currentUserId()));
+    (await db
+      .prepare("DELETE FROM budget_lines WHERE scope_subcategory_id = ? AND user_id = ?")
+      .run(id, currentUserId()));
+    (await db.prepare("DELETE FROM subcategories WHERE id = ? AND user_id = ?").run(id, currentUserId()));
   });
 
   return { ok: true };
 }
 
-export function listAccounts(includeArchived = true): AccountSummary[] {
+export async function listAccounts(includeArchived = true): Promise<AccountSummary[]> {
   const rows = asRecords<AccountRow>(
-    db
+    (await db
       .prepare(
         `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day,
                 is_archived, created_at, updated_at
          FROM accounts
-         ${includeArchived ? "" : "WHERE is_archived = 0"}
+         WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
          ORDER BY is_archived, type, name`
       )
-      .all()
+      .all(currentUserId()))
   );
 
-  return rows.map(mapAccountWithBalance);
+  return Promise.all(rows.map(mapAccountWithBalance));
 }
 
-export function createAccount(input: CreateAccountInput) {
+export async function createAccount(input: CreateAccountInput) {
   const parsed = createAccountSchema.parse(input);
-  const activeDuplicate = getActiveAccountByName(parsed.name);
+  const activeDuplicate = await getActiveAccountByName(parsed.name);
 
   if (activeDuplicate) {
     throw badRequest("An active account or card with this name already exists.");
@@ -1286,101 +1322,100 @@ export function createAccount(input: CreateAccountInput) {
 
   const id = randomUUID();
 
-  db.prepare(
+  (await db.prepare(
     `INSERT INTO accounts
-      (id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day)
-     VALUES (?, ?, ?, ?, ?, ?)`
+      (id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     parsed.name,
     parsed.type,
     parsed.startingBalancePaise,
     parsed.type === "credit_card" ? parsed.creditLimitPaise ?? 0 : null,
-    parsed.type === "credit_card" ? parsed.paymentDueDay ?? null : null
-  );
+    parsed.type === "credit_card" ? parsed.paymentDueDay ?? null : null,
+    currentUserId()
+  ));
 
   return getAccount(id);
 }
 
-export function updateAccount(id: string, input: UpdateAccountInput) {
-  const existing = getAccountRow(id);
+export async function updateAccount(id: string, input: UpdateAccountInput) {
+  const existing = await getAccountRow(id);
   if (!existing) {
     throw notFound("Account not found.");
   }
 
   const parsed = updateAccountSchema.parse(input);
-  const name = parsed.name ?? existing.name;
-  const creditLimit =
-    existing.type === "credit_card"
-      ? parsed.creditLimitPaise ?? existing.credit_limit_paise ?? 0
+  const name = parsed.name ??existing.name;
+  const creditLimit =existing.type === "credit_card"
+      ? parsed.creditLimitPaise ??existing.credit_limit_paise ?? 0
       : null;
   const isArchived =
-    parsed.isArchived === undefined ? existing.is_archived : parsed.isArchived ? 1 : 0;
-  const startingBalance = parsed.startingBalancePaise ?? existing.starting_balance_paise;
+    parsed.isArchived === undefined ?existing.is_archived : parsed.isArchived ? 1 : 0;
+  const startingBalance = parsed.startingBalancePaise ??existing.starting_balance_paise;
   // `undefined` leaves the stored day alone; an explicit null clears the reminder.
-  const paymentDueDay =
-    existing.type === "credit_card"
+  const paymentDueDay =existing.type === "credit_card"
       ? parsed.paymentDueDay === undefined
-        ? existing.payment_due_day
+        ?existing.payment_due_day
         : parsed.paymentDueDay ?? null
       : null;
 
   if (isArchived === 0) {
-    const activeDuplicate = getActiveAccountByName(name, id);
+    const activeDuplicate = await getActiveAccountByName(name, id);
     if (activeDuplicate) {
       throw badRequest("An active account or card with this name already exists.");
     }
   }
 
-  db.prepare(
+  (await db.prepare(
     `UPDATE accounts
      SET name = ?, starting_balance_paise = ?, credit_limit_paise = ?, payment_due_day = ?,
          is_archived = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
-  ).run(name, startingBalance, creditLimit, paymentDueDay, isArchived, id);
+     WHERE id = ? AND user_id = ?`
+  ).run(name, startingBalance, creditLimit, paymentDueDay, isArchived, id, currentUserId()));
 
   return getAccount(id);
 }
 
-export function deleteAccount(id: string) {
-  const account = getAccountRow(id);
+export async function deleteAccount(id: string) {
+  const account = await getAccountRow(id);
   if (!account) {
     throw notFound("Account not found.");
   }
 
   const usage = asRecord<{ count: number }>(
-    db
+    (await db
       .prepare(
         `SELECT COUNT(*) AS count
          FROM transactions
-         WHERE account_id = ? OR transfer_account_id = ?`
+         WHERE user_id = ? AND (account_id = ? OR transfer_account_id = ?)`
       )
-      .get(id, id)
+      .get(currentUserId(), id, id))
   );
 
   if (usage.count === 0) {
-    db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
+    (await db.prepare("DELETE FROM accounts WHERE id = ? AND user_id = ?").run(id, currentUserId()));
     return { ok: true, mode: "deleted" };
   }
 
-  db.prepare(
+  (await db.prepare(
     `UPDATE accounts
      SET is_archived = 1, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
-  ).run(id);
+     WHERE id = ? AND user_id = ?`
+  ).run(id, currentUserId()));
 
   return { ok: true, mode: "hidden" };
 }
 
-export function getCurrentBatch(weekStart: string, weekEnd: string) {
+export async function getCurrentBatch(weekStart: string, weekEnd: string) {
   const existing = asRecord<{ id: string } | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id FROM entry_batches
-         WHERE week_start = ? AND week_end = ? AND status = 'draft'
+         WHERE week_start = ? AND week_end = ? AND status = 'draft' AND user_id = ?
          ORDER BY created_at DESC LIMIT 1`
       )
-      .get(weekStart, weekEnd)
+      .get(weekStart, weekEnd, currentUserId()))
   );
 
   if (existing) {
@@ -1389,22 +1424,22 @@ export function getCurrentBatch(weekStart: string, weekEnd: string) {
 
   const parsed = createBatchSchema.parse({ weekStart, weekEnd, status: "draft" });
   const id = randomUUID();
-  db.prepare(
-    `INSERT INTO entry_batches (id, week_start, week_end, status)
-     VALUES (?, ?, ?, ?)`
-  ).run(id, parsed.weekStart, parsed.weekEnd, parsed.status);
+  (await db.prepare(
+    `INSERT INTO entry_batches (id, week_start, week_end, status, user_id)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(id, parsed.weekStart, parsed.weekEnd, parsed.status, currentUserId()));
 
   return getBatch(id);
 }
 
-export function saveBatch(id: string) {
-  const result = db
+export async function saveBatch(id: string) {
+  const result = (await db
     .prepare(
       `UPDATE entry_batches
        SET status = 'saved', saved_at = CURRENT_TIMESTAMP
-       WHERE id = ?`
+       WHERE id = ? AND user_id = ?`
     )
-    .run(id);
+    .run(id, currentUserId()));
 
   if (result.changes === 0) {
     throw notFound("Batch not found.");
@@ -1415,21 +1450,23 @@ export function saveBatch(id: string) {
 
 // Shared by the ledger list and its totals, so a search always sums exactly the rows it lists.
 function buildTransactionFilters(query: TransactionQuery) {
-  const filters: string[] = [];
-  const params: SqlParam[] = [];
+  // The owner comes first and is not optional, so a ledger query with no filters at all is
+  // still one person's ledger.
+  const filters: string[] = ["t.user_id = ?"];
+  const params: SqlParam[] = [currentUserId()];
 
   if (query.accountId) {
     filters.push("t.account_id = ?");
     params.push(query.accountId);
   }
-  if (query.categoryId) {
+  if (query.subcategoryId) {
     filters.push(
-      `(t.subcategory_id = ? OR t.category_id = ? OR EXISTS (
+      `(t.subcategory_id = ? OR EXISTS (
         SELECT 1 FROM transaction_splits s
-        WHERE s.transaction_id = t.id AND (s.subcategory_id = ? OR s.category_id = ?)
+        WHERE s.transaction_id = t.id AND s.subcategory_id = ?
       ))`
     );
-    params.push(query.categoryId, query.categoryId, query.categoryId, query.categoryId);
+    params.push(query.subcategoryId, query.subcategoryId);
   }
   if (query.typeId) {
     filters.push(
@@ -1440,15 +1477,6 @@ function buildTransactionFilters(query: TransactionQuery) {
       ))`
     );
     params.push(query.typeId, query.typeId);
-  }
-  if (query.subcategoryId) {
-    filters.push(
-      `(t.subcategory_id = ? OR EXISTS (
-        SELECT 1 FROM transaction_splits s
-        WHERE s.transaction_id = t.id AND s.subcategory_id = ?
-      ))`
-    );
-    params.push(query.subcategoryId, query.subcategoryId);
   }
   if (query.status) {
     filters.push("t.status = ?");
@@ -1487,7 +1515,7 @@ function buildTransactionFilters(query: TransactionQuery) {
     filters.push(`(${clauses.join(" OR ")})`);
   }
 
-  return { where: filters.length ? `WHERE ${filters.join(" AND ")}` : "", params };
+  return { where: `WHERE ${filters.join(" AND ")}`, params };
 }
 
 export type TransactionTotals = {
@@ -1496,10 +1524,10 @@ export type TransactionTotals = {
   inflowPaise: number;
 };
 
-export function summarizeTransactions(query: TransactionQuery = {}): TransactionTotals {
+export async function summarizeTransactions(query: TransactionQuery = {}): Promise<TransactionTotals> {
   const { where, params } = buildTransactionFilters(query);
   const row = asRecord<{ count: number; outflow: number | null; inflow: number | null }>(
-    db
+    (await db
       .prepare(
         `SELECT COUNT(*) AS count,
                 SUM(CASE WHEN t.direction = 'outflow' THEN t.amount_paise ELSE 0 END) AS outflow,
@@ -1507,12 +1535,12 @@ export function summarizeTransactions(query: TransactionQuery = {}): Transaction
          FROM transactions t
          ${where}`
       )
-      .get(...params)
+      .get(...params))
   );
   return { count: row.count, outflowPaise: row.outflow ?? 0, inflowPaise: row.inflow ?? 0 };
 }
 
-export function listTransactions(query: TransactionQuery = {}): TransactionSummary[] {
+export async function listTransactions(query: TransactionQuery = {}): Promise<TransactionSummary[]> {
   const { where, params } = buildTransactionFilters(query);
   const requestedLimit = Number.isFinite(query.limit) ? Math.trunc(query.limit as number) : 200;
   const requestedOffset = Number.isFinite(query.offset) ? Math.trunc(query.offset as number) : 0;
@@ -1520,70 +1548,50 @@ export function listTransactions(query: TransactionQuery = {}): TransactionSumma
   const offset = Math.min(Math.max(requestedOffset, 0), 100_000);
 
   const rows = asRecords<TransactionRow & JoinedFields>(
-    db
+    (await db
       .prepare(
         `SELECT ${transactionSelectFields}
          FROM transactions t
-         JOIN accounts a ON a.id = t.account_id
-         LEFT JOIN categories c ON c.id = t.category_id
-         LEFT JOIN category_types ct ON ct.id = t.type_id
-         LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
-         LEFT JOIN accounts ta ON ta.id = t.transfer_account_id
-         LEFT JOIN loan_payments lp ON lp.transaction_id = t.id
-         LEFT JOIN loans l ON l.id = lp.loan_id
-         LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
-         LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
-         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
-         LEFT JOIN investments iv ON iv.id = ip.investment_id
-         LEFT JOIN vacation_expenses vx ON vx.transaction_id = t.id
-         LEFT JOIN vacations vc ON vc.id = vx.vacation_id
+         ${transactionJoins}
 ${where}
-         ORDER BY t.date DESC, t.created_at DESC
+         -- t.id last so the order is decided by the row, not by where it happens to sit: two
+         -- transactions entered on the same day in the same second would otherwise come back in
+         -- whatever sequence storage gave, and that sequence changes whenever the table is
+         -- rebuilt, vacuumed or restored.
+         ORDER BY t.date DESC, t.created_at DESC, t.id DESC
          LIMIT ${limit} OFFSET ${offset}`
       )
-      .all(...params)
+      .all(...params))
   );
 
   return rows.map(mapTransaction);
 }
 
-export function getTransaction(id: string) {
+export async function getTransaction(id: string) {
   const row = asRecord<(TransactionRow & JoinedFields) | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT ${transactionSelectFields}
          FROM transactions t
-         JOIN accounts a ON a.id = t.account_id
-         LEFT JOIN categories c ON c.id = t.category_id
-         LEFT JOIN category_types ct ON ct.id = t.type_id
-         LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
-         LEFT JOIN accounts ta ON ta.id = t.transfer_account_id
-         LEFT JOIN loan_payments lp ON lp.transaction_id = t.id
-         LEFT JOIN loans l ON l.id = lp.loan_id
-         LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
-         LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
-         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
-         LEFT JOIN investments iv ON iv.id = ip.investment_id
-         LEFT JOIN vacation_expenses vx ON vx.transaction_id = t.id
-         LEFT JOIN vacations vc ON vc.id = vx.vacation_id
-WHERE t.id = ?`
+         ${transactionJoins}
+WHERE t.id = ? AND t.user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId()))
   );
 
   return row ? mapTransaction(row) : null;
 }
 
-export function createTransaction(input: CreateTransactionInput) {
+export async function createTransaction(input: CreateTransactionInput) {
   const parsed = createTransactionSchema.parse(input);
   let id = "";
-  transaction(() => {
-    id = insertValidatedTransaction(parsed);
+  await transaction(async () => {
+    id = await insertValidatedTransaction(parsed);
   });
 
   return {
-    transaction: getTransaction(id),
-    duplicateCandidates: findDuplicateCandidates({
+    transaction: await getTransaction(id),
+    duplicateCandidates: await findDuplicateCandidates({
       id,
       accountId: parsed.accountId,
       date: parsed.date,
@@ -1593,21 +1601,21 @@ export function createTransaction(input: CreateTransactionInput) {
   };
 }
 
-function insertValidatedTransaction(parsed: CreateTransactionInput) {
-  const account = requireAccount(parsed.accountId);
-  const taxonomy = resolveTransactionTaxonomy(parsed);
+async function insertValidatedTransaction(parsed: CreateTransactionInput) {
+  const account = await requireAccount(parsed.accountId);
+  const taxonomy = await resolveTransactionTaxonomy(parsed);
 
-  validateTransactionAgainstAccounts(parsed, account);
-  validateLinkedRefund(parsed);
+  await validateTransactionAgainstAccounts(parsed, account);
+  await validateLinkedRefund(parsed);
 
   const id = randomUUID();
-  const status = transactionStatus(parsed, taxonomy);
+  const status = await transactionStatus(parsed, taxonomy);
 
-  db.prepare(
+  (await db.prepare(
       `INSERT INTO transactions
-        (id, batch_id, date, account_id, method, merchant, note, category_id,
+        (id, batch_id, date, account_id, method, merchant, note,
          type_id, subcategory_id, amount_paise, direction, kind, status,
-         transfer_account_id, linked_transaction_id)
+         transfer_account_id, linked_transaction_id, user_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
       id,
@@ -1616,46 +1624,44 @@ function insertValidatedTransaction(parsed: CreateTransactionInput) {
       parsed.accountId,
       parsed.method,
       parsed.merchant ?? null,
-      parsed.note ?? null,
-      taxonomy.legacyCategoryId,
-      taxonomy.typeId,
-      taxonomy.subcategoryId,
+      parsed.note ?? null,taxonomy.typeId,taxonomy.subcategoryId,
       parsed.amountPaise,
       parsed.direction,
       parsed.kind,
       status,
       parsed.transferAccountId ?? null,
-      parsed.linkedTransactionId ?? null
-  );
+      parsed.linkedTransactionId ?? null,
+      currentUserId()
+  ));
 
   if (parsed.splits?.length) {
-    insertSplits(id, parsed.splits);
+    await insertSplits(id, parsed.splits);
   }
 
   if (parsed.linkedTransactionId && (parsed.kind === "refund" || parsed.kind === "reversal")) {
-    db.prepare(
+    (await db.prepare(
       `INSERT INTO transaction_links
-        (id, source_transaction_id, target_transaction_id, link_type, amount_paise)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run(randomUUID(), id, parsed.linkedTransactionId, parsed.kind, parsed.amountPaise);
+        (id, source_transaction_id, target_transaction_id, link_type, amount_paise, user_id)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(randomUUID(), id, parsed.linkedTransactionId, parsed.kind, parsed.amountPaise, currentUserId()));
   }
 
-  syncLoanPaymentForTransaction(id, parsed);
+  await syncLoanPaymentForTransaction(id, parsed);
   if (parsed.loanId) {
-    refreshLoanPayments(parsed.loanId);
+    await refreshLoanPayments(parsed.loanId);
   }
 
-  syncAutopayPaymentForTransaction(id, parsed);
-  syncInvestmentPaymentForTransaction(id, parsed);
-  syncVacationExpenseForTransaction(id, parsed);
+  await syncAutopayPaymentForTransaction(id, parsed);
+  await syncInvestmentPaymentForTransaction(id, parsed);
+  await syncVacationExpenseForTransaction(id, parsed);
 
   return id;
 }
 
-function transactionStatus(
+async function transactionStatus(
   input: CreateTransactionInput,
   taxonomy: { typeId: string | null; subcategoryId: string | null }
-): "split" | "uncategorized" | "categorized" {
+): Promise<"split" | "categorized" | "uncategorized"> {
   if (input.splits?.length) {
     return "split";
   }
@@ -1671,7 +1677,9 @@ function transactionStatus(
   }
   // A Type with no SubTypes (e.g. Refund) has nothing further to choose.
   const subCount = asRecord<{ count: number }>(
-    db.prepare("SELECT COUNT(*) AS count FROM subcategories WHERE type_id = ?").get(taxonomy.typeId)
+    (await db
+      .prepare("SELECT COUNT(*) AS count FROM subcategories WHERE type_id = ? AND user_id = ?")
+      .get(taxonomy.typeId, currentUserId()))
   ).count;
   return subCount === 0 ? "categorized" : "uncategorized";
 }
@@ -1680,18 +1688,15 @@ function transactionStatus(
  * A refund linked to a purchase must point at a real outflow and, together with any other
  * refunds of that purchase, can't give back more than was paid.
  */
-function validateLinkedRefund(input: CreateTransactionInput, selfId?: string) {
+async function validateLinkedRefund(input: CreateTransactionInput, selfId?: string) {
   if (!input.linkedTransactionId || (input.kind !== "refund" && input.kind !== "reversal")) {
     return;
   }
-  const original = getTransactionRow(input.linkedTransactionId);
-  if (!original || original.id === selfId) {
+  const original = await getTransactionRow(input.linkedTransactionId);
+  if (!original ||original.id === selfId) {
     throw badRequest("The purchase this refund belongs to no longer exists.");
   }
-  if (
-    original.direction !== "outflow" ||
-    original.kind === "transfer" ||
-    original.kind === "card_payment"
+  if (original.direction !== "outflow" ||original.kind === "transfer" ||original.kind === "card_payment"
   ) {
     throw badRequest("Only a purchase or payment can be refunded.");
   }
@@ -1700,15 +1705,15 @@ function validateLinkedRefund(input: CreateTransactionInput, selfId?: string) {
     throw badRequest("A split transaction can't take a linked refund. Lower the split line that was refunded instead.");
   }
   const alreadyRefunded = asRecord<{ total: number }>(
-    db
+    (await db
       .prepare(
         `SELECT COALESCE(SUM(amount_paise), 0) AS total
          FROM transactions
-         WHERE linked_transaction_id = ? AND kind IN ('refund', 'reversal') AND id != ?`
+         WHERE linked_transaction_id = ? AND user_id = ? AND kind IN ('refund', 'reversal') AND id != ?`
       )
-      .get(original.id, selfId ?? "")
+      .get(original.id, currentUserId(), selfId ?? ""))
   ).total;
-  if (alreadyRefunded + input.amountPaise > original.amount_paise) {
+  if (alreadyRefunded + input.amountPaise >original.amount_paise) {
     const left = Math.max(original.amount_paise - alreadyRefunded, 0);
     throw badRequest(
       left === 0
@@ -1718,42 +1723,42 @@ function validateLinkedRefund(input: CreateTransactionInput, selfId?: string) {
   }
 }
 
-export function updateTransaction(id: string, input: UpdateTransactionInput) {
-  const existing = getTransactionRow(id);
+export async function updateTransaction(id: string, input: UpdateTransactionInput) {
+  const existing = await getTransactionRow(id);
   if (!existing) {
     throw notFound("Transaction not found.");
   }
-  const existingLoanPayment = getLoanPaymentForTransaction(id);
-  const existingAutopayPayment = getAutopayPaymentForTransaction(id);
-  const existingInvestmentPayment = getInvestmentPaymentForTransaction(id);
-  const existingVacationExpense = getVacationExpenseForTransaction(id);
-  const existingSplits = getTransactionSplits(id);
+  const existingLoanPayment = await getLoanPaymentForTransaction(id);
+  const existingAutopayPayment = await getAutopayPaymentForTransaction(id);
+  const existingInvestmentPayment = await getInvestmentPaymentForTransaction(id);
+  const existingVacationExpense = await getVacationExpenseForTransaction(id);
+  const existingSplits = await getTransactionSplits(id);
   const patch = updateTransactionSchema.parse(input);
   if (Object.prototype.hasOwnProperty.call(patch, "loanId") && !patch.loanId) {
     patch.loanPaymentType = undefined;
   }
 
   const mergedInput: Record<string, unknown> = {
-    batchId: existing.batch_id ?? undefined,
-    date: existing.date,
-    accountId: existing.account_id,
-    method: existing.method,
-    merchant: existing.merchant ?? undefined,
-    note: existing.note ?? undefined,
-    categoryId: existing.category_id ?? undefined,
-    typeId: existing.type_id ?? undefined,
-    subcategoryId: existing.subcategory_id ?? undefined,
-    amountPaise: existing.amount_paise,
-    direction: existing.direction,
-    kind: existing.kind,
-    transferAccountId: existing.transfer_account_id ?? undefined,
-    linkedTransactionId: existing.linked_transaction_id ?? undefined,
+    batchId:existing.batch_id ?? undefined,
+    date:existing.date,
+    accountId:existing.account_id,
+    method:existing.method,
+    merchant:existing.merchant ?? undefined,
+    note:existing.note ?? undefined,
+
+    typeId:existing.type_id ?? undefined,
+    subcategoryId:existing.subcategory_id ?? undefined,
+    amountPaise:existing.amount_paise,
+    direction:existing.direction,
+    kind:existing.kind,
+    transferAccountId:existing.transfer_account_id ?? undefined,
+    linkedTransactionId:existing.linked_transaction_id ?? undefined,
     loanId: existingLoanPayment?.loan_id ?? undefined,
     loanPaymentType: existingLoanPayment?.payment_type ?? undefined,
     subscriptionId: existingAutopayPayment?.subscription_id ?? undefined,
     investmentId: existingInvestmentPayment?.investment_id ?? undefined,
     vacationId: existingVacationExpense?.vacation_id ?? undefined,
-    splits: existingSplits.length ? existingSplits : undefined
+    splits:existingSplits.length ? existingSplits : undefined
   };
   Object.assign(mergedInput, patch);
   if (mergedInput.subcategoryId !== AUTOPAY_SUBCATEGORY_ID) {
@@ -1771,66 +1776,64 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
     merged.loanPaymentType = undefined;
   }
 
-  const account = requireAccount(merged.accountId);
-  const taxonomy = resolveTransactionTaxonomy(merged);
-  validateTransactionAgainstAccounts(merged, account);
-  validateLinkedRefund(merged, id);
+  const account = await requireAccount(merged.accountId);
+  const taxonomy = await resolveTransactionTaxonomy(merged);
+  await validateTransactionAgainstAccounts(merged, account);
+  await validateLinkedRefund(merged, id);
 
-  const status = transactionStatus(merged, taxonomy);
+  const status = await transactionStatus(merged, taxonomy);
 
-  transaction(() => {
-    db.prepare(
+  await transaction(async () => {
+    (await db.prepare(
       `UPDATE transactions
        SET batch_id = ?, date = ?, account_id = ?, method = ?, merchant = ?, note = ?,
-           category_id = ?, type_id = ?, subcategory_id = ?,
+           type_id = ?, subcategory_id = ?,
            amount_paise = ?, direction = ?, kind = ?, status = ?,
            transfer_account_id = ?, linked_transaction_id = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`
+       WHERE id = ? AND user_id = ?`
     ).run(
       merged.batchId ?? null,
       merged.date,
       merged.accountId,
       merged.method,
       merged.merchant ?? null,
-      merged.note ?? null,
-      taxonomy.legacyCategoryId,
-      taxonomy.typeId,
-      taxonomy.subcategoryId,
+      merged.note ?? null,taxonomy.typeId,taxonomy.subcategoryId,
       merged.amountPaise,
       merged.direction,
       merged.kind,
       status,
       merged.transferAccountId ?? null,
       merged.linkedTransactionId ?? null,
-      id
-    );
+      id,
+      currentUserId()
+    ));
 
-    db.prepare("DELETE FROM transaction_splits WHERE transaction_id = ?").run(id);
+    (await db.prepare("DELETE FROM transaction_splits WHERE transaction_id = ? AND user_id = ?").run(id, currentUserId()));
     if (merged.splits?.length) {
-      insertSplits(id, merged.splits);
+      await insertSplits(id, merged.splits);
     }
 
-    db.prepare("DELETE FROM loan_payments WHERE transaction_id = ?").run(id);
-    syncLoanPaymentForTransaction(id, merged);
+    (await db.prepare("DELETE FROM loan_payments WHERE transaction_id = ? AND user_id = ?").run(id, currentUserId()));
+    await syncLoanPaymentForTransaction(id, merged);
     const nextLoanId = merged.loanId;
     const loanIdsToRefresh = new Set([existingLoanPayment?.loan_id, nextLoanId].filter(Boolean));
     for (const loanId of loanIdsToRefresh) {
-      refreshLoanPayments(loanId as string);
+      await refreshLoanPayments(loanId as string);
     }
 
-    db.prepare("DELETE FROM autopay_payments WHERE transaction_id = ?").run(id);
-    syncAutopayPaymentForTransaction(id, merged, existingAutopayPayment?.subscription_id);
+    (await db.prepare("DELETE FROM autopay_payments WHERE transaction_id = ? AND user_id = ?").run(id, currentUserId()));
+    await syncAutopayPaymentForTransaction(id, merged, existingAutopayPayment?.subscription_id);
 
-    db.prepare("DELETE FROM investment_payments WHERE transaction_id = ?").run(id);
-    syncInvestmentPaymentForTransaction(id, merged);
+    (await db.prepare("DELETE FROM investment_payments WHERE transaction_id = ? AND user_id = ?").run(id, currentUserId()));
+    await syncInvestmentPaymentForTransaction(id, merged);
 
-    db.prepare("DELETE FROM vacation_expenses WHERE transaction_id = ?").run(id);
-    syncVacationExpenseForTransaction(id, merged);
+    (await db.prepare("DELETE FROM vacation_expenses WHERE transaction_id = ? AND user_id = ?").run(id, currentUserId()));
+    await syncVacationExpenseForTransaction(id, merged);
   });
 
   return {
-    transaction: getTransaction(id),
-    duplicateCandidates: findDuplicateCandidates({
+    transaction: await getTransaction(id),
+    duplicateCandidates: await findDuplicateCandidates({
       id,
       accountId: merged.accountId,
       date: merged.date,
@@ -1840,34 +1843,34 @@ export function updateTransaction(id: string, input: UpdateTransactionInput) {
   };
 }
 
-export function deleteTransaction(id: string) {
-  const loanPayment = getLoanPaymentForTransaction(id);
-  const result = db.prepare("DELETE FROM transactions WHERE id = ?").run(id);
+export async function deleteTransaction(id: string) {
+  const loanPayment = await getLoanPaymentForTransaction(id);
+  const result = (await db.prepare("DELETE FROM transactions WHERE id = ? AND user_id = ?").run(id, currentUserId()));
   if (result.changes === 0) {
     throw notFound("Transaction not found.");
   }
   if (loanPayment) {
-    refreshLoanPayments(loanPayment.loan_id);
+    await refreshLoanPayments(loanPayment.loan_id);
   }
   return { ok: true };
 }
 
-export function getOverview(accountId?: string, month = currentMonth()) {
-  const accounts = listAccounts().filter((account) => !account.isArchived);
+export async function getOverview(accountId?: string, month = currentMonth()) {
+  const accounts = (await listAccounts()).filter((account) => !account.isArchived);
   const scopedAccounts = accountId
     ? accounts.filter((account) => account.id === accountId)
     : accounts;
-  const monthly = getMonthlyReport(accountId, month);
+  const monthly = await getMonthlyReport(accountId, month);
 
   // Compare like with like: part-way through the current month, measure last month only up to
   // the same day — otherwise 18 days would always look "down" against a full 31.
-  const previousMonth = addMonths(monthly.month, -1);
+  const previousMonth = addMonths((await monthly).month, -1);
   const previousMonthDays = Number(monthEndDate(previousMonth).slice(8, 10));
-  const isCurrentMonth = monthly.month === currentMonth();
+  const isCurrentMonth =(await  monthly).month === currentMonth();
   const throughDay = isCurrentMonth
     ? Math.min(Number(currentIsoDate().slice(8, 10)), previousMonthDays)
     : previousMonthDays;
-  const previous = getMonthlyReport(
+  const previous = await getMonthlyReport(
     accountId,
     previousMonth,
     `${previousMonth}-01`,
@@ -1875,24 +1878,24 @@ export function getOverview(accountId?: string, month = currentMonth()) {
   );
 
   const uncategorized = asRecord<{ count: number }>(
-    db
+    (await db
       .prepare(
         `SELECT COUNT(*) AS count
          FROM transactions
-         WHERE status = 'uncategorized' ${accountId ? "AND account_id = ?" : ""}`
+         WHERE user_id = ? AND status = 'uncategorized' ${accountId ? "AND account_id = ?" : ""}`
       )
-      .get(...(accountId ? [accountId] : []))
+      .get(...[currentUserId(), ...(accountId ? [accountId] : [])]))
   );
 
   // Money put into investments is saved, not spent: keep it out of the spending mix and
   // report it on its own. (Outflow still includes it, matching Reports.)
-  const investmentTypeIds = new Set(
-    monthly.types.filter((type) => type.behavior === "investment").map((type) => type.typeId)
+  const investmentTypeIds = new Set((await 
+    monthly).types.filter((type) => type.behavior === "investment").map((type) => type.typeId)
   );
-  const investedPaise = monthly.types
+  const investedPaise =(await  monthly).types
     .filter((type) => investmentTypeIds.has(type.typeId))
     .reduce((sum, type) => sum + type.amountPaise, 0);
-  const spendingCategories = monthly.categories.filter(
+  const spendingCategories =(await  monthly).categories.filter(
     (category) => !category.typeId || !investmentTypeIds.has(category.typeId)
   );
   const spendingPaise = spendingCategories.reduce((sum, category) => sum + Math.max(category.amountPaise, 0), 0);
@@ -1907,10 +1910,10 @@ export function getOverview(accountId?: string, month = currentMonth()) {
       creditOutstandingPaise: scopedAccounts
         .filter((account) => account.type === "credit_card")
         .reduce((sum, account) => sum + account.outstandingPaise, 0),
-      totalSpendingPaise: monthly.totalSpendingPaise,
-      totalOutflowPaise: monthly.totalOutflowPaise,
-      totalInflowPaise: monthly.totalInflowPaise,
-      incomePaise: monthly.incomePaise,
+      totalSpendingPaise:(await  monthly).totalSpendingPaise,
+      totalOutflowPaise:(await  monthly).totalOutflowPaise,
+      totalInflowPaise:(await  monthly).totalInflowPaise,
+      incomePaise:(await  monthly).incomePaise,
       spendingPaise,
       investedPaise,
       uncategorizedCount: uncategorized.count
@@ -1919,10 +1922,10 @@ export function getOverview(accountId?: string, month = currentMonth()) {
       month: previousMonth,
       throughDay,
       partial: isCurrentMonth && throughDay < previousMonthDays,
-      inflowPaise: previous.totalInflowPaise,
-      outflowPaise: previous.totalOutflowPaise
+      inflowPaise:previous.totalInflowPaise,
+      outflowPaise:previous.totalOutflowPaise
     },
-    recentTransactions: listTransactions({ accountId, limit: 5 }),
+    recentTransactions: await listTransactions({ accountId, limit: 5 }),
     categoryReport: spendingCategories.slice(0, 6).map((category) => ({
       ...category,
       share: spendingPaise > 0 ? Math.round((Math.max(category.amountPaise, 0) / spendingPaise) * 1000) / 10 : 0
@@ -1955,17 +1958,17 @@ export type WealthSummary = {
   runwayMonths: number | null;
 };
 
-function computeNetWorthNow() {
-  const accounts = listAccounts().filter((account) => !account.isArchived);
+async function computeNetWorthNow() {
+  const accounts = (await listAccounts()).filter((account) => !account.isArchived);
   const liquidPaise = accounts
     .filter((account) => account.type === "bank" || account.type === "food_card")
     .reduce((sum, account) => sum + account.balancePaise, 0);
   const creditPaise = accounts
     .filter((account) => account.type === "credit_card")
     .reduce((sum, account) => sum + account.outstandingPaise, 0);
-  const investmentsPaise = listInvestments().reduce((sum, item) => sum + item.currentValuePaise, 0);
+  const investmentsPaise = (await listInvestments()).reduce((sum, item) => sum + item.currentValuePaise, 0);
   // Archiving hides a loan from the tracker; money still owed on it is still owed.
-  const loanPaise = listLoans(true).reduce((sum, loan) => sum + loan.outstandingPaise, 0);
+  const loanPaise = (await listLoans(true)).reduce((sum, loan) => sum + loan.outstandingPaise, 0);
   const liabilitiesPaise = creditPaise + loanPaise;
   return {
     liquidPaise,
@@ -1975,34 +1978,38 @@ function computeNetWorthNow() {
   };
 }
 
-export function getWealthSummary(): WealthSummary {
+export async function getWealthSummary(): Promise<WealthSummary> {
   const month = currentMonth();
-  const netWorth = computeNetWorthNow();
+  const netWorth = await computeNetWorthNow();
 
   // Freeze this month's snapshot so a net-worth history builds over time.
-  db.prepare(
-    `INSERT INTO net_worth_snapshots (month, liquid_paise, investments_paise, liabilities_paise, net_worth_paise)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(month) DO UPDATE SET
+  (await db.prepare(
+    `INSERT INTO net_worth_snapshots
+       (user_id, month, liquid_paise, investments_paise, liabilities_paise, net_worth_paise)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, month) DO UPDATE SET
        liquid_paise = excluded.liquid_paise,
        investments_paise = excluded.investments_paise,
        liabilities_paise = excluded.liabilities_paise,
        net_worth_paise = excluded.net_worth_paise,
        captured_at = CURRENT_TIMESTAMP`
-  ).run(month, netWorth.liquidPaise, netWorth.investmentsPaise, netWorth.liabilitiesPaise, netWorth.netWorthPaise);
+  ).run(
+    currentUserId(),
+    month,netWorth.liquidPaise,netWorth.investmentsPaise,netWorth.liabilitiesPaise,netWorth.netWorthPaise
+  ));
 
   const history = asRecords<{ month: string; net_worth_paise: number }>(
-    db
-      .prepare("SELECT month, net_worth_paise FROM net_worth_snapshots ORDER BY month ASC")
-      .all()
+    (await db
+      .prepare("SELECT month, net_worth_paise FROM net_worth_snapshots WHERE user_id = ? ORDER BY month ASC")
+      .all(currentUserId()))
   ).map((row) => ({ month: row.month, netWorthPaise: row.net_worth_paise }));
 
   // Asset allocation — where the wealth currently sits (positive holdings only).
-  const investments = listInvestments();
+  const investments = await listInvestments();
   const byType = (types: string[]) =>
     investments.filter((item) => types.includes(item.type)).reduce((sum, item) => sum + item.currentValuePaise, 0);
   const allocation: WealthAllocationSegment[] = [
-    { key: "cash", label: "Cash", color: "#0284c7", valuePaise: netWorth.liquidPaise },
+    { key: "cash", label: "Cash", color: "#0284c7", valuePaise:netWorth.liquidPaise },
     { key: "equity", label: "Equity (stocks + MF)", color: "#4f46e5", valuePaise: byType(["stocks", "mutual_funds"]) },
     { key: "gold", label: "Gold", color: "#d97706", valuePaise: byType(["gold"]) },
     { key: "realestate", label: "Real estate", color: "#0f766e", valuePaise: byType(["land", "property"]) },
@@ -2013,15 +2020,18 @@ export function getWealthSummary(): WealthSummary {
   ].filter((segment) => segment.valuePaise > 0);
 
   // Cashflow this month.
-  const monthReport = getMonthlyReport(undefined, month);
-  const incomePaise = monthReport.totalInflowPaise;
-  const expensePaise = monthReport.totalOutflowPaise;
+  const monthReport = await getMonthlyReport(undefined, month);
+  const incomePaise =monthReport.totalInflowPaise;
+  const expensePaise =monthReport.totalOutflowPaise;
   const savedPaise = incomePaise - expensePaise;
   const savingsRatePercent = calculateSavingsRatePercent(incomePaise, expensePaise);
 
   // Emergency-fund runway = liquid cash ÷ average monthly outflow over the trailing 3 months.
-  const trailingExpenses = [0, 1, 2].map(
-    (back) => getMonthlyReport(undefined, addMonths(month, -back)).totalOutflowPaise
+  // Promise.all, not `map` with an await inside: three months read at once rather than in a chain.
+  const trailingExpenses = await Promise.all(
+    [0, 1, 2].map(async (back) =>
+      (await getMonthlyReport(undefined, addMonths(month, -back))).totalOutflowPaise
+    )
   );
   const avgExpense = trailingExpenses.reduce((sum, value) => sum + value, 0) / trailingExpenses.length;
   const runwayMonths = avgExpense > 0 ? Math.round((netWorth.liquidPaise / avgExpense) * 10) / 10 : null;
@@ -2084,20 +2094,20 @@ function nextMonthlyDueDate(
  * the entered EMI due day) and credit card bills (on the card's payment due day, for what is owed).
  * A month that already has a linked payment is treated as settled.
  */
-export function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): UpcomingPayments {
+export async function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): Promise<UpcomingPayments> {
   const items: UpcomingPayment[] = [];
 
-  for (const subscription of listAutopaySubscriptions(false)) {
+  for (const subscription of await listAutopaySubscriptions(false)) {
     if (subscription.status !== "active") continue;
     const paidMonths = new Set(
       asRecords<{ month: string }>(
-        db
+        (await db
           .prepare(
             `SELECT DISTINCT substr(t.date, 1, 7) AS month
-             FROM autopay_payments ap JOIN transactions t ON t.id = ap.transaction_id
-             WHERE ap.subscription_id = ?`
+             FROM autopay_payments ap JOIN transactions t ON t.id = ap.transaction_id AND t.user_id = ap.user_id
+             WHERE ap.subscription_id = ? AND ap.user_id = ?`
           )
-          .all(subscription.id)
+          .all(subscription.id, currentUserId()))
       ).map((row) => row.month)
     );
     const due = nextMonthlyDueDate(
@@ -2112,17 +2122,17 @@ export function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): 
     }
   }
 
-  for (const loan of listLoans(false)) {
+  for (const loan of await listLoans(false)) {
     if (loan.outstandingPaise <= 0) continue;
     const emiDates = asRecords<{ date: string }>(
-      db
+      (await db
         .prepare(
           `SELECT t.date AS date
-           FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id
-           WHERE lp.loan_id = ? AND lp.payment_type = 'emi'
-           ORDER BY t.date DESC`
+           FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id AND t.user_id = lp.user_id
+           WHERE lp.loan_id = ? AND lp.user_id = ? AND lp.payment_type = 'emi'
+           ORDER BY t.date DESC, t.id DESC`
         )
-        .all(loan.id)
+        .all(loan.id, currentUserId()))
     );
     // The day a real EMI landed beats the entered day; without either there is nothing to remind about.
     const dueDay = emiDates.length > 0 ? Number(emiDates[0].date.slice(8, 10)) : loan.emiDueDay;
@@ -2145,19 +2155,19 @@ export function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): 
     }
   }
 
-  for (const account of listAccounts(false)) {
+  for (const account of await listAccounts(false)) {
     if (account.type !== "credit_card" || !account.paymentDueDay) continue;
     // Nothing is owed, so nothing is due.
     if (account.outstandingPaise <= 0) continue;
     const paidMonths = new Set(
       asRecords<{ month: string }>(
-        db
+        (await db
           .prepare(
             `SELECT DISTINCT substr(date, 1, 7) AS month
              FROM transactions
-             WHERE kind = 'card_payment' AND transfer_account_id = ?`
+             WHERE kind = 'card_payment' AND transfer_account_id = ? AND user_id = ?`
           )
-          .all(account.id)
+          .all(account.id, currentUserId()))
       ).map((row) => row.month)
     );
     const due = nextMonthlyDueDate(account.paymentDueDay, today, windowDays, paidMonths, () => true);
@@ -2176,28 +2186,34 @@ export function getUpcomingPayments(windowDays = 14, today = currentIsoDate()): 
   return { windowDays, totalPaise: items.reduce((sum, item) => sum + item.amountPaise, 0), items };
 }
 
-export function getBudgetPlan(month = currentMonth(), asOfDate = localIsoDate(new Date())): BudgetPlan {
+export async function getBudgetPlan(month = currentMonth(), asOfDate = localIsoDate(new Date())): Promise<BudgetPlan> {
   const safeMonth = /^\d{4}-\d{2}$/.test(month) ? month : currentMonth();
   const start = `${safeMonth}-01`;
   const end = monthEndDate(safeMonth);
   const pace = budgetPace(safeMonth, asOfDate);
-  const report = getMonthlyReport(undefined, safeMonth);
-  const actuals = budgetActualMaps(report);
-  const rows = listBudgetRows(safeMonth);
-  const history = rows.length > 0 ? restOfMonthHistory(safeMonth, pace) : [];
+  const report = await getMonthlyReport(undefined, safeMonth);
+  const actuals =await  await budgetActualMaps(report);
+  const rows = await listBudgetRows(safeMonth);
+  const history = rows.length > 0 ? await restOfMonthHistory(safeMonth, pace) : [];
   // What each category cost last month, so a plan can be set against what actually happened.
   const previousMonth = addMonths(safeMonth, -1);
-  const previousActuals = budgetActualMaps(getMonthlyReport(undefined, previousMonth));
-  const lines = rows.map((row) => ({
-    ...budgetLineFromRow(row, actuals, pace, history),
-    previousActualPaise: scopeActual(previousActuals, row.scope_type, row.scope_id)
-  }));
-  const covered = new Set(lines.map((line) => `${line.scopeType}:${line.scopeId}`));
-  const coveredTypeIds = new Set(lines.filter((line) => line.scopeType === "type").map((line) => line.typeId));
-  const coveredSubcategoryIds = new Set(
-    lines.filter((line) => line.scopeType === "subcategory" && line.subcategoryId).map((line) => line.subcategoryId)
+  const previousActuals = await budgetActualMaps(
+    await getMonthlyReport(undefined, previousMonth),
   );
-  const unplannedActualPaise = report.types.reduce((sum, type) => {
+  // Promise.all: budgetLineFromRow asks the database, so the map yields promises. Spreading one
+  // would put `then` into the object and lose every field.
+  const lines = await Promise.all(
+    rows.map(async (row) => ({
+      ...(await budgetLineFromRow(row, actuals, pace, history)),
+      previousActualPaise: scopeActual(previousActuals, row.scope_type, row.scope_id)
+    }))
+  );
+  const covered = new Set(lines.map((line) => `${line.scopeType}:${line.scopeId}`));
+  const coveredTypeIds = new Set(lines.filter((line) =>line.scopeType === "type").map((line) =>line.typeId));
+  const coveredSubcategoryIds = new Set(
+    lines.filter((line) =>line.scopeType === "subcategory" &&line.subcategoryId).map((line) =>line.subcategoryId)
+  );
+  const unplannedActualPaise =report.types.reduce((sum, type) => {
     if (!BUDGETABLE_BEHAVIORS.has(type.behavior as TaxonomyBehavior) || coveredTypeIds.has(type.typeId)) {
       return sum;
     }
@@ -2221,37 +2237,48 @@ export function getBudgetPlan(month = currentMonth(), asOfDate = localIsoDate(ne
     daysInMonth: pace.daysInMonth,
     elapsedPercent: pace.elapsedPercent,
     totals: {
-      amountPaise: lines.reduce((sum, line) => sum + line.amountPaise, 0),
-      actualPaise: lines.reduce((sum, line) => sum + line.actualPaise, 0),
-      remainingPaise: lines.reduce((sum, line) => sum + line.remainingPaise, 0),
-      projectedPaise: lines.reduce((sum, line) => sum + line.projectedPaise, 0),
-      safeCount: lines.filter((line) => line.status === "safe").length,
-      watchCount: lines.filter((line) => line.status === "watch").length,
-      criticalCount: lines.filter((line) => line.status === "critical").length,
-      overCount: lines.filter((line) => line.status === "over").length,
+      amountPaise: lines.reduce((sum, line) => sum +line.amountPaise, 0),
+      actualPaise: lines.reduce((sum, line) => sum +line.actualPaise, 0),
+      remainingPaise: lines.reduce((sum, line) => sum +line.remainingPaise, 0),
+      projectedPaise: lines.reduce((sum, line) => sum +line.projectedPaise, 0),
+      safeCount: lines.filter((line) =>line.status === "safe").length,
+      watchCount: lines.filter((line) =>line.status === "watch").length,
+      criticalCount: lines.filter((line) =>line.status === "critical").length,
+      overCount: lines.filter((line) =>line.status === "over").length,
       unplannedActualPaise
     },
     lines,
-    availableScopes: listBudgetScopes(safeMonth)
-      .filter((scope) => !covered.has(`${scope.scopeType}:${scope.scopeId}`))
-      .map((scope) => ({
-        ...scope,
-        previousActualPaise: scopeActual(previousActuals, scope.scopeType, scope.scopeId)
-      }))
+    availableScopes: await Promise.all(
+      (await listBudgetScopes(safeMonth))
+        .filter((scope) => !covered.has(`${scope.scopeType}:${scope.scopeId}`))
+        .map(async (scope) => ({
+          ...scope,
+          previousActualPaise: scopeActual(previousActuals, scope.scopeType, scope.scopeId)
+        }))
+    )
   };
 }
 
-export function createBudgetLine(input: CreateBudgetLineInput): BudgetLineSummary {
+export async function createBudgetLine(input: CreateBudgetLineInput): Promise<BudgetLineSummary> {
   const parsed = createBudgetLineSchema.parse(input);
-  const scope = resolveBudgetScope(parsed.scopeType, parsed.scopeId);
-  ensureNoBudgetOverlap(parsed.month, parsed.scopeType, parsed.scopeId);
+  const scope = await resolveBudgetScope(parsed.scopeType, parsed.scopeId);
+  await ensureNoBudgetOverlap(parsed.month, parsed.scopeType, parsed.scopeId);
   const id = randomUUID();
 
   try {
-    db.prepare(
-      `INSERT INTO budget_lines (id, month, scope_type, scope_id, amount_paise)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run(id, parsed.month, parsed.scopeType, scope.scopeId, parsed.amountPaise);
+    (await db.prepare(
+      `INSERT INTO budget_lines
+         (id, month, scope_type, scope_type_id, scope_subcategory_id, amount_paise, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id,
+      parsed.month,
+      parsed.scopeType,
+      parsed.scopeType === "type" ?scope.scopeId : null,
+      parsed.scopeType === "subcategory" ?scope.scopeId : null,
+      parsed.amountPaise,
+      currentUserId()
+    ));
   } catch (error) {
     if (error instanceof Error && error.message.includes("UNIQUE")) {
       throw badRequest(`${scope.name} already has a budget for ${parsed.month}.`);
@@ -2267,20 +2294,29 @@ export function createBudgetLine(input: CreateBudgetLineInput): BudgetLineSummar
  * already cover. Lines whose Type/SubType was deleted, or that would overlap a line already
  * set this month, are skipped rather than failing the whole copy.
  */
-export function copyBudgetFromPreviousMonth(month: string) {
+export async function copyBudgetFromPreviousMonth(month: string) {
   const safeMonth = createBudgetLineSchema.shape.month.parse(month);
   const previousMonth = addMonths(safeMonth, -1);
   let copiedCount = 0;
   let skippedCount = 0;
 
-  transaction(() => {
-    for (const row of listBudgetRows(previousMonth)) {
+  await transaction(async () => {
+    for (const row of await listBudgetRows(previousMonth)) {
       try {
-        ensureNoBudgetOverlap(safeMonth, row.scope_type, row.scope_id);
-        db.prepare(
-          `INSERT INTO budget_lines (id, month, scope_type, scope_id, amount_paise)
-           VALUES (?, ?, ?, ?, ?)`
-        ).run(randomUUID(), safeMonth, row.scope_type, row.scope_id, row.amount_paise);
+        await ensureNoBudgetOverlap(safeMonth, row.scope_type, row.scope_id);
+        (await db.prepare(
+          `INSERT INTO budget_lines
+             (id, month, scope_type, scope_type_id, scope_subcategory_id, amount_paise, user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          randomUUID(),
+          safeMonth,
+          row.scope_type,
+          row.scope_type === "type" ? row.scope_id : null,
+          row.scope_type === "subcategory" ? row.scope_id : null,
+          row.amount_paise,
+          currentUserId()
+        ));
         copiedCount += 1;
       } catch {
         skippedCount += 1;
@@ -2291,22 +2327,22 @@ export function copyBudgetFromPreviousMonth(month: string) {
   return { month: safeMonth, fromMonth: previousMonth, copiedCount, skippedCount };
 }
 
-export function updateBudgetLine(id: string, input: UpdateBudgetLineInput): BudgetLineSummary {
+export async function updateBudgetLine(id: string, input: UpdateBudgetLineInput): Promise<BudgetLineSummary> {
   const parsed = updateBudgetLineSchema.parse(input);
-  const current = requireBudgetLineRow(id);
+  const current = await requireBudgetLineRow(id);
 
-  db.prepare(
+  (await db.prepare(
     `UPDATE budget_lines
      SET amount_paise = ?,
          updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
-  ).run(parsed.amountPaise ?? current.amount_paise, id);
+     WHERE id = ? AND user_id = ?`
+  ).run(parsed.amountPaise ??(await  current).amount_paise, id, currentUserId()));
 
   return getBudgetLine(id);
 }
 
-export function deleteBudgetLine(id: string) {
-  const result = db.prepare("DELETE FROM budget_lines WHERE id = ?").run(id);
+export async function deleteBudgetLine(id: string) {
+  const result = (await db.prepare("DELETE FROM budget_lines WHERE id = ? AND user_id = ?").run(id, currentUserId()));
   if (result.changes === 0) {
     throw notFound("Budget line not found.");
   }
@@ -2329,19 +2365,19 @@ export type TrendReport = {
   points: TrendPoint[];
 };
 
-export function getTrendReport(
+export async function getTrendReport(
   accountId: string | undefined,
   typeId: string,
   mode: TrendMode,
   month?: string
-): TrendReport {
-  const type = requireCategoryType(typeId);
+): Promise<TrendReport> {
+  const type = await requireCategoryType(typeId);
   const now = new Date();
   const currentYear = now.getFullYear();
   const points: TrendPoint[] = [];
   let selectedMonth: string | null = null;
 
-  const amountForType = (report: ReturnType<typeof getMonthlyReport>) =>
+  const amountForType = (report: Awaited<ReturnType<typeof getMonthlyReport>>) =>
     report.types.find((item) => item.typeId === typeId)?.amountPaise ?? 0;
 
   if (mode === "month") {
@@ -2349,7 +2385,7 @@ export function getTrendReport(
       const month = `${currentYear}-${String(index + 1).padStart(2, "0")}`;
       points.push({
         label: new Date(currentYear, index, 1).toLocaleDateString("en-IN", { month: "short" }),
-        amountPaise: amountForType(getMonthlyReport(accountId, month))
+        amountPaise: amountForType(await getMonthlyReport(accountId, month))
       });
     }
   } else if (mode === "week") {
@@ -2363,12 +2399,12 @@ export function getTrendReport(
       const to = `${selectedMonth}-${String(endDay).padStart(2, "0")}`;
       points.push({
         label: `${startDay}-${endDay}`,
-        amountPaise: amountForType(getMonthlyReport(accountId, selectedMonth, from, to))
+        amountPaise: amountForType(await getMonthlyReport(accountId, selectedMonth, from, to))
       });
     }
   } else {
     const firstRow = asRecord<{ first: string | null }>(
-      db.prepare("SELECT MIN(date) AS first FROM transactions").get()
+      (await db.prepare("SELECT MIN(date) AS first FROM transactions WHERE user_id = ?").get(currentUserId()))
     );
     const firstYear = firstRow?.first ? Number(firstRow.first.slice(0, 4)) : currentYear;
     // Cap the window so a mis-dated transaction can never trigger an unbounded
@@ -2377,12 +2413,12 @@ export function getTrendReport(
     for (let year = startYear; year <= currentYear; year += 1) {
       points.push({
         label: String(year),
-        amountPaise: amountForType(getMonthlyReport(accountId, `${year}-01`, `${year}-01-01`, `${year}-12-31`))
+        amountPaise: amountForType(await getMonthlyReport(accountId, `${year}-01`, `${year}-01-01`, `${year}-12-31`))
       });
     }
   }
 
-  return { mode, typeId, typeName: type.name, color: type.color, month: selectedMonth, points };
+  return { mode, typeId, typeName:(await type).name, color:(await type).color, month: selectedMonth, points };
 }
 
 export type BudgetTrendPoint = {
@@ -2399,47 +2435,48 @@ export type BudgetTrendReport = {
   points: BudgetTrendPoint[];
 };
 
-function subcategoryBudgetForMonth(subcategoryId: string, month: string): number | null {
+async function subcategoryBudgetForMonth(subcategoryId: string, month: string): Promise<number | null> {
   const row = asRecord<{ amount_paise: number } | undefined>(
-    db
+    (await db
       .prepare(
-        "SELECT amount_paise FROM budget_lines WHERE scope_type = 'subcategory' AND scope_id = ? AND month = ? LIMIT 1"
+        `SELECT amount_paise FROM budget_lines
+         WHERE scope_subcategory_id = ? AND month = ? AND user_id = ? LIMIT 1`
       )
-      .get(subcategoryId, month)
+      .get(subcategoryId, month, currentUserId()))
   );
   return row ? row.amount_paise : null;
 }
 
-export function getBudgetTrendReport(
+export async function getBudgetTrendReport(
   accountId: string | undefined,
   subcategoryId: string,
   mode: TrendMode,
   month?: string
-): BudgetTrendReport {
+): Promise<BudgetTrendReport> {
   // Validates the SubType is real and budgetable, and resolves its display name/colour.
-  const scope = resolveBudgetScope("subcategory", subcategoryId);
+  const scope = await resolveBudgetScope("subcategory", subcategoryId);
   const now = new Date();
   const currentYear = now.getFullYear();
   const points: BudgetTrendPoint[] = [];
   let selectedMonth: string | null = null;
 
-  const actualForSub = (report: ReturnType<typeof getMonthlyReport>) =>
-    budgetActualMaps(report).subcategoryActuals.get(subcategoryId) ?? 0;
+  const actualForSub = async (report: Awaited<ReturnType<typeof getMonthlyReport>>) =>
+    (await budgetActualMaps(report)).subcategoryActuals.get(subcategoryId) ?? 0;
 
   if (mode === "month") {
     for (let index = 0; index <= now.getMonth(); index += 1) {
       const periodMonth = `${currentYear}-${String(index + 1).padStart(2, "0")}`;
       points.push({
         label: new Date(currentYear, index, 1).toLocaleDateString("en-IN", { month: "short" }),
-        actualPaise: actualForSub(getMonthlyReport(accountId, periodMonth)),
-        budgetPaise: subcategoryBudgetForMonth(subcategoryId, periodMonth)
+        actualPaise: await actualForSub(await getMonthlyReport(accountId, periodMonth)),
+        budgetPaise: await subcategoryBudgetForMonth(subcategoryId, periodMonth)
       });
     }
   } else if (mode === "week") {
     // Budgets are monthly, so the monthly budget is pro-rated evenly across the month's weeks.
     selectedMonth = /^\d{4}-\d{2}$/.test(month ?? "") ? (month as string) : currentMonth();
     const daysInMonth = Number(monthEndDate(selectedMonth).slice(8, 10));
-    const monthBudget = subcategoryBudgetForMonth(subcategoryId, selectedMonth);
+    const monthBudget = await subcategoryBudgetForMonth(subcategoryId, selectedMonth);
     const weekCount = Math.ceil(daysInMonth / 7);
     const weeklyBudget = monthBudget === null ? null : Math.round(monthBudget / weekCount);
     for (let startDay = 1; startDay <= daysInMonth; startDay += 7) {
@@ -2448,13 +2485,13 @@ export function getBudgetTrendReport(
       const to = `${selectedMonth}-${String(endDay).padStart(2, "0")}`;
       points.push({
         label: `${startDay}-${endDay}`,
-        actualPaise: actualForSub(getMonthlyReport(accountId, selectedMonth, from, to)),
+        actualPaise: await actualForSub(await getMonthlyReport(accountId, selectedMonth, from, to)),
         budgetPaise: weeklyBudget
       });
     }
   } else {
     const firstRow = asRecord<{ first: string | null }>(
-      db.prepare("SELECT MIN(date) AS first FROM transactions").get()
+      (await db.prepare("SELECT MIN(date) AS first FROM transactions WHERE user_id = ?").get(currentUserId()))
     );
     const firstYear = firstRow?.first ? Number(firstRow.first.slice(0, 4)) : currentYear;
     const startYear = Math.max(Math.min(firstYear, currentYear), currentYear - 9);
@@ -2462,14 +2499,14 @@ export function getBudgetTrendReport(
       // A year's budget is the sum of whatever monthly budgets were set that year.
       let budgetSum: number | null = null;
       for (let monthIndex = 1; monthIndex <= 12; monthIndex += 1) {
-        const monthly = subcategoryBudgetForMonth(subcategoryId, `${year}-${String(monthIndex).padStart(2, "0")}`);
+        const monthly = await subcategoryBudgetForMonth(subcategoryId, `${year}-${String(monthIndex).padStart(2, "0")}`);
         if (monthly !== null) {
           budgetSum = (budgetSum ?? 0) + monthly;
         }
       }
       points.push({
         label: String(year),
-        actualPaise: actualForSub(getMonthlyReport(accountId, `${year}-01`, `${year}-01-01`, `${year}-12-31`)),
+        actualPaise: await actualForSub(await getMonthlyReport(accountId, `${year}-01`, `${year}-01-01`, `${year}-12-31`)),
         budgetPaise: budgetSum
       });
     }
@@ -2478,7 +2515,7 @@ export function getBudgetTrendReport(
   return {
     mode,
     subcategoryId,
-    name: scope.name,
+    name:scope.name,
     month: selectedMonth,
     points
   };
@@ -2495,11 +2532,11 @@ export type PaymentHistory = {
 
 const PAYMENT_HISTORY_SOURCES = new Set<PaymentHistorySource>(["loan", "autopay", "mutual_fund"]);
 
-export function getPaymentHistory(
+export async function getPaymentHistory(
   source: PaymentHistorySource,
   id: string,
   year: number
-): PaymentHistory {
+): Promise<PaymentHistory> {
   if (!PAYMENT_HISTORY_SOURCES.has(source)) {
     throw badRequest("Unknown payment history source.");
   }
@@ -2510,38 +2547,38 @@ export function getPaymentHistory(
   let rows: Array<{ month: string }>;
   if (source === "loan") {
     rows = asRecords<{ month: string }>(
-      db
+      (await db
         .prepare(
           `SELECT DISTINCT substr(t.date, 6, 2) AS month
            FROM transactions t
-           JOIN loan_payments lp ON lp.transaction_id = t.id
-           WHERE lp.loan_id = ? AND substr(t.date, 1, 4) = ?`
+           JOIN loan_payments lp ON lp.transaction_id = t.id AND lp.user_id = t.user_id
+           WHERE lp.loan_id = ? AND t.user_id = ? AND substr(t.date, 1, 4) = ?`
         )
-        .all(id, yearText)
+        .all(id, currentUserId(), yearText))
     );
   } else if (source === "autopay") {
     rows = asRecords<{ month: string }>(
-      db
+      (await db
         .prepare(
           `SELECT DISTINCT substr(t.date, 6, 2) AS month
            FROM transactions t
-           JOIN autopay_payments ap ON ap.transaction_id = t.id
-           WHERE ap.subscription_id = ? AND substr(t.date, 1, 4) = ?`
+           JOIN autopay_payments ap ON ap.transaction_id = t.id AND ap.user_id = t.user_id
+           WHERE ap.subscription_id = ? AND t.user_id = ? AND substr(t.date, 1, 4) = ?`
         )
-        .all(id, yearText)
+        .all(id, currentUserId(), yearText))
     );
   } else {
     // A month ticks only when a Mutual-Funds investment transaction is explicitly
     // linked to THIS holding (via the investment picker), mirroring AutoPay/loan linking.
     rows = asRecords<{ month: string }>(
-      db
+      (await db
         .prepare(
           `SELECT DISTINCT substr(t.date, 6, 2) AS month
            FROM transactions t
-           JOIN investment_payments iph ON iph.transaction_id = t.id
-           WHERE iph.investment_id = ? AND substr(t.date, 1, 4) = ?`
+           JOIN investment_payments iph ON iph.transaction_id = t.id AND iph.user_id = t.user_id
+           WHERE iph.investment_id = ? AND t.user_id = ? AND substr(t.date, 1, 4) = ?`
         )
-        .all(id, yearText)
+        .all(id, currentUserId(), yearText))
     );
   }
 
@@ -2556,7 +2593,7 @@ export function getPaymentHistory(
   return { source, id, year: safeYear, months };
 }
 
-export function getMonthlyReport(
+export async function getMonthlyReport(
   accountId?: string,
   month = currentMonth(),
   from?: string,
@@ -2564,14 +2601,14 @@ export function getMonthlyReport(
 ) {
   const range = resolveReportRange(month, from, to);
   const { start, end } = range;
-  const params: SqlParam[] = [start, end];
+  const params: SqlParam[] = [currentUserId(), start, end];
   const accountFilter = accountId ? "AND (t.account_id = ? OR t.transfer_account_id = ?)" : "";
   if (accountId) {
     params.push(accountId, accountId);
   }
 
   const reportRows = asRecords<ReportSourceRow>(
-    db
+    (await db
       .prepare(
         `SELECT t.kind, t.direction, t.amount_paise, t.transfer_account_id,
                 tt.id AS type_id, tt.name AS type_name, tt.behavior AS type_behavior,
@@ -2591,19 +2628,20 @@ export function getMonthlyReport(
                 ss.icon AS split_subcategory_icon, ss.color AS split_subcategory_color,
                 s.amount_paise AS split_amount_paise
          FROM transactions t
-         LEFT JOIN category_types tt ON tt.id = t.type_id
-         LEFT JOIN subcategories ts ON ts.id = t.subcategory_id
-         LEFT JOIN accounts ota ON ota.id = t.transfer_account_id
+         LEFT JOIN category_types tt ON tt.id = t.type_id AND tt.user_id = t.user_id
+         LEFT JOIN subcategories ts ON ts.id = t.subcategory_id AND ts.user_id = t.user_id
+         LEFT JOIN accounts ota ON ota.id = t.transfer_account_id AND ota.user_id = t.user_id
          LEFT JOIN transactions original ON original.id = t.linked_transaction_id
-         LEFT JOIN category_types ott ON ott.id = original.type_id
-         LEFT JOIN subcategories ots ON ots.id = original.subcategory_id
-         LEFT JOIN transaction_splits s ON s.transaction_id = t.id
-         LEFT JOIN subcategories ss ON ss.id = s.subcategory_id
-         LEFT JOIN category_types st ON st.id = ss.type_id
-         WHERE t.date >= ? AND t.date <= ?
+                                        AND original.user_id = t.user_id
+         LEFT JOIN category_types ott ON ott.id = original.type_id AND ott.user_id = t.user_id
+         LEFT JOIN subcategories ots ON ots.id = original.subcategory_id AND ots.user_id = t.user_id
+         LEFT JOIN transaction_splits s ON s.transaction_id = t.id AND s.user_id = t.user_id
+         LEFT JOIN subcategories ss ON ss.id = s.subcategory_id AND ss.user_id = t.user_id
+         LEFT JOIN category_types st ON st.id = ss.type_id AND st.user_id = t.user_id
+         WHERE t.user_id = ? AND t.date >= ? AND t.date <= ?
            ${accountFilter}`
       )
-      .all(...params)
+      .all(...params))
   );
 
   const typeTotals = new Map<string, ReportTypeAccumulator>();
@@ -2684,17 +2722,17 @@ export function getMonthlyReport(
     loan: number | null;
     investment: number | null;
   }>(
-    db
+    (await db
       .prepare(
         `SELECT
            SUM(CASE WHEN kind = 'income' AND direction = 'inflow' THEN amount_paise ELSE 0 END) AS income,
            SUM(CASE WHEN kind = 'emi' AND direction = 'outflow' THEN amount_paise ELSE 0 END) AS loan,
            SUM(CASE WHEN kind = 'investment' AND direction = 'outflow' THEN amount_paise ELSE 0 END) AS investment
          FROM transactions t
-         WHERE t.date >= ? AND t.date <= ?
+         WHERE t.user_id = ? AND t.date >= ? AND t.date <= ?
            ${accountFilter}`
       )
-      .get(...params)
+      .get(...params))
   );
 
   const typeRows = Array.from(typeTotals.values())
@@ -2761,7 +2799,6 @@ export function getMonthlyReport(
     loanPaise: totals.loan ?? 0,
     investmentPaise: totals.investment ?? 0,
     categories: categoryRows.map((row) => ({
-      categoryId: row.subcategoryId,
       subcategoryId: row.subcategoryId,
       typeId: row.typeId,
       name: row.name,
@@ -2928,28 +2965,36 @@ function reportSign(row: ReportSourceRow) {
   return 0;
 }
 
-function listBudgetRows(month: string) {
+async function listBudgetRows(month: string) {
   return asRecords<BudgetLineRow>(
-    db
+    (await db
       .prepare(
-        `SELECT id, month, scope_type, scope_id, amount_paise, created_at, updated_at
+        `SELECT id, month, scope_type,
+                -- D8 split the one polymorphic column in two; everything above still reads a
+                -- single scope_id, and exactly one of the two is ever set.
+                COALESCE(scope_type_id, scope_subcategory_id) AS scope_id,
+                amount_paise, created_at, updated_at
          FROM budget_lines
-         WHERE month = ?
+         WHERE month = ? AND user_id = ?
          ORDER BY created_at, id`
       )
-      .all(month)
+      .all(month, currentUserId()))
   );
 }
 
-function requireBudgetLineRow(id: string) {
+async function requireBudgetLineRow(id: string) {
   const row = asRecord<BudgetLineRow | undefined>(
-    db
+    (await db
       .prepare(
-        `SELECT id, month, scope_type, scope_id, amount_paise, created_at, updated_at
+        `SELECT id, month, scope_type,
+                -- D8 split the one polymorphic column in two; everything above still reads a
+                -- single scope_id, and exactly one of the two is ever set.
+                COALESCE(scope_type_id, scope_subcategory_id) AS scope_id,
+                amount_paise, created_at, updated_at
          FROM budget_lines
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId()))
   );
   if (!row) {
     throw notFound("Budget line not found.");
@@ -2957,14 +3002,19 @@ function requireBudgetLineRow(id: string) {
   return row;
 }
 
-function getBudgetLine(id: string): BudgetLineSummary {
-  const row = requireBudgetLineRow(id);
-  const report = getMonthlyReport(undefined, row.month);
+async function getBudgetLine(id: string): Promise<BudgetLineSummary> {
+  const row = await requireBudgetLineRow(id);
+  const report = await getMonthlyReport(undefined, row.month);
   const pace = budgetPace(row.month, localIsoDate(new Date()));
-  return budgetLineFromRow(row, budgetActualMaps(report), pace, restOfMonthHistory(row.month, pace));
+  return budgetLineFromRow(
+    row,
+    await budgetActualMaps(report),
+    pace,
+    await restOfMonthHistory(row.month, pace),
+  );
 }
 
-function budgetActualMaps(report: ReturnType<typeof getMonthlyReport>) {
+async function budgetActualMaps(report: Awaited<ReturnType<typeof getMonthlyReport>>) {
   const typeActuals = new Map<string, number>();
   const subcategoryActuals = new Map<string, number>();
 
@@ -2981,7 +3031,7 @@ function budgetActualMaps(report: ReturnType<typeof getMonthlyReport>) {
   return { typeActuals, subcategoryActuals };
 }
 
-type BudgetActuals = ReturnType<typeof budgetActualMaps>;
+type BudgetActuals = Awaited<ReturnType<typeof budgetActualMaps>>;
 
 function scopeActual(actuals: BudgetActuals, scopeType: string, scopeId: string) {
   return scopeType === "type"
@@ -2994,7 +3044,7 @@ function scopeActual(actuals: BudgetActuals, scopeType: string, scopeId: string)
  * of the month, per budget scope. Rent and bills land early in the month, so the typical
  * remainder is a far better guide to month-end than stretching today's total in a line.
  */
-function restOfMonthHistory(month: string, pace: ReturnType<typeof budgetPace>) {
+async function restOfMonthHistory(month: string, pace: Awaited<ReturnType<typeof budgetPace>>) {
   if (pace.dayOfMonth <= 0 || pace.dayOfMonth >= pace.daysInMonth) {
     return [];
   }
@@ -3004,15 +3054,17 @@ function restOfMonthHistory(month: string, pace: ReturnType<typeof budgetPace>) 
     const start = `${past}-01`;
     const end = monthEndDate(past);
     const active = asRecord<{ count: number }>(
-      db.prepare("SELECT COUNT(*) AS count FROM transactions WHERE date BETWEEN ? AND ?").get(start, end)
+      (await db
+        .prepare("SELECT COUNT(*) AS count FROM transactions WHERE date BETWEEN ? AND ? AND user_id = ?")
+        .get(start, end, currentUserId()))
     ).count;
     if (active === 0) {
       continue;
     }
     const sameDay = `${past}-${String(Math.min(pace.dayOfMonth, Number(end.slice(8, 10)))).padStart(2, "0")}`;
     history.push({
-      full: budgetActualMaps(getMonthlyReport(undefined, past)),
-      toDate: budgetActualMaps(getMonthlyReport(undefined, past, start, sameDay))
+      full: await budgetActualMaps(await getMonthlyReport(undefined, past)),
+      toDate: await budgetActualMaps(await getMonthlyReport(undefined, past, start, sameDay))
     });
   }
   return history;
@@ -3048,13 +3100,13 @@ export function projectBudgetPaise(actualPaise: number, elapsedPercent: number, 
   return Math.max(actualPaise, Math.round(projected / 100) * 100);
 }
 
-function budgetLineFromRow(
+async function budgetLineFromRow(
   row: BudgetLineRow,
   actuals: BudgetActuals,
-  pace: ReturnType<typeof budgetPace>,
+  pace: Awaited<ReturnType<typeof budgetPace>>,
   history: Array<{ full: BudgetActuals; toDate: BudgetActuals }> = []
-): BudgetLineSummary {
-  const scope = resolveBudgetScope(row.scope_type, row.scope_id);
+): Promise<BudgetLineSummary> {
+  const scope = await resolveBudgetScope(row.scope_type, row.scope_id);
   const actualPaise =
     row.scope_type === "type"
       ? actuals.typeActuals.get(row.scope_id) ?? 0
@@ -3165,14 +3217,14 @@ function percent(value: number, total: number) {
   return total > 0 ? Math.round((value / total) * 100) : 0;
 }
 
-function listBudgetScopes(month: string): BudgetScopeSummary[] {
-  const existing = listBudgetRows(month);
+async function listBudgetScopes(month: string): Promise<BudgetScopeSummary[]> {
+  const existing = await listBudgetRows(month);
   const typeBudgetIds = new Set<string>();
   const subcategoryBudgetTypeIds = new Set<string>();
   const blockedSubcategoryIds = new Set<string>();
 
   for (const row of existing) {
-    const scope = resolveBudgetScope(row.scope_type, row.scope_id);
+    const scope = await resolveBudgetScope(row.scope_type, row.scope_id);
     if (scope.scopeType === "type") {
       typeBudgetIds.add(scope.typeId);
     } else if (scope.subcategoryId) {
@@ -3182,7 +3234,7 @@ function listBudgetScopes(month: string): BudgetScopeSummary[] {
   }
 
   const scopes: BudgetScopeSummary[] = [];
-  for (const type of listCategoryTypes()) {
+  for (const type of await listCategoryTypes()) {
     if (!BUDGETABLE_BEHAVIORS.has(type.behavior)) {
       continue;
     }
@@ -3224,105 +3276,74 @@ function listBudgetScopes(month: string): BudgetScopeSummary[] {
   return scopes;
 }
 
-function resolveBudgetScope(scopeType: BudgetScopeType, scopeId: string): BudgetScopeSummary {
+async function resolveBudgetScope(scopeType: BudgetScopeType, scopeId: string): Promise<BudgetScopeSummary> {
   if (scopeType === "type") {
-    const type = requireCategoryType(scopeId);
-    if (!BUDGETABLE_BEHAVIORS.has(type.behavior)) {
+    const type = await requireCategoryType(scopeId);
+    if (!BUDGETABLE_BEHAVIORS.has((await type).behavior)) {
       throw badRequest("Selected Type is not available for budgeting.");
     }
     return {
       // The planner fills this in; a scope on its own has no month to compare against.
       previousActualPaise: 0,
       scopeType,
-      scopeId: type.id,
-      typeId: type.id,
+      scopeId:(await type).id,
+      typeId:(await type).id,
       subcategoryId: null,
-      name: type.name,
-      typeName: type.name,
-      behavior: type.behavior,
-      icon: type.icon,
-      color: type.color
+      name:(await type).name,
+      typeName:(await type).name,
+      behavior:(await type).behavior,
+      icon:(await type).icon,
+      color:(await type).color
     };
   }
 
-  const subcategory = getSubcategoryRow(scopeId);
+  const subcategory = await getSubcategoryRow(scopeId);
   if (!subcategory) {
     throw badRequest("Selected SubType does not exist.");
   }
-  const type = requireCategoryType(subcategory.type_id);
-  if (!BUDGETABLE_BEHAVIORS.has(type.behavior)) {
+  const type = await requireCategoryType(subcategory.type_id);
+  if (!BUDGETABLE_BEHAVIORS.has((await type).behavior)) {
     throw badRequest("Selected SubType is not available for budgeting.");
   }
   return {
     previousActualPaise: 0,
     scopeType,
-    scopeId: subcategory.id,
-    typeId: type.id,
-    subcategoryId: subcategory.id,
-    name: `${type.name} / ${subcategory.name}`,
-    typeName: type.name,
-    behavior: type.behavior,
-    icon: subcategory.icon,
-    color: subcategory.color
+    scopeId:(await subcategory).id,
+    typeId:(await type).id,
+    subcategoryId:(await subcategory).id,
+    name: `${(await type).name} / ${(await subcategory).name}`,
+    typeName:(await type).name,
+    behavior:(await type).behavior,
+    icon:(await subcategory).icon,
+    color:(await subcategory).color
   };
 }
 
-function ensureNoBudgetOverlap(
+async function ensureNoBudgetOverlap(
   month: string,
   scopeType: BudgetScopeType,
   scopeId: string,
   exceptId?: string
 ) {
-  const nextScope = resolveBudgetScope(scopeType, scopeId);
-  const rows = listBudgetRows(month).filter((row) => row.id !== exceptId);
+  const nextScope = await resolveBudgetScope(scopeType, scopeId);
+  const rows = (await listBudgetRows(month)).filter((row) => row.id !== exceptId);
 
   for (const row of rows) {
-    const existingScope = resolveBudgetScope(row.scope_type, row.scope_id);
-    if (existingScope.scopeType === nextScope.scopeType && existingScope.scopeId === nextScope.scopeId) {
+    const existingScope = await resolveBudgetScope(row.scope_type, row.scope_id);
+    if (existingScope.scopeType ===nextScope.scopeType &&existingScope.scopeId ===nextScope.scopeId) {
       throw badRequest(`${nextScope.name} already has a budget for ${month}.`);
     }
-    if (existingScope.typeId === nextScope.typeId && (existingScope.scopeType === "type" || nextScope.scopeType === "type")) {
+    if (existingScope.typeId ===nextScope.typeId && (existingScope.scopeType === "type" ||nextScope.scopeType === "type")) {
       throw badRequest("Budget scopes overlap. Choose either the Type or its SubTypes for this month.");
     }
   }
 }
 
-export function createBackup(mode: BackupMode = "manual") {
-  const backupDir = ensureBackupDir();
-  const createdAt = new Date().toISOString();
-  const stamp = createdAt.replace(/[:.]/g, "-");
-  const target = path.join(backupDir, `finance-${stamp}.db`);
-
-  const settings = getSettings();
-  const previousStatus = {
-    lastBackupAt: settings.last_backup_at ?? null,
-    lastBackupPath: settings.last_backup_path ?? null,
-    lastBackupMode: settings.last_backup_mode ?? null
-  };
-
-  setSetting("last_backup_at", createdAt);
-  setSetting("last_backup_path", target);
-  setSetting("last_backup_mode", mode);
-
-  try {
-    db.prepare("VACUUM INTO ?").run(target);
-    pruneBackupFiles(backupDir);
-  } catch (error) {
-    if (existsSync(target)) {
-      unlinkSync(target);
-    }
-    restoreBackupStatus(previousStatus);
-    throw error;
-  }
-
-  return { path: target, mode, createdAt };
-}
-
-export function exportTransactionsCsv(query: Omit<TransactionQuery, "limit" | "offset"> = {}) {
+export async function exportTransactionsCsv(query: Omit<TransactionQuery, "limit" | "offset"> = {}) {
   const rows: TransactionSummary[] = [];
   for (let offset = 0; ; offset += 500) {
     // Same filters as the ledger, so the file holds exactly the rows the user is looking at.
-    const page = listTransactions({ ...query, limit: 500, offset });
+    const page = await listTransactions({ ...query, limit: 500, offset });
     rows.push(...page);
     if (page.length < 500) break;
   }
@@ -3414,7 +3435,7 @@ export async function buildImportTemplate() {
     { header: "Note", key: "note", width: 32 }
   ];
   transactionSheet.getRow(1).font = { bold: true };
-  const sampleAccount = listAccounts().find((account) => !account.isArchived);
+  const sampleAccount = (await listAccounts()).find((account) => !account.isArchived);
   transactionSheet.addRow({
     date: currentIsoDate(),
     account: sampleAccount?.name ?? "My Bank Account",
@@ -3439,14 +3460,14 @@ export async function buildImportTemplate() {
   ];
   lookups.getRow(1).font = { bold: true };
 
-  const taxonomy = listCategoryTypes();
-  const accounts = listAccounts().filter((account) => !account.isArchived);
+  const taxonomy = await listCategoryTypes();
+  const accounts = (await listAccounts()).filter((account) => !account.isArchived);
   const cardAccounts = accounts.filter((account) => account.type === "credit_card");
   const accountTypes = ["Bank account", "Credit card", "Food card"];
   const typeBehaviors = ["Expense", "Income", "Loan", "Investment", "Transfer", "Refund"];
   const methods = ["UPI", "Credit card", "Bank transfer", "Cash", "Other"];
-  const typeNames = taxonomy.map((type) => type.name);
-  const subtypeRows = taxonomy.flatMap((type) => {
+  const typeNames =taxonomy.map((type) => type.name);
+  const subtypeRows =taxonomy.flatMap((type) => {
     if (type.behavior === "card_payment") {
       return cardAccounts.map((card) => ({
         subtypes: card.name,
@@ -3564,7 +3585,7 @@ export async function importTransactionsWorkbook(buffer: Buffer, batchId?: strin
   const importKeys = new Set<string>();
   const affectedAccounts = new Map<string, string>();
   let skippedDuplicateCount = 0;
-  const context = buildImportContext();
+  const context = await buildImportContext();
 
   for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
     const row = sheet.getRow(rowNumber);
@@ -3584,13 +3605,13 @@ export async function importTransactionsWorkbook(buffer: Buffer, batchId?: strin
       continue;
     }
 
-    const parsed = parseImportRow(values, context, batchId);
+    const parsed = await parseImportRow(values, context, batchId);
     if ("error" in parsed) {
       errors.push({ row: rowNumber, message: parsed.error });
     } else {
-      affectedAccounts.set(parsed.payload.accountId, importAccountNameById(context, parsed.payload.accountId));
+      affectedAccounts.set(parsed.payload.accountId, importAccountNameById(context,parsed.payload.accountId));
       const duplicateKey = exactImportDuplicateKey(parsed.payload);
-      if (importKeys.has(duplicateKey) || exactTransactionExists(parsed.payload)) {
+      if (importKeys.has(duplicateKey) || await exactTransactionExists(parsed.payload)) {
         skippedDuplicateCount += 1;
         continue;
       }
@@ -3612,26 +3633,26 @@ export async function importTransactionsWorkbook(buffer: Buffer, batchId?: strin
     };
   }
 
-  transaction(() => {
-    insertImportPlans(context);
+  await transaction(async () => {
+    await insertImportPlans(context);
     for (const row of validRows) {
-      insertValidatedTransaction(createTransactionSchema.parse(row));
+      await insertValidatedTransaction(createTransactionSchema.parse(row));
     }
   });
 
   return {
     insertedCount: validRows.length,
     errors,
-    createdAccounts: context.createdAccounts,
-    createdTypes: context.createdTypes,
-    createdSubcategories: context.createdSubcategories,
+    createdAccounts:context.createdAccounts,
+    createdTypes:context.createdTypes,
+    createdSubcategories:context.createdSubcategories,
     affectedAccounts: Array.from(affectedAccounts, ([id, name]) => ({ id, name })),
     skippedDuplicateCount,
-    warnings: context.warnings
+    warnings:context.warnings
   };
 }
 
-function getBatch(id: string) {
+async function getBatch(id: string) {
   const row = asRecord<
     | {
         id: string;
@@ -3643,13 +3664,13 @@ function getBatch(id: string) {
       }
     | undefined
   >(
-    db
+    (await db
       .prepare(
         `SELECT id, week_start, week_end, status, created_at, saved_at
          FROM entry_batches
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId()))
   );
 
   if (!row) {
@@ -3666,17 +3687,17 @@ function getBatch(id: string) {
   };
 }
 
-function requireLoanRow(id: string) {
+async function requireLoanRow(id: string) {
   const row = asRecord<LoanRow | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id, name, subcategory_id, principal_amount_paise, starting_outstanding_paise,
                 start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day,
                 is_archived, created_at, updated_at
          FROM loans
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId()))
   );
 
   if (!row) {
@@ -3685,46 +3706,46 @@ function requireLoanRow(id: string) {
   return row;
 }
 
-function requireLoanSummary(id: string) {
-  return mapLoan(requireLoanRow(id));
+async function requireLoanSummary(id: string) {
+  return mapLoan(await requireLoanRow(id));
 }
 
-function requireActiveLoan(id: string) {
-  const loan = requireLoanRow(id);
-  if (loan.is_archived) {
+async function requireActiveLoan(id: string) {
+  const loan = await requireLoanRow(id);
+  if ((await loan).is_archived) {
     throw badRequest("Archived loans cannot receive new payments.");
   }
   return loan;
 }
 
-function requireLoanSubcategory(id: string) {
-  const subcategory = getSubcategoryRow(id);
+async function requireLoanSubcategory(id: string) {
+  const subcategory = await getSubcategoryRow(id);
   if (!subcategory) {
     throw badRequest("Selected loan type does not exist.");
   }
-  const type = getCategoryTypeRow(subcategory.type_id);
+  const type = await getCategoryTypeRow(subcategory.type_id);
   if (type?.behavior !== "loan") {
     throw badRequest("Loan must use a SubType under Type = Loan.");
   }
   return subcategory;
 }
 
-function mapLoan(row: LoanRow): LoanSummary {
-  const subcategory = getSubcategoryRow(row.subcategory_id);
+async function mapLoan(row: LoanRow): Promise<LoanSummary> {
+  const subcategory = await getSubcategoryRow(row.subcategory_id);
   const paymentTotals = asRecord<{
     principal_paise: number;
     interest_paise: number;
     emi_count: number;
   }>(
-    db
+    (await db
       .prepare(
         `SELECT COALESCE(SUM(principal_paise), 0) AS principal_paise,
                 COALESCE(SUM(interest_paise), 0) AS interest_paise,
                 COALESCE(SUM(CASE WHEN payment_type = 'emi' THEN 1 ELSE 0 END), 0) AS emi_count
          FROM loan_payments
-         WHERE loan_id = ?`
+         WHERE loan_id = ? AND user_id = ?`
       )
-      .get(row.id)
+      .get(row.id, currentUserId()))
   );
   const openingPrincipalPaidPaise = Math.max(
     row.principal_amount_paise - row.starting_outstanding_paise,
@@ -3734,13 +3755,13 @@ function mapLoan(row: LoanRow): LoanSummary {
   // estimated history must stop the month before that EMI. Otherwise an EMI backfilled for
   // an earlier month is counted once as "history" and again as a tracked payment.
   const earliestEmiMonth = asRecord<{ month: string | null }>(
-    db
+    (await db
       .prepare(
         `SELECT MIN(substr(t.date, 1, 7)) AS month
-         FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id
-         WHERE lp.loan_id = ? AND lp.payment_type = 'emi'`
+         FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id AND t.user_id = lp.user_id
+         WHERE lp.loan_id = ? AND lp.user_id = ? AND lp.payment_type = 'emi'`
       )
-      .get(row.id)
+      .get(row.id, currentUserId()))
   ).month;
   const createdMonth = localMonthFromSqliteTimestamp(row.created_at);
   const trackingStartMonth =
@@ -3785,13 +3806,13 @@ function mapLoan(row: LoanRow): LoanSummary {
   const monthsElapsed = historicalInstallments + trackedEmiCount;
   // The remaining EMIs start this month unless this month's EMI is already recorded.
   const paidThisMonth = asRecord<{ count: number }>(
-    db
+    (await db
       .prepare(
         `SELECT COUNT(*) AS count
-         FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id
-         WHERE lp.loan_id = ? AND lp.payment_type = 'emi' AND substr(t.date, 1, 7) = ?`
+         FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id AND t.user_id = lp.user_id
+         WHERE lp.loan_id = ? AND lp.user_id = ? AND lp.payment_type = 'emi' AND substr(t.date, 1, 7) = ?`
       )
-      .get(row.id, currentMonth())
+      .get(row.id, currentUserId(), currentMonth()))
   ).count > 0;
   const closureMonth =
     monthsLeft > 0 ? addMonths(currentMonth(), (paidThisMonth ? 1 : 0) + monthsLeft - 1) : null;
@@ -3931,64 +3952,67 @@ function calculateLoanPaymentSplitFromOutstanding(
   };
 }
 
-function refreshLoanPayments(loanId: string) {
-  const loan = requireLoanRow(loanId);
+async function refreshLoanPayments(loanId: string) {
+  const loan = await requireLoanRow(loanId);
   const payments = asRecords<LoanPaymentRow>(
-    db
+    (await db
       .prepare(
         `SELECT lp.id, lp.loan_id, lp.transaction_id, lp.payment_type, lp.amount_paise, lp.principal_paise,
                 lp.interest_paise, lp.outstanding_before_paise, lp.outstanding_after_paise,
                 lp.created_at, lp.updated_at
          FROM loan_payments lp
-         JOIN transactions t ON t.id = lp.transaction_id
-         WHERE lp.loan_id = ?
+         JOIN transactions t ON t.id = lp.transaction_id AND t.user_id = lp.user_id
+         WHERE lp.loan_id = ? AND lp.user_id = ?
          ORDER BY t.date ASC, t.created_at ASC, lp.id ASC`
       )
-      .all(loanId)
+      .all(loanId, currentUserId()))
   );
 
-  let outstandingPaise = loan.starting_outstanding_paise;
+  let outstandingPaise =(await  loan).starting_outstanding_paise;
   for (const payment of payments) {
     const split = calculateLoanPaymentSplitFromOutstanding(
-      outstandingPaise,
-      loan.annual_interest_rate_bps,
+      outstandingPaise,(await 
+      loan).annual_interest_rate_bps,
       payment.amount_paise,
-      payment.payment_type,
-      loan.monthly_emi_paise
+      payment.payment_type,(await 
+      loan).monthly_emi_paise
     );
-    db.prepare(
+    (await db.prepare(
       `UPDATE loan_payments
        SET principal_paise = ?, interest_paise = ?, outstanding_before_paise = ?,
            outstanding_after_paise = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`
+       WHERE id = ? AND user_id = ?`
     ).run(
       split.principalPaise,
       split.interestPaise,
       split.outstandingBeforePaise,
       split.outstandingAfterPaise,
-      payment.id
-    );
+      payment.id,
+      currentUserId()
+    ));
     outstandingPaise = split.outstandingAfterPaise;
   }
 }
 
-function getLoanPaymentForTransaction(transactionId: string) {
+async function getLoanPaymentForTransaction(transactionId: string) {
   return asRecord<LoanPaymentRow | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id, loan_id, transaction_id, payment_type, amount_paise, principal_paise,
                 interest_paise, outstanding_before_paise, outstanding_after_paise, created_at, updated_at
          FROM loan_payments
-         WHERE transaction_id = ?
+         WHERE transaction_id = ? AND user_id = ?
          LIMIT 1`
       )
-      .get(transactionId)
+      .get(transactionId, currentUserId()))
   );
 }
 
-function mapAutopaySubscription(row: AutopaySubscriptionRow): AutopaySubscriptionSummary {
+async function mapAutopaySubscription(row: AutopaySubscriptionRow): Promise<AutopaySubscriptionSummary> {
   const paymentCount = asRecord<{ count: number }>(
-    db.prepare("SELECT COUNT(*) AS count FROM autopay_payments WHERE subscription_id = ?").get(row.id)
+    (await db
+      .prepare("SELECT COUNT(*) AS count FROM autopay_payments WHERE subscription_id = ? AND user_id = ?")
+      .get(row.id, currentUserId()))
   ).count;
   const expiryDate = addMonthsToIsoDate(row.start_date, row.duration_months);
   const status: "active" | "expired" = currentIsoDate() >= expiryDate ? "expired" : "active";
@@ -4006,15 +4030,15 @@ function mapAutopaySubscription(row: AutopaySubscriptionRow): AutopaySubscriptio
   };
 }
 
-function requireAutopayRow(id: string) {
+async function requireAutopayRow(id: string) {
   const row = asRecord<AutopaySubscriptionRow | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id, name, amount_paise, start_date, duration_months, is_archived, created_at, updated_at
          FROM autopay_subscriptions
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId()))
   );
 
   if (!row) {
@@ -4023,32 +4047,32 @@ function requireAutopayRow(id: string) {
   return row;
 }
 
-function requireAutopaySummary(id: string) {
-  return mapAutopaySubscription(requireAutopayRow(id));
+async function requireAutopaySummary(id: string) {
+  return mapAutopaySubscription(await requireAutopayRow(id));
 }
 
-function requireActiveAutopay(id: string) {
-  const subscription = requireAutopayRow(id);
-  if (subscription.is_archived) {
+async function requireActiveAutopay(id: string) {
+  const subscription = await requireAutopayRow(id);
+  if ((await subscription).is_archived) {
     throw badRequest("Archived subscriptions cannot receive new payments.");
   }
   return subscription;
 }
 
-function getAutopayPaymentForTransaction(transactionId: string) {
+async function getAutopayPaymentForTransaction(transactionId: string) {
   return asRecord<{ id: string; subscription_id: string; transaction_id: string } | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id, subscription_id, transaction_id
          FROM autopay_payments
-         WHERE transaction_id = ?
+         WHERE transaction_id = ? AND user_id = ?
          LIMIT 1`
       )
-      .get(transactionId)
+      .get(transactionId, currentUserId()))
   );
 }
 
-function syncAutopayPaymentForTransaction(
+async function syncAutopayPaymentForTransaction(
   transactionId: string,
   input: CreateTransactionInput,
   existingSubscriptionId?: string
@@ -4062,28 +4086,28 @@ function syncAutopayPaymentForTransaction(
 
   const subscription =
     input.subscriptionId === existingSubscriptionId
-      ? requireAutopayRow(input.subscriptionId)
-      : requireActiveAutopay(input.subscriptionId);
-  db.prepare(
-    `INSERT INTO autopay_payments (id, subscription_id, transaction_id)
-     VALUES (?, ?, ?)`
-  ).run(randomUUID(), subscription.id, transactionId);
+      ? await requireAutopayRow(input.subscriptionId)
+      : await requireActiveAutopay(input.subscriptionId);
+  (await db.prepare(
+    `INSERT INTO autopay_payments (id, subscription_id, transaction_id, user_id)
+     VALUES (?, ?, ?, ?)`
+  ).run(randomUUID(),(await  subscription).id, transactionId, currentUserId()));
 }
 
-function getInvestmentPaymentForTransaction(transactionId: string) {
+async function getInvestmentPaymentForTransaction(transactionId: string) {
   return asRecord<{ id: string; investment_id: string; transaction_id: string } | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id, investment_id, transaction_id
          FROM investment_payments
-         WHERE transaction_id = ?
+         WHERE transaction_id = ? AND user_id = ?
          LIMIT 1`
       )
-      .get(transactionId)
+      .get(transactionId, currentUserId()))
   );
 }
 
-function syncInvestmentPaymentForTransaction(transactionId: string, input: CreateTransactionInput) {
+async function syncInvestmentPaymentForTransaction(transactionId: string, input: CreateTransactionInput) {
   if (!input.investmentId) {
     return;
   }
@@ -4091,17 +4115,17 @@ function syncInvestmentPaymentForTransaction(transactionId: string, input: Creat
     throw badRequest("Only Mutual Funds transactions can be linked to a holding.");
   }
 
-  const investment = requireInvestmentRow(input.investmentId);
+  const investment = await requireInvestmentRow(input.investmentId);
   if (investment.type !== "mutual_funds") {
     throw badRequest("Linked holding must be a mutual fund.");
   }
-  db.prepare(
-    `INSERT INTO investment_payments (id, investment_id, transaction_id)
-     VALUES (?, ?, ?)`
-  ).run(randomUUID(), investment.id, transactionId);
+  (await db.prepare(
+    `INSERT INTO investment_payments (id, investment_id, transaction_id, user_id)
+     VALUES (?, ?, ?, ?)`
+  ).run(randomUUID(),investment.id, transactionId, currentUserId()));
 }
 
-function syncLoanPaymentForTransaction(transactionId: string, input: CreateTransactionInput) {
+async function syncLoanPaymentForTransaction(transactionId: string, input: CreateTransactionInput) {
   if (!input.loanId) {
     return;
   }
@@ -4109,180 +4133,173 @@ function syncLoanPaymentForTransaction(transactionId: string, input: CreateTrans
     throw badRequest("Only Loan transactions can be linked to a loan.");
   }
 
-  const loan = requireActiveLoan(input.loanId);
-  if (loan.subcategory_id !== input.subcategoryId) {
+  const loan = await requireActiveLoan(input.loanId);
+  if ((await loan).subcategory_id !== input.subcategoryId) {
     throw badRequest("Linked loan must match the selected Loan SubType.");
   }
 
   const paymentType = input.loanPaymentType ?? "emi";
-  const placeholderPrincipalPaise = Math.min(input.amountPaise, loan.starting_outstanding_paise);
-  const placeholderOutstandingAfterPaise = Math.max(loan.starting_outstanding_paise - placeholderPrincipalPaise, 0);
-  db.prepare(
+  const placeholderPrincipalPaise = Math.min(input.amountPaise,(await  loan).starting_outstanding_paise);
+  const placeholderOutstandingAfterPaise = Math.max((await loan).starting_outstanding_paise - placeholderPrincipalPaise, 0);
+  (await db.prepare(
     `INSERT INTO loan_payments
       (id, loan_id, transaction_id, payment_type, amount_paise, principal_paise, interest_paise,
-       outstanding_before_paise, outstanding_after_paise)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       outstanding_before_paise, outstanding_after_paise, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
-    randomUUID(),
-    loan.id,
+    randomUUID(),(await 
+    loan).id,
     transactionId,
     paymentType,
     input.amountPaise,
     placeholderPrincipalPaise,
-    0,
-    loan.starting_outstanding_paise,
-    placeholderOutstandingAfterPaise
-  );
+    0,(await 
+    loan).starting_outstanding_paise,
+    placeholderOutstandingAfterPaise,
+    currentUserId()
+  ));
 }
 
-function getAccount(id: string) {
-  const account = getAccountRow(id);
+async function getAccount(id: string) {
+  const account = await getAccountRow(id);
   if (!account) {
     throw notFound("Account not found.");
   }
   return mapAccountWithBalance(account);
 }
 
-function getAccountRow(id: string) {
+async function getAccountRow(id: string) {
   return asRecord<AccountRow | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day,
                 is_archived, created_at, updated_at
          FROM accounts
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId()))
   );
 }
 
-function getActiveAccountByName(name: string, exceptId?: string) {
+async function getActiveAccountByName(name: string, exceptId?: string) {
   return asRecord<{ id: string } | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id
          FROM accounts
-         WHERE name = ? COLLATE NOCASE
+         WHERE name = ?
+           AND user_id = ?
            AND is_archived = 0
-           AND (? IS NULL OR id != ?)
+           -- The cast is for Postgres: a parameter that appears only in an IS NULL test has no
+           -- type it can be inferred from, and the statement is rejected before it runs.
+           AND (?::text IS NULL OR id != ?)
          LIMIT 1`
       )
-      .get(name, exceptId ?? null, exceptId ?? null)
+      .get(name, currentUserId(), exceptId ?? null, exceptId ?? null))
   );
 }
 
-function getCategoryType(id: string) {
-  const row = getCategoryTypeRow(id);
+async function getCategoryType(id: string) {
+  const row = await getCategoryTypeRow(id);
   if (!row) {
     throw notFound("Type not found.");
   }
 
   return {
-    ...mapCategoryType(row),
-    subcategories: listSubcategoriesForType(id)
+    ...mapCategoryType(await row),
+    subcategories: await listSubcategoriesForType(id)
   };
 }
 
-function getCategoryTypeRow(id: string) {
+async function getCategoryTypeRow(id: string) {
   return asRecord<CategoryTypeRow | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at
          FROM category_types
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId()))
   );
 }
 
-function getCategoryTypeByName(name: string) {
+async function getCategoryTypeByName(name: string) {
   return asRecord<CategoryTypeRow | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at
          FROM category_types
-         WHERE name = ? COLLATE NOCASE
+         WHERE name = ? AND user_id = ?
          LIMIT 1`
       )
-      .get(name)
+      .get(name, currentUserId()))
   );
 }
 
-function requireCategoryType(id: string) {
-  const type = getCategoryTypeRow(id);
+async function requireCategoryType(id: string) {
+  const type = await getCategoryTypeRow(id);
   if (!type) {
     throw badRequest("Selected Type does not exist.");
   }
   return type;
 }
 
-function getSubcategory(id: string) {
-  const row = getSubcategoryRow(id);
+async function getSubcategory(id: string) {
+  const row = await getSubcategoryRow(id);
   if (!row) {
     throw notFound("SubType not found.");
   }
-  return mapSubcategory(row);
+  return mapSubcategory(await row);
 }
 
-function getSubcategoryRow(id: string) {
+async function getSubcategoryRow(id: string) {
   return asRecord<SubcategoryRow | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at
          FROM subcategories
-         WHERE id = ?`
+         WHERE id = ? AND user_id = ?`
       )
-      .get(id)
+      .get(id, currentUserId()))
   );
 }
 
-function getSubcategoryByName(typeId: string, name: string) {
+async function getSubcategoryByName(typeId: string, name: string) {
   return asRecord<SubcategoryRow | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at
          FROM subcategories
          WHERE type_id = ?
-           AND name = ? COLLATE NOCASE
+           AND name = ?
+           AND user_id = ?
          LIMIT 1`
       )
-      .get(typeId, name)
+      .get(typeId, name, currentUserId()))
   );
 }
 
-function listSubcategoriesForType(typeId: string) {
+async function listSubcategoriesForType(typeId: string) {
   return asRecords<SubcategoryRow>(
-    db
+    (await db
       .prepare(
         `SELECT id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at
          FROM subcategories
-         WHERE type_id = ?
+         WHERE type_id = ? AND user_id = ?
          ORDER BY sort_order, name`
       )
-      .all(typeId)
+      .all(typeId, currentUserId()))
   ).map(mapSubcategory);
 }
 
-function getCategoryRow(id: string) {
-  return asRecord<CategoryRow | undefined>(
-    db
-      .prepare(
-        `SELECT id, name, icon, color, is_system, is_locked, sort_order, created_at
-         FROM categories
-         WHERE id = ?`
-      )
-      .get(id)
-  );
-}
-
-function getTransactionRow(id: string) {
+async function getTransactionRow(id: string) {
   return asRecord<TransactionRow | undefined>(
-    db.prepare("SELECT * FROM transactions WHERE id = ?").get(id)
+    (await db.prepare("SELECT * FROM transactions WHERE id = ? AND user_id = ?").get(id, currentUserId()))
   );
 }
 
-function requireAccount(id: string) {
-  const account = getAccountRow(id);
+async function requireAccount(id: string) {
+  const account = await getAccountRow(id);
   if (!account) {
     throw badRequest("Selected account does not exist.");
   }
@@ -4292,36 +4309,22 @@ function requireAccount(id: string) {
   return account;
 }
 
-function requireCategory(id: string) {
-  const category = getCategoryRow(id);
-  if (!category) {
-    throw badRequest("Selected category does not exist.");
-  }
-  return category;
-}
-
-function resolveTransactionTaxonomy(input: CreateTransactionInput) {
+async function resolveTransactionTaxonomy(input: CreateTransactionInput) {
   let typeId = input.typeId;
-  let subcategoryId = input.subcategoryId ?? input.categoryId;
-  let legacyCategoryId = input.categoryId ?? null;
+  const subcategoryId = input.subcategoryId;
   let type: CategoryTypeRow | undefined;
   let subcategory: SubcategoryRow | undefined;
 
   if (subcategoryId) {
-    subcategory = getSubcategoryRow(subcategoryId);
-    if (subcategory) {
-      typeId = typeId ?? subcategory.type_id;
-      legacyCategoryId = null;
-    } else if (input.categoryId) {
-      requireCategory(input.categoryId);
-      subcategoryId = undefined;
-    } else {
+    subcategory = await getSubcategoryRow(subcategoryId);
+    if (!subcategory) {
       throw badRequest("Selected SubType does not exist.");
     }
+    typeId = typeId ?? subcategory.type_id;
   }
 
   if (typeId) {
-    type = requireCategoryType(typeId);
+    type = await requireCategoryType(typeId);
   }
 
   if (subcategory && typeId && subcategory.type_id !== typeId) {
@@ -4337,12 +4340,11 @@ function resolveTransactionTaxonomy(input: CreateTransactionInput) {
 
   return {
     typeId: type?.id ?? null,
-    subcategoryId: subcategory?.id ?? null,
-    legacyCategoryId
+    subcategoryId: subcategory?.id ?? null
   };
 }
 
-function validateTransactionAgainstAccounts(input: CreateTransactionInput, account: AccountRow) {
+async function validateTransactionAgainstAccounts(input: CreateTransactionInput, account: AccountRow) {
   if (input.method === "credit_card" && account.type !== "credit_card") {
     throw badRequest("Credit-card transactions must use a credit-card account.");
   }
@@ -4358,8 +4360,8 @@ function validateTransactionAgainstAccounts(input: CreateTransactionInput, accou
     if (input.direction !== "outflow") {
       throw badRequest("Card payments must be bank outflows.");
     }
-    const target = requireAccount(input.transferAccountId ?? "");
-    if (target.type !== "credit_card") {
+    const target = await requireAccount(input.transferAccountId ?? "");
+    if ((await target).type !== "credit_card") {
       throw badRequest("Card payments must target a credit-card account.");
     }
   }
@@ -4371,56 +4373,47 @@ function validateTransactionAgainstAccounts(input: CreateTransactionInput, accou
     if (input.direction !== "outflow") {
       throw badRequest("Self transfers must be recorded as an outflow from the source account.");
     }
-    const target = requireAccount(input.transferAccountId ?? "");
-    if (target.type !== "bank") {
+    const target = await requireAccount(input.transferAccountId ?? "");
+    if ((await target).type !== "bank") {
       throw badRequest("Self transfers must move money into a bank account.");
     }
-    if (target.is_archived) {
+    if ((await target).is_archived) {
       throw badRequest("Self transfers cannot move money into an archived account.");
     }
   }
 }
 
-function insertSplits(
+async function insertSplits(
   transactionId: string,
   splits: NonNullable<CreateTransactionInput["splits"]>
 ) {
   const insert = db.prepare(
-    `INSERT INTO transaction_splits (id, transaction_id, category_id, subcategory_id, amount_paise)
+    `INSERT INTO transaction_splits (id, transaction_id, subcategory_id, amount_paise, user_id)
      VALUES (?, ?, ?, ?, ?)`
   );
+  const owner = currentUserId();
 
   for (const split of splits) {
-    const subcategoryId = split.subcategoryId ?? split.categoryId;
-    let legacyCategoryId = split.categoryId ?? null;
-    if (!subcategoryId) {
-      throw badRequest("Split must choose a SubType.");
-    }
-    const subcategory = getSubcategoryRow(subcategoryId);
-    if (subcategory) {
-      legacyCategoryId = null;
-    } else if (split.categoryId) {
-      requireCategory(split.categoryId);
-    } else {
+    const subcategory = await getSubcategoryRow(split.subcategoryId);
+    if (!subcategory) {
       throw badRequest("Selected split SubType does not exist.");
     }
-    insert.run(randomUUID(), transactionId, legacyCategoryId, subcategory?.id ?? null, split.amountPaise);
+    await insert.run(randomUUID(), transactionId,(await subcategory).id, split.amountPaise, owner);
   }
 }
 
-function getTransactionSplits(transactionId: string): NonNullable<CreateTransactionInput["splits"]> {
-  const rows = asRecords<{ category_id: string | null; subcategory_id: string | null; amount_paise: number }>(
-    db.prepare(
-      `SELECT category_id, subcategory_id, amount_paise
+async function getTransactionSplits(transactionId: string): Promise<{ subcategoryId: string; amountPaise: number; }[]> {
+  const rows = asRecords<{ subcategory_id: string | null; amount_paise: number }>(
+    (await db.prepare(
+      `SELECT subcategory_id, amount_paise
        FROM transaction_splits
-       WHERE transaction_id = ?
-       ORDER BY rowid ASC`
-    ).all(transactionId)
+       WHERE transaction_id = ? AND user_id = ?
+       ORDER BY 1 ASC`
+    ).all(transactionId, currentUserId()))
   );
 
   return rows.map((row) => ({
-    categoryId: row.category_id ?? undefined,
-    subcategoryId: row.subcategory_id ?? undefined,
+    subcategoryId: row.subcategory_id ?? "",
     amountPaise: row.amount_paise
   }));
 }
@@ -4452,7 +4445,7 @@ function directionForBehavior(behavior: TaxonomyBehavior): Direction {
   return behavior === "income" || behavior === "refund" ? "inflow" : "outflow";
 }
 
-function parseImportRow(
+async function parseImportRow(
   row: {
     date: string;
     account: string;
@@ -4466,21 +4459,21 @@ function parseImportRow(
   },
   context: ImportContext,
   batchId?: string
-): { payload: CreateTransactionInput } | { error: string } {
-  const date = normalizeImportDate(row.date);
+): Promise<{ payload: CreateTransactionInput } | { error: string }> {
+  const date = await normalizeImportDate(row.date);
   if (!date) {
     return { error: "Date must use ISO format YYYY-MM-DD." };
   }
 
-  const accountResult = ensureImportAccount(context, row.account, row.accountType);
+  const accountResult = await ensureImportAccount(context, row.account, row.accountType);
   if ("error" in accountResult) return accountResult;
   const account = accountResult.account;
 
-  const typeResult = ensureImportType(context, row.type, row.typeBehavior);
+  const typeResult = await ensureImportType(context, row.type, row.typeBehavior);
   if ("error" in typeResult) return typeResult;
   const type = typeResult.type;
 
-  const method = parseImportMethod(row.method);
+  const method = await parseImportMethod(row.method);
   if (!method) {
     return { error: "Method must be UPI, Credit card, Bank transfer, Cash, or Other." };
   }
@@ -4515,7 +4508,7 @@ function parseImportRow(
     if (account.type !== "bank") {
       return { error: "Credit Card Payment rows must use a bank account as Account." };
     }
-    const targetResult = ensureImportAccount(
+    const targetResult = await ensureImportAccount(
       context,
       row.subtype,
       "Credit card",
@@ -4530,7 +4523,7 @@ function parseImportRow(
     return { payload };
   }
 
-  const subcategoryResult = ensureImportSubcategory(context, type, row.subtype);
+  const subcategoryResult = await ensureImportSubcategory(context, type, row.subtype);
   if ("error" in subcategoryResult) return subcategoryResult;
 
   payload.subcategoryId = subcategoryResult.subcategory.id;
@@ -4553,9 +4546,9 @@ function exactImportDuplicateKey(input: CreateTransactionInput) {
   ].join("\u001f");
 }
 
-function exactTransactionExists(input: CreateTransactionInput) {
+async function exactTransactionExists(input: CreateTransactionInput) {
   const row = asRecord<{ id: string } | undefined>(
-    db
+    (await db
       .prepare(
         `SELECT id
          FROM transactions
@@ -4570,6 +4563,7 @@ function exactTransactionExists(input: CreateTransactionInput) {
            AND COALESCE(transfer_account_id, '') = ?
            AND COALESCE(merchant, '') = ?
            AND COALESCE(note, '') = ?
+           AND user_id = ?
          LIMIT 1`
       )
       .get(
@@ -4583,8 +4577,9 @@ function exactTransactionExists(input: CreateTransactionInput) {
         input.subcategoryId ?? "",
         input.transferAccountId ?? "",
         input.merchant ?? "",
-        input.note ?? ""
-      )
+        input.note ?? "",
+        currentUserId()
+      ))
   );
 
   return Boolean(row);
@@ -4610,32 +4605,34 @@ type ImportContext = {
   warnings: string[];
 };
 
-function buildImportContext(): ImportContext {
+async function buildImportContext(): Promise<ImportContext> {
   const accounts = asRecords<AccountRow>(
-    db
+    (await db
       .prepare(
         `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day,
                 is_archived, created_at, updated_at
          FROM accounts
-         WHERE is_archived = 0`
+         WHERE is_archived = 0 AND user_id = ?`
       )
-      .all()
+      .all(currentUserId()))
   );
   const types = asRecords<CategoryTypeRow>(
-    db
+    (await db
       .prepare(
         `SELECT id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at
-         FROM category_types`
+         FROM category_types
+         WHERE user_id = ?`
       )
-      .all()
+      .all(currentUserId()))
   );
   const subcategories = asRecords<SubcategoryRow>(
-    db
+    (await db
       .prepare(
         `SELECT id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at
-         FROM subcategories`
+         FROM subcategories
+         WHERE user_id = ?`
       )
-      .all()
+      .all(currentUserId()))
   );
 
   return {
@@ -4654,18 +4651,18 @@ function buildImportContext(): ImportContext {
   };
 }
 
-function ensureImportAccount(
+async function ensureImportAccount(
   context: ImportContext,
   rawName: string,
   rawType: string,
   sourceLabel = "Account"
-): { account: AccountRow } | { error: string } {
+): Promise<{ account: AccountRow } | { error: string }> {
   const name = rawName.trim();
   if (!name) {
     return { error: `${sourceLabel} is required.` };
   }
 
-  const type = parseImportAccountType(rawType);
+  const type = await parseImportAccountType(rawType);
   if (!type) {
     return { error: `${sourceLabel} Type must be Bank account, Credit card, or Food card.` };
   }
@@ -4704,11 +4701,11 @@ function ensureImportAccount(
   return { account };
 }
 
-function ensureImportType(
+async function ensureImportType(
   context: ImportContext,
   rawName: string,
   rawBehavior: string
-): { type: CategoryTypeRow } | { error: string } {
+): Promise<{ type: CategoryTypeRow } | { error: string }> {
   const name = rawName.trim();
   if (!name) {
     return { error: "Type is required." };
@@ -4746,7 +4743,7 @@ function ensureImportType(
     color: style.color,
     is_system: 0,
     is_locked: 0,
-    sort_order: nextImportTypeSort(context),
+    sort_order: await nextImportTypeSort(context),
     created_at: now
   };
 
@@ -4756,11 +4753,11 @@ function ensureImportType(
   return { type };
 }
 
-function ensureImportSubcategory(
+async function ensureImportSubcategory(
   context: ImportContext,
   type: CategoryTypeRow,
   rawName: string
-): { subcategory: SubcategoryRow } | { error: string } {
+): Promise<{ subcategory: SubcategoryRow } | { error: string }> {
   const name = rawName.trim();
   if (!name) {
     return { error: "SubType is required." };
@@ -4781,7 +4778,7 @@ function ensureImportSubcategory(
     color: type.color,
     is_system: 0,
     is_locked: 0,
-    sort_order: nextImportSubcategorySort(context, type.id),
+    sort_order: await nextImportSubcategorySort(context, type.id),
     created_at: now
   };
 
@@ -4791,25 +4788,26 @@ function ensureImportSubcategory(
   return { subcategory };
 }
 
-function insertImportPlans(context: ImportContext) {
+async function insertImportPlans(context: ImportContext) {
   const insertAccount = db.prepare(
     `INSERT INTO accounts
-      (id, name, type, starting_balance_paise, credit_limit_paise, is_archived, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, name, type, starting_balance_paise, credit_limit_paise, is_archived, created_at, updated_at, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const insertType = db.prepare(
     `INSERT INTO category_types
-      (id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const insertSubcategory = db.prepare(
     `INSERT INTO subcategories
-      (id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, type_id, name, icon, color, is_system, is_locked, sort_order, created_at, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
+  const owner = currentUserId();
 
   for (const account of context.plannedAccounts) {
-    insertAccount.run(
+    await insertAccount.run(
       account.id,
       account.name,
       account.type,
@@ -4817,12 +4815,13 @@ function insertImportPlans(context: ImportContext) {
       account.credit_limit_paise,
       account.is_archived,
       account.created_at,
-      account.updated_at
+      account.updated_at,
+      owner
     );
   }
 
   for (const type of context.plannedTypes) {
-    insertType.run(
+    await insertType.run(
       type.id,
       type.name,
       type.behavior,
@@ -4831,12 +4830,13 @@ function insertImportPlans(context: ImportContext) {
       type.is_system,
       type.is_locked,
       type.sort_order,
-      type.created_at
+      type.created_at,
+      owner
     );
   }
 
   for (const subcategory of context.plannedSubcategories) {
-    insertSubcategory.run(
+    await insertSubcategory.run(
       subcategory.id,
       subcategory.type_id,
       subcategory.name,
@@ -4845,7 +4845,8 @@ function insertImportPlans(context: ImportContext) {
       subcategory.is_system,
       subcategory.is_locked,
       subcategory.sort_order,
-      subcategory.created_at
+      subcategory.created_at,
+      owner
     );
   }
 }
@@ -4911,16 +4912,18 @@ function defaultImportStyleForBehavior(behavior: TaxonomyBehavior) {
   }
 }
 
-function nextImportTypeSort(context: ImportContext) {
+async function nextImportTypeSort(context: ImportContext) {
   const maxSort = asRecord<{ max_sort: number | null }>(
-    db.prepare("SELECT MAX(sort_order) AS max_sort FROM category_types").get()
+    (await db.prepare("SELECT MAX(sort_order) AS max_sort FROM category_types WHERE user_id = ?").get(currentUserId()))
   );
   return (maxSort.max_sort ?? 0) + context.plannedTypes.length + 1;
 }
 
-function nextImportSubcategorySort(context: ImportContext, typeId: string) {
+async function nextImportSubcategorySort(context: ImportContext, typeId: string) {
   const maxSort = asRecord<{ max_sort: number | null }>(
-    db.prepare("SELECT MAX(sort_order) AS max_sort FROM subcategories WHERE type_id = ?").get(typeId)
+    (await db
+      .prepare("SELECT MAX(sort_order) AS max_sort FROM subcategories WHERE type_id = ? AND user_id = ?")
+      .get(typeId, currentUserId()))
   );
   const plannedMax = context.plannedSubcategories
     .filter((subcategory) => subcategory.type_id === typeId)
@@ -4978,7 +4981,7 @@ function cardPaymentSubTypeName(transaction: TransactionSummary) {
   return transaction.transferAccountName ?? "";
 }
 
-function findDuplicateCandidates(input: {
+async function findDuplicateCandidates(input: {
   id: string;
   accountId: string;
   date: string;
@@ -4986,41 +4989,29 @@ function findDuplicateCandidates(input: {
   direction: Direction;
 }) {
   const rows = asRecords<TransactionRow & JoinedFields>(
-    db
+    (await db
       .prepare(
         `SELECT ${transactionSelectFields}
          FROM transactions t
-         JOIN accounts a ON a.id = t.account_id
-         LEFT JOIN categories c ON c.id = t.category_id
-         LEFT JOIN category_types ct ON ct.id = t.type_id
-         LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
-         LEFT JOIN accounts ta ON ta.id = t.transfer_account_id
-         LEFT JOIN loan_payments lp ON lp.transaction_id = t.id
-         LEFT JOIN loans l ON l.id = lp.loan_id
-         LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id
-         LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id
-         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id
-         LEFT JOIN investments iv ON iv.id = ip.investment_id
-         LEFT JOIN vacation_expenses vx ON vx.transaction_id = t.id
-         LEFT JOIN vacations vc ON vc.id = vx.vacation_id
+         ${transactionJoins}
 WHERE t.id != ?
            AND t.account_id = ?
            AND t.amount_paise = ?
            AND t.direction = ?
-           AND ABS(julianday(t.date) - julianday(?)) <= 2
-         ORDER BY t.date DESC
+           AND ABS(t.date::date - ?::date) <= 2
+         ORDER BY t.date DESC, t.id DESC
          LIMIT 5`
       )
-      .all(input.id, input.accountId, input.amountPaise, input.direction, input.date)
+      .all(input.id, input.accountId, input.amountPaise, input.direction, input.date))
   );
 
   return rows.map(mapTransaction);
 }
 
-function mapAccountWithBalance(account: AccountRow): AccountSummary {
+async function mapAccountWithBalance(account: AccountRow): Promise<AccountSummary> {
   if (account.type === "credit_card") {
     const cardActivity = asRecord<{ total: number | null }>(
-      db
+      (await db
         .prepare(
           `SELECT SUM(
              CASE
@@ -5031,9 +5022,9 @@ function mapAccountWithBalance(account: AccountRow): AccountSummary {
              END
            ) AS total
            FROM transactions
-           WHERE account_id = ? OR transfer_account_id = ?`
+           WHERE user_id = ? AND (account_id = ? OR transfer_account_id = ?)`
         )
-        .get(account.id, account.id, account.id, account.id, account.id)
+        .get(account.id, account.id, account.id, currentUserId(), account.id, account.id))
     );
     const outstanding = account.starting_balance_paise + (cardActivity.total ?? 0);
     const creditLimit = account.credit_limit_paise ?? 0;
@@ -5053,7 +5044,7 @@ function mapAccountWithBalance(account: AccountRow): AccountSummary {
   }
 
   const bankActivity = asRecord<{ total: number | null }>(
-    db
+    (await db
       .prepare(
         `SELECT SUM(
            CASE
@@ -5063,10 +5054,11 @@ function mapAccountWithBalance(account: AccountRow): AccountSummary {
            END
          ) AS total
          FROM transactions
-         WHERE account_id = ?
-            OR (subcategory_id = ? AND transfer_account_id = ?)`
+         WHERE user_id = ?
+           AND (account_id = ?
+                OR (subcategory_id = ? AND transfer_account_id = ?))`
       )
-      .get(account.id, account.id, account.id, SELF_TRANSFER_SUBCATEGORY_ID, account.id)
+      .get(account.id, account.id, currentUserId(), account.id, SELF_TRANSFER_SUBCATEGORY_ID, account.id))
   );
   const balance = account.starting_balance_paise + (bankActivity.total ?? 0);
 
@@ -5138,6 +5130,24 @@ type JoinedFields = {
   vacation_name: string | null;
 };
 
+/**
+ * Everything a transaction row is shown with. Every join carries the owner as well as the key,
+ * so a join cannot reach across to another person's account, Type or trip even if the row it
+ * starts from were somehow theirs. The caller still has to scope `t` itself.
+ */
+const transactionJoins = `JOIN accounts a ON a.id = t.account_id AND a.user_id = t.user_id
+         LEFT JOIN category_types ct ON ct.id = t.type_id AND ct.user_id = t.user_id
+         LEFT JOIN subcategories sc ON sc.id = t.subcategory_id AND sc.user_id = t.user_id
+         LEFT JOIN accounts ta ON ta.id = t.transfer_account_id AND ta.user_id = t.user_id
+         LEFT JOIN loan_payments lp ON lp.transaction_id = t.id AND lp.user_id = t.user_id
+         LEFT JOIN loans l ON l.id = lp.loan_id AND l.user_id = t.user_id
+         LEFT JOIN autopay_payments ap ON ap.transaction_id = t.id AND ap.user_id = t.user_id
+         LEFT JOIN autopay_subscriptions s ON s.id = ap.subscription_id AND s.user_id = t.user_id
+         LEFT JOIN investment_payments ip ON ip.transaction_id = t.id AND ip.user_id = t.user_id
+         LEFT JOIN investments iv ON iv.id = ip.investment_id AND iv.user_id = t.user_id
+         LEFT JOIN vacation_expenses vx ON vx.transaction_id = t.id AND vx.user_id = t.user_id
+         LEFT JOIN vacations vc ON vc.id = vx.vacation_id AND vc.user_id = t.user_id`;
+
 const transactionSelectFields = `
   t.id,
   t.batch_id,
@@ -5146,7 +5156,6 @@ const transactionSelectFields = `
   t.method,
   t.merchant,
   t.note,
-  t.category_id,
   t.type_id,
   t.subcategory_id,
   t.amount_paise,
@@ -5161,9 +5170,6 @@ const transactionSelectFields = `
   t.updated_at,
   a.name AS account_name,
   a.type AS account_type,
-  c.name AS category_name,
-  c.icon AS category_icon,
-  c.color AS category_color,
   ct.name AS type_name,
   ct.behavior AS type_behavior,
   ct.icon AS type_icon,
@@ -5196,10 +5202,9 @@ function mapTransaction(row: TransactionRow & JoinedFields): TransactionSummary 
     method: row.method,
     merchant: row.merchant,
     note: row.note,
-    categoryId: row.subcategory_id ?? row.category_id,
-    categoryName: row.subcategory_name ?? row.category_name,
-    categoryIcon: row.subcategory_icon ?? row.category_icon,
-    categoryColor: row.subcategory_color ?? row.category_color,
+    categoryName: row.subcategory_name,
+    categoryIcon: row.subcategory_icon,
+    categoryColor: row.subcategory_color,
     typeId: row.type_id,
     typeName: row.type_name,
     typeIcon: row.type_icon,
@@ -5315,32 +5320,36 @@ function csvCell(value: string) {
   return `"${guarded.replace(/"/g, '""')}"`;
 }
 
-function setSetting(key: string, value: string) {
-  db.prepare(
-    `INSERT INTO settings (key, value)
-     VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-  ).run(key, value);
-}
-
-function setOptionalSetting(key: string, value: string | null) {
-  if (value === null) {
-    db.prepare("DELETE FROM settings WHERE key = ?").run(key);
+async function setSetting(key: string, value: string) {
+  if (isPerPersonSetting(key)) {
+    (await db.prepare(
+      `INSERT INTO user_settings (user_id, key, value)
+       VALUES (?, ?, ?)
+       ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`
+    ).run(currentUserId(), key, value));
     return;
   }
 
-  setSetting(key, value);
+  (await db.prepare(
+    `INSERT INTO app_settings (key, value)
+     VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run(key, value));
 }
 
-function restoreBackupStatus(status: {
-  lastBackupAt: string | null;
-  lastBackupPath: string | null;
-  lastBackupMode: string | null;
-}) {
-  setOptionalSetting("last_backup_at", status.lastBackupAt);
-  setOptionalSetting("last_backup_path", status.lastBackupPath);
-  setOptionalSetting("last_backup_mode", status.lastBackupMode);
+async function setOptionalSetting(key: string, value: string | null) {
+  if (value === null) {
+    if (isPerPersonSetting(key)) {
+      (await db.prepare("DELETE FROM user_settings WHERE user_id = ? AND key = ?").run(currentUserId(), key));
+    } else {
+      (await db.prepare("DELETE FROM app_settings WHERE key = ?").run(key));
+    }
+    return;
+  }
+
+  await setSetting(key, value);
 }
+
 
 export function badRequest(message: string) {
   const error = new Error(message);

@@ -45,7 +45,13 @@ async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
 
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error ?? "Request failed.");
+    const error = new Error(payload.error ?? "Request failed.");
+    // The app has to tell "you are not signed in" apart from "that went wrong", so it can show
+    // the sign-in screen rather than an error about a request nobody made.
+    if (response.status === 401) {
+      (error as Error & { notSignedIn?: boolean }).notSignedIn = true;
+    }
+    throw error;
   }
 
   if (response.status === 204) {
@@ -55,7 +61,13 @@ async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export type SignedIn = { signedIn: boolean; email?: string; isOwner?: boolean };
+
 export const Api = {
+  me: () => api<SignedIn>("/api/auth/me"),
+  signIn: (email: string, password: string) =>
+    api<{ ok: true }>("/api/auth/sign-in", { method: "POST", body: { email, password } }),
+  signOut: () => api<{ ok: true }>("/api/auth/sign-out", { method: "POST" }),
   bootstrap: () => api<Bootstrap>("/api/bootstrap"),
   profile: () => api<UserProfile>("/api/profile"),
   updateProfile: (body: Partial<UserProfile>) =>
@@ -262,7 +274,8 @@ export const Api = {
     api<BudgetLine>(`/api/budgets/${id}`, { method: "PATCH", body }),
   deleteBudgetLine: (id: string) => api<{ ok: true }>(`/api/budgets/${id}`, { method: "DELETE" }),
   backupStatus: () => api<BackupStatus>("/api/backup/status"),
-  backup: () => api<{ path: string; mode: "manual" | "auto" | "shutdown"; createdAt: string }>("/api/backup", { method: "POST" }),
+  /** A plain URL, so the browser downloads it with its own cookie and its own progress bar. */
+  exportAllUrl: () => "/api/export/all.json",
   importTemplateUrl: () => "/api/import/template.xlsx",
   importTransactions: async (file: File, batchId?: string) => {
     const params = new URLSearchParams();

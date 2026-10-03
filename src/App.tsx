@@ -293,8 +293,80 @@ const UNDO_WINDOW_MS = 8000;
 const INITIAL_TRANSACTION_LIMIT = 12;
 const TRANSACTION_PAGE_SIZE = 10;
 
+
+/**
+ * Everything the application does needs a person, so nothing is rendered until there is one.
+ * There is no sign-up here on purpose: D5 is invite only, and accounts are made with
+ * `node server/account.ts create <email>`.
+ */
+function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await Api.signIn(email.trim(), password);
+      onSignedIn();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not sign in.");
+      setPassword("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="sign-in-page">
+      <div className="panel sign-in-panel">
+        <h1>Financial Tracker</h1>
+        <p className="sign-in-lead">Sign in to see your money.</p>
+        <form className="sign-in-form" onSubmit={submit}>
+          <label className="control-field">
+            <span className="control-label">Email</span>
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              autoComplete="username"
+              required
+              autoFocus
+            />
+          </label>
+          <label className="control-field">
+            <span className="control-label">Password</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </label>
+          {error && (
+            <p className="sign-in-error" role="alert">
+              {error}
+            </p>
+          )}
+          <button type="submit" className="sign-in-submit" disabled={busy || !email || !password}>
+            {busy ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
+  // Null until the first request answers: rendering the sign-in screen before knowing would
+  // flash it at somebody who is already signed in.
+  const [signedIn, setSignedIn] = useState<boolean | null>(null);
   const [activePage, setActivePage] = useState<Page>(() =>
     typeof window === "undefined" ? "overview" : pageFromPath(window.location.pathname)
   );
@@ -311,6 +383,9 @@ export default function App() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
+  // Whether this person owns the installation. null until asked, so the Profile page shows neither
+  // the owner's rows nor their absence while the answer is still in flight.
+  const [isOwner, setIsOwner] = useState<boolean | null>(null);
   // The intro plays on every open of the app, whatever page was asked for. Decided here,
   // synchronously at mount, so it is the first thing painted rather than something that
   // waits for the app's data; the owner can turn it off in Profile.
@@ -328,9 +403,13 @@ export default function App() {
 
   useEffect(() => {
     loadBootstrap()
-      .catch((err) => setError(err.message))
+      .catch((err: Error & { notSignedIn?: boolean }) => {
+        // Not being signed in is not an error to report; it is a screen to show.
+        if (err.notSignedIn) setSignedIn(false);
+        else setError(err.message);
+      })
       .finally(() => setLoading(false));
-  }, [loadBootstrap]);
+  }, [loadBootstrap, refreshKey]);
 
   // Before paint, so a dark-mode visitor never sees a light frame.
   useLayoutEffect(() => {
@@ -374,6 +453,27 @@ export default function App() {
 
   useEffect(() => {
     let isMounted = true;
+    Api.me()
+      .then((who) => {
+        if (!isMounted) return;
+        setIsOwner(Boolean(who.isOwner));
+      })
+      .catch(() => {
+        if (isMounted) setIsOwner(false);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [refreshKey]);
+
+  useEffect(() => {
+    // The backup is the owner's. Asking for it as anybody else earns a 403, so don't ask: a
+    // console full of refusals is how a real problem goes unnoticed.
+    if (isOwner !== true) {
+      setBackupStatus(null);
+      return undefined;
+    }
+    let isMounted = true;
 
     async function loadBackupStatus() {
       try {
@@ -390,7 +490,7 @@ export default function App() {
       isMounted = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [isOwner]);
 
   const refresh = useCallback(async () => {
     await loadBootstrap();
@@ -518,6 +618,21 @@ export default function App() {
       <>
         {introOpen && <IntroVideo onClose={closeIntro} />}
         {!introOpen && <FullScreenState icon={<Loader2 className="spin" />} title="Loading Financial Tracker" />}
+      </>
+    );
+  }
+
+  if (signedIn === false) {
+    return (
+      <>
+        {introOpen && <IntroVideo onClose={closeIntro} />}
+        <SignInScreen
+          onSignedIn={() => {
+            setSignedIn(true);
+            setLoading(true);
+            setRefreshKey((key) => key + 1);
+          }}
+        />
       </>
     );
   }
@@ -725,6 +840,14 @@ export default function App() {
           {activePage === "faq" && <FaqPage />}
           {activePage === "profile" && (
             <ProfilePage
+              onSignOut={() => {
+                void Api.signOut()
+                  .catch(() => undefined)
+                  .finally(() => {
+                    setSignedIn(false);
+                    setBootstrap(null);
+                  });
+              }}
               onPlayIntro={() => setIntroOpen(true)}
               introOnLaunch={introOnLaunch}
               onToggleIntroOnLaunch={toggleIntroOnLaunch}
@@ -732,6 +855,7 @@ export default function App() {
               savedProfile={bootstrap.profile}
               settings={bootstrap.settings}
               backupStatus={backupStatus}
+              isOwner={isOwner}
               theme={theme}
               saving={profileSaving}
               cardAlertPercent={cardAlertPercent}
@@ -981,7 +1105,7 @@ function OverviewPage({
 
   const spendingSegments = consolidateDonutSegments(
     overview.categoryReport.map((category) => ({
-      id: category.subcategoryId ?? category.categoryId ?? category.name,
+      id: category.subcategoryId ?? category.name,
       name: category.name,
       color: category.color,
       amountPaise: category.amountPaise
@@ -1423,7 +1547,7 @@ function WeeklyEntryPage({
     .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
   const uncategorizedCount = transactions.filter((transaction) => transaction.status === "uncategorized").length;
   const visibleTransactions = weeklyCategoryFilterId
-    ? transactions.filter((transaction) => transaction.categoryId === weeklyCategoryFilterId)
+    ? transactions.filter((transaction) => transaction.subcategoryId === weeklyCategoryFilterId)
     : transactions;
 
   async function submit(event: FormEvent) {
@@ -6534,7 +6658,7 @@ function categoryFromTransaction(transaction: Transaction): Category {
   }
 
   return {
-    id: transaction.subcategoryId ?? transaction.typeId ?? transaction.categoryId ?? "",
+    id: transaction.subcategoryId ?? transaction.typeId ?? "",
     name:
       transaction.subcategoryName ??
       transaction.typeName ??
@@ -6712,13 +6836,15 @@ function ProfilePage({
   savedProfile,
   settings,
   backupStatus,
+  isOwner,
   theme,
   saving,
   cardAlertPercent,
   onProfileChange,
   onSaveProfile,
   onSaveCardAlert,
-  onThemeToggle
+  onThemeToggle,
+  onSignOut
 }: {
   onPlayIntro: () => void;
   introOnLaunch: boolean;
@@ -6727,6 +6853,7 @@ function ProfilePage({
   savedProfile: UserProfile;
   settings: Record<string, string>;
   backupStatus: BackupStatus | null;
+  isOwner: boolean | null;
   theme: Theme;
   saving: boolean;
   cardAlertPercent: number;
@@ -6734,6 +6861,7 @@ function ProfilePage({
   onSaveProfile: () => Promise<void> | void;
   onSaveCardAlert: (percent: number) => Promise<void> | void;
   onThemeToggle: () => void;
+  onSignOut: () => void;
 }) {
   const displayName = profile.name || "Your profile";
   const displayEmail = profile.email || "Local profile";
@@ -6889,14 +7017,30 @@ function ProfilePage({
             <small>Credit cards turn red when utilization crosses this value (1-100).</small>
           </div>
           <div className="settings-row backup-row">
-            <span>Backup status</span>
-            <strong>{formatBackupStatus(backupStatus)}</strong>
-            <small>{formatBackupDetail(backupStatus)}</small>
+            <span>Your data</span>
+            <a className="secondary-action" href={Api.exportAllUrl()} download>
+              Download
+            </a>
+            <small>
+              Accounts, transactions, budgets, loans, investments, subscriptions and trips.
+              Everything this app holds for you, in one file, and yours only.
+            </small>
           </div>
+          {isOwner === true ? (
+            <div className="settings-row backup-row">
+              <span>Backups</span>
+              <strong>{formatBackupStatus(backupStatus)}</strong>
+              <small>{formatBackupDetail(backupStatus)}</small>
+            </div>
+          ) : null}
           <button className="settings-row theme-row" onClick={onThemeToggle}>
             <span>{theme === "dark" ? "Light theme" : "Dark theme"}</span>
             <strong>{theme === "dark" ? "Switch on" : "Switch on"}</strong>
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <button className="settings-row" onClick={onSignOut}>
+            <span>Signed in</span>
+            <strong>Sign out</strong>
           </button>
         </div>
       </div>
@@ -7769,27 +7913,13 @@ function creditUtilization(account: Account) {
 }
 
 function formatBackupStatus(status: BackupStatus | null) {
-  if (!status?.lastBackupAt) return "No backup yet";
-  const date = new Date(status.lastBackupAt);
-  return `Last backup: ${date.toLocaleString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit"
-  })}`;
+  if (!status) return "Unknown";
+  return status.managedBy === "host" ? "Kept by the database host" : "Not being kept";
 }
 
 function formatBackupDetail(status: BackupStatus | null) {
-  const intervalMinutes = Math.round((status?.intervalMs ?? 30 * 60 * 1000) / 60_000);
-  if (!status?.lastBackupAt) {
-    return `Pending: automatic backup runs every ${intervalMinutes} minutes while the app is open.`;
-  }
-
-  const mode =
-    status.lastBackupMode === "auto"
-      ? "Automatic"
-      : status.lastBackupMode === "shutdown"
-        ? "Shutdown"
-        : "Manual";
-  return `${mode} backup · every ${intervalMinutes} minutes`;
+  if (!status) return "The app could not reach the database to ask.";
+  return status.managedBy === "host"
+    ? "The database is hosted, and its host takes the backups. The app does not copy it, and could not: a hosted database does not hand a client its own storage. Download your data above for a copy you keep yourself."
+    : "This database is running locally and nothing is backing it up. Download your data above for a copy you keep yourself.";
 }
