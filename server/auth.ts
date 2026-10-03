@@ -107,14 +107,14 @@ const tokenHash = (token: string) => createHash("sha256").update(token).digest("
 
 export type Session = { token: string; expiresAt: string };
 
-export function startSession(userId: string): Session {
+export async function startSession(userId: string): Promise<Session> {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)").run(
+  (await db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)").run(
     tokenHash(token),
     userId,
     expiresAt
-  );
+  ));
   return { token, expiresAt };
 }
 
@@ -122,34 +122,36 @@ export function startSession(userId: string): Session {
  * The person this token belongs to, or undefined. An expired session is not a session: it is
  * removed rather than merely ignored, so a stale row cannot come back to life if a clock moves.
  */
-export function userForToken(token: string | undefined): { id: string; email: string } | undefined {
+export async function userForToken(
+  token: string | undefined,
+): Promise<{ id: string; email: string } | undefined> {
   if (!token) {
     return undefined;
   }
   const hash = tokenHash(token);
-  const row = db
+  const row = (await db
     .prepare(
       `SELECT u.id AS id, u.email AS email, s.expires_at AS expires_at
        FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.token_hash = ?`
     )
-    .get(hash) as { id: string; email: string; expires_at: string } | undefined;
+    .get(hash)) as { id: string; email: string; expires_at: string } | undefined;
   if (!row) {
     return undefined;
   }
   if (row.expires_at <= new Date().toISOString()) {
-    db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(hash);
+    (await db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(hash));
     return undefined;
   }
-  db.prepare("UPDATE sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE token_hash = ?").run(hash);
+  (await db.prepare("UPDATE sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE token_hash = ?").run(hash));
   return { id: row.id, email: row.email };
 }
 
-export function endSession(token: string | undefined): void {
+export async function endSession(token: string | undefined): Promise<void> {
   if (!token) {
     return;
   }
-  db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(tokenHash(token));
+  (await db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(tokenHash(token)));
 }
 
 /**
@@ -159,9 +161,9 @@ export function endSession(token: string | undefined): void {
  * takes would tell an attacker which email addresses have accounts here.
  */
 export async function signIn(email: string, password: string): Promise<Session | undefined> {
-  const person = db
+  const person = (await db
     .prepare("SELECT id, password_hash FROM users WHERE email = ?")
-    .get(String(email ?? "").trim()) as { id: string; password_hash: string | null } | undefined;
+    .get(String(email ?? "").trim())) as { id: string; password_hash: string | null } | undefined;
 
   if (!person?.password_hash) {
     await verifyPassword(String(password ?? ""), DECOY_HASH);

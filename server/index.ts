@@ -140,7 +140,7 @@ app.addHook("onRequest", async (request, reply) => {
     return undefined;
   }
 
-  const person = userForToken(sessionToken(request.headers.cookie));
+  const person = await userForToken(sessionToken(request.headers.cookie));
   if (person) {
     // enterWith, not run: the person has to stay in scope for the handler and everything it
     // awaits, and a callback that returns cannot do that. Checked against 40 overlapping
@@ -148,7 +148,7 @@ app.addHook("onRequest", async (request, reply) => {
     // them.
     forUser(person.id);
     (request as FastifyRequest & { person?: { id: string; email: string } }).person = person;
-    if (isOwnerOnlyPath(url) && !currentUserIsOwner()) {
+    if (isOwnerOnlyPath(url) && !(await currentUserIsOwner())) {
       return reply.status(403).send({ error: "Only the owner of this installation can do that." });
     }
     return undefined;
@@ -259,7 +259,7 @@ app.get("/api/auth/me", async (request) => {
 app.get("/api/bootstrap", async () => ({
   settings: getSettings(),
   profile: getProfile(),
-  accounts: listAccounts().filter((account) => !account.isArchived),
+  accounts: (await listAccounts()).filter((account) => !account.isArchived),
   categoryTypes: listCategoryTypes(),
   loans: listLoans(true),
   subscriptions: listAutopaySubscriptions(true),
@@ -278,7 +278,7 @@ app.get("/api/overview", async (request) => {
   return getOverview(blankToUndefined(query.accountId), query.month);
 });
 
-app.get("/api/accounts", async () => listAccounts().filter((account) => !account.isArchived));
+app.get("/api/accounts", async () => (await listAccounts()).filter((account) => !account.isArchived));
 
 app.post("/api/accounts", async (request, reply) => {
   const account = createAccount(request.body as never);

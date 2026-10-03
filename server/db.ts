@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import { createClient, type Client } from "@libsql/client";
 import {
   DEFAULT_CATEGORY_TYPES,
   DEFAULTS_ADDED_AFTER_LEDGER,
@@ -18,7 +18,20 @@ export const dbPath = configuredDbPath
   ? path.resolve(configuredDbPath)
   : path.join(dataDir, "finance.db");
 
-mkdirSync(path.dirname(dbPath), { recursive: true });
+/**
+ * Where the database is, as libSQL wants to hear it.
+ *
+ * `FINANCE_DB_URL` is a hosted database -- `libsql://…` with `FINANCE_DB_TOKEN`. Without it, the
+ * same client opens the same local file the application has always used. One client and one code
+ * path either way: a second driver for development is a second thing to be wrong, and the bug it
+ * hides is always the one that only appears in production.
+ */
+const remoteUrl = process.env.FINANCE_DB_URL?.trim();
+export const isRemoteDatabase = Boolean(remoteUrl);
+
+if (!isRemoteDatabase) {
+  mkdirSync(path.dirname(dbPath), { recursive: true });
+}
 
 /**
  * What the application needs from a database, and nothing else. The 127 statements in
@@ -28,60 +41,195 @@ mkdirSync(path.dirname(dbPath), { recursive: true });
 export type Row = Record<string, unknown>;
 
 export type Statement = {
-  all: (...params: unknown[]) => Row[];
-  get: (...params: unknown[]) => Row | undefined;
-  run: (...params: unknown[]) => { changes: number | bigint };
+  all: (...params: unknown[]) => Promise<Row[]>;
+  get: (...params: unknown[]) => Promise<Row | undefined>;
+  run: (...params: unknown[]) => Promise<{ changes: number | bigint }>;
 };
 
 export type Adapter = {
   /** What engine this is, for the few places that legitimately have to know. */
-  readonly dialect: "sqlite" | "postgres";
+  readonly dialect: "sqlite";
+  /** Whether the database is across a network, which decides what it can be asked to do. */
+  readonly remote: boolean;
   prepare: (sql: string) => Statement;
-  exec: (sql: string) => void;
+  exec: (sql: string) => Promise<void>;
+  /**
+   * Runs `fn` with every statement inside one transaction.
+   *
+   * Not BEGIN and COMMIT as statements. libSQL does not hold a transaction open across separate
+   * calls -- measured: BEGIN, INSERT, COMMIT in sequence fails at the COMMIT with "no transaction
+   * is active", so every statement had been committing on its own. The client has its own
+   * transaction object, and the adapter points statements at it while one is open.
+   */
+  transaction: <T>(fn: () => T | Promise<T>) => Promise<T>;
   close: () => void;
   /**
    * Copy the whole database to a file. This is the one thing the application asks for that is not
-   * a statement: SQLite does it with VACUUM INTO, which no other engine has, and a hosted Postgres
-   * does not hand a client its own storage at all. Naming it here keeps that difference inside the
-   * adapter instead of leaving unportable SQL in the middle of the backup code -- and a Postgres
-   * adapter answers it by saying so, which is what D7 replaces it with.
+   * a statement: SQLite does it with VACUUM INTO, which only works where the client can see the
+   * storage. Against a local file it does; against a hosted database it cannot, and the adapter
+   * says so plainly rather than letting unportable SQL sit in the middle of the backup code.
    */
-  copyTo: (target: string) => void;
+  copyTo: (target: string) => Promise<void>;
 };
 
-const driver = new DatabaseSync(dbPath);
+const driver: Client = createClient(
+  remoteUrl
+    ? { url: remoteUrl, authToken: process.env.FINANCE_DB_TOKEN, intMode: "number" }
+    : { url: `file:${dbPath}`, intMode: "number" },
+);
 
-driver.exec("PRAGMA foreign_keys = ON;");
-driver.exec("PRAGMA journal_mode = WAL;");
-driver.exec("PRAGMA busy_timeout = 5000;");
+// Local files need these said out loud. A hosted database has them already and refuses to be
+// told: journal mode and busy timeouts are the host's business, not a client's.
+if (!isRemoteDatabase) {
+  await driver.executeMultiple(
+    "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
+  );
+}
 
 /**
- * SQLite, behind the shape above. A Postgres adapter is the same three methods over `pg`, with
- * `?` rewritten to `$1, $2, …` -- `translate` below is where that will live, and it is a no-op
- * here because SQLite's own placeholder is already `?`.
+ * libSQL, behind the shape above -- which is SQLite, so every constraint this schema relies on
+ * carries over: the composite foreign keys, COLLATE NOCASE, D8's one-scope CHECK.
  *
- * The one thing a Postgres adapter cannot do with this shape is be synchronous, and `node:sqlite`
- * is. Converting the application to `async` is the step after this one; the point of naming the
- * shape now is that the conversion then has a single place to start from rather than 127.
+ * The methods return promises because the client speaks over a socket even when that socket is a
+ * local file. That is the whole cost of the move, and it is paid here once rather than in 170
+ * places deciding for themselves.
+ *
+ * `args` as an array, not varargs: libSQL takes positional parameters that way, and the 170 call
+ * sites already pass them as varargs, so the adapter is where the two meet.
  */
-function sqliteAdapter(): Adapter {
+async function runTransactionWith<T>(
+  driverRef: Client,
+  setOpen: (tx: Awaited<ReturnType<Client["transaction"]>> | undefined) => void,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  const tx = await driverRef.transaction("write");
+  setOpen(tx);
+  try {
+    const result = await fn();
+    await tx.commit();
+    return result;
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch {
+      /* the error the body threw is the one worth reporting */
+    }
+    throw error;
+  } finally {
+    setOpen(undefined);
+    // close() releases the transaction whatever happened above. Without it, a body that threw and
+    // a rollback that also threw leave the write lock held for the life of the process, and every
+    // statement after it fails with "database is locked" -- which reads as a dozen unrelated
+    // failures rather than the one that actually went wrong.
+    try {
+      tx.close();
+    } catch {
+      /* already finished */
+    }
+  }
+}
+
+function libsqlAdapter(): Adapter {
+  const toParams = (params: unknown[]) => params as never[];
+  // While a transaction is open every statement goes through it. Anything that kept using the
+  // client would run outside the transaction and commit on its own, which is the quiet version of
+  // having no transaction at all.
+  let open: Awaited<ReturnType<Client["transaction"]>> | undefined;
+  const runner = () => open ?? driver;
+  // One client holds one write lock, so two transactions must not overlap: the second would be
+  // refused with "database is locked" and, worse, statements belonging to one could reach the
+  // other. They queue instead, which costs nothing here -- requests are short, and SQLite
+  // serialises writers anyway.
+  let queue: Promise<unknown> = Promise.resolve();
   return {
     dialect: "sqlite",
+    remote: isRemoteDatabase,
     prepare: (sql) => {
-      const prepared = driver.prepare(translate(sql));
+      const text = translate(sql);
       return {
-        all: (...params) => prepared.all(...(params as never[])) as Row[],
-        get: (...params) =>
-          prepared.get(...(params as never[])) as Row | undefined,
-        run: (...params) => prepared.run(...(params as never[])),
+        all: async (...params) =>
+          (await runner().execute({ sql: text, args: toParams(params) })).rows as unknown as Row[],
+        get: async (...params) =>
+          ((await runner().execute({ sql: text, args: toParams(params) })).rows[0] ?? undefined) as
+            | Row
+            | undefined,
+        run: async (...params) => ({
+          changes: (await runner().execute({ sql: text, args: toParams(params) })).rowsAffected,
+        }),
       };
     },
-    exec: (sql) => driver.exec(sql),
+    transaction: async (fn) => {
+      // SQLite has no nested transactions, so an inner call joins the one already open rather
+      // than starting a second one that would commit the outer one's work early.
+      if (open) return fn();
+      const mine = queue.then(() => runTransactionWith(driver, (tx) => { open = tx; }, fn));
+      // The queue must not stop at a failure: it carries the turn, not the result.
+      queue = mine.catch(() => undefined);
+      return mine;
+    },
+
+    // One statement at a time, not `executeMultiple`.
+    //
+    // The migrations arrive as whole scripts, and the obvious call for that wraps the script in a
+    // transaction of its own and commits it. Inside a `transaction()` that ends the outer one
+    // silently, and the COMMIT that follows fails with "no transaction is active" -- which is how
+    // a rebuild that was meant to be all-or-nothing becomes a sequence of separate commits.
+    exec: async (sql) => {
+      for (const statement of splitStatements(sql)) {
+        await runner().execute(statement);
+      }
+    },
     close: () => driver.close(),
-    copyTo: (target) => {
-      driver.prepare("VACUUM INTO ?").run(target);
+    copyTo: async (target) => {
+      if (isRemoteDatabase) {
+        // Saying so beats writing an empty file and calling it a backup. A hosted database does
+        // not hand a client its own storage, so this is the host's job, not the application's.
+        throw new Error(
+          "A hosted database cannot copy itself to a file. Use the host's own backups, or the " +
+            "per-person export at /api/export/all.json.",
+        );
+      }
+      await driver.execute({ sql: "VACUUM INTO ?", args: [target] });
     },
   };
+}
+
+/**
+ * Splits a SQL script into its statements.
+ *
+ * Aware of strings and comments, because a `;` inside either is not the end of anything -- the
+ * schema has both, and a naive split on `;` would cut a CHECK constraint's message in half.
+ */
+function splitStatements(sql: string): string[] {
+  const statements: string[] = [];
+  let current = "";
+  for (let i = 0; i < sql.length; i += 1) {
+    const c = sql[i];
+    if (c === "'" || c === '"' || c === "`") {
+      const quote = c;
+      current += c;
+      i += 1;
+      while (i < sql.length) {
+        current += sql[i];
+        if (sql[i] === quote) break;
+        i += 1;
+      }
+      continue;
+    }
+    if (c === "-" && sql[i + 1] === "-") {
+      while (i < sql.length && sql[i] !== "\n") { current += sql[i]; i += 1; }
+      current += "\n";
+      continue;
+    }
+    if (c === ";") {
+      if (current.trim()) statements.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += c;
+  }
+  if (current.trim()) statements.push(current.trim());
+  return statements;
 }
 
 /** The one place a statement is adjusted for the engine underneath. */
@@ -89,10 +237,10 @@ function translate(sql: string): string {
   return sql;
 }
 
-export const db: Adapter = sqliteAdapter();
+export const db: Adapter = libsqlAdapter();
 
-export function initDatabase() {
-  db.exec(`
+export async function initDatabase() {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -291,44 +439,44 @@ export function initDatabase() {
 
   // Stage 2 of the move to more than one person: the owner exists, and settings are split by
   // whom they belong to, before anything else reads or writes a row.
-  ensureOwner();
+  await ensureOwner();
 
   // Start-up has no request, so it says whose rows it is touching rather than letting
   // currentUserId() guess. Everything below seeds or migrates the data of the single owner an
   // installation starts with; on a database with two people none of it writes a row.
-  asOwner(() => {
-    splitSettings();
-    migrateAccountNameConstraint();
-    migrateAccountTypes();
-    migrateTransactionKinds();
-    migrateTransactionSplitsNullable();
-    ensureTaxonomySchema();
+  await asOwner(async () => {
+    await splitSettings();
+    await migrateAccountNameConstraint();
+    await migrateAccountTypes();
+    await migrateTransactionKinds();
+    await migrateTransactionSplitsNullable();
+    await ensureTaxonomySchema();
     // The owner columns and the keys that carry them come before anything writes a taxonomy row,
     // so every row written below belongs to somebody from the moment it exists.
-    addOwnerColumns();
-    rekeyForOwner();
-    seedTaxonomy();
+    await addOwnerColumns();
+    await rekeyForOwner();
+    await seedTaxonomy();
     // The legacy migration stays after seeding, because it maps old rows onto the default Types
     // and SubTypes that seeding is what puts there.
-    migrateLegacyCategoriesToTaxonomy();
-    dropLegacyCategories();
-    addColumnIfMissing("users", "password_hash", "TEXT");
-    ensureSessionIndexes();
-    ensureAccountIndexes();
-    ensureTransactionIndexes();
-    ensureLoanIndexes();
-    ensureAutopayIndexes();
-    ensureBudgetIndexes();
-    ensureDueDayColumns();
-    ensureInvestmentColumns();
-    migrateInvestmentTypes();
-    ensureInvestmentIndexes();
-    ensureVacationIndexes();
-    ensureTaxonomyIndexes();
-    seedSettings();
+    await migrateLegacyCategoriesToTaxonomy();
+    await dropLegacyCategories();
+    await addColumnIfMissing("users", "password_hash", "TEXT");
+    await ensureSessionIndexes();
+    await ensureAccountIndexes();
+    await ensureTransactionIndexes();
+    await ensureLoanIndexes();
+    await ensureAutopayIndexes();
+    await ensureBudgetIndexes();
+    await ensureDueDayColumns();
+    await ensureInvestmentColumns();
+    await migrateInvestmentTypes();
+    await ensureInvestmentIndexes();
+    await ensureVacationIndexes();
+    await ensureTaxonomyIndexes();
+    await seedSettings();
     // D4 and D8, last: every other migration has finished moving rows by now, so the composite
     // keys are checked against the schema as it will actually be used.
-    addCompositeOwnerKeys();
+    await addCompositeOwnerKeys();
   });
   pruneBackupFiles();
 }
@@ -339,31 +487,31 @@ export function initDatabase() {
  * anything across; if a value survived that, something is unaccounted for and dropping the
  * column would destroy it. In that case this leaves every column and every row alone.
  */
-function dropLegacyCategories() {
-  const hasTable = tableExists("categories");
-  const onTransactions = columnExists("transactions", "category_id");
-  const onSplits = columnExists("transaction_splits", "category_id");
+async function dropLegacyCategories() {
+  const hasTable = await tableExists("categories");
+  const onTransactions = await columnExists("transactions", "category_id");
+  const onSplits = await columnExists("transaction_splits", "category_id");
   if (!hasTable && !onTransactions && !onSplits) {
     return;
   }
 
   const stranded =
-    (onTransactions
+    (await onTransactions
       ? (
-          db
+          (await db
             .prepare(
               "SELECT COUNT(*) AS n FROM transactions WHERE category_id IS NOT NULL",
             )
-            .get() as { n: number }
+            .get()) as { n: number }
         ).n
       : 0) +
-    (onSplits
+    (await onSplits
       ? (
-          db
+          (await db
             .prepare(
               "SELECT COUNT(*) AS n FROM transaction_splits WHERE category_id IS NOT NULL",
             )
-            .get() as { n: number }
+            .get()) as { n: number }
         ).n
       : 0);
 
@@ -375,19 +523,19 @@ function dropLegacyCategories() {
     return;
   }
 
-  db.exec("PRAGMA foreign_keys = OFF;");
+  await db.exec("PRAGMA foreign_keys = OFF;");
   try {
-    transaction(() => {
+    await transaction(async () => {
       // SQLite refuses to drop a column an index still references.
-      db.exec("DROP INDEX IF EXISTS idx_transactions_category;");
+      await db.exec("DROP INDEX IF EXISTS idx_transactions_category;");
       if (onTransactions)
-        db.exec("ALTER TABLE transactions DROP COLUMN category_id;");
+        await db.exec("ALTER TABLE transactions DROP COLUMN category_id;");
       if (onSplits)
-        db.exec("ALTER TABLE transaction_splits DROP COLUMN category_id;");
-      if (hasTable) db.exec("DROP TABLE categories;");
+        await db.exec("ALTER TABLE transaction_splits DROP COLUMN category_id;");
+      if (hasTable) await db.exec("DROP TABLE categories;");
     });
   } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
+    await db.exec("PRAGMA foreign_keys = ON;");
   }
 }
 
@@ -445,36 +593,36 @@ const PER_PERSON_SETTINGS = new Set([
  * whoever the stored profile describes. Their id is generated once and then never changes, so
  * every row attributed to them stays attributed across restarts.
  */
-function ensureOwner() {
-  const profileEmail = () => {
-    const source = tableExists("settings") ? "settings" : "user_settings";
-    const stored = db
+async function ensureOwner() {
+  const profileEmail = async () => {
+    const source = (await tableExists("settings")) ? "settings" : "user_settings";
+    const stored = (await db
       .prepare(`SELECT value FROM ${source} WHERE key = 'profile_email'`)
-      .get() as { value: string } | undefined;
+      .get()) as { value: string } | undefined;
     return (stored?.value ?? "").trim();
   };
 
-  const existing = db
+  const existing = (await db
     .prepare("SELECT id, email FROM users ORDER BY created_at, id LIMIT 1")
-    .get() as { id: string; email: string } | undefined;
+    .get()) as { id: string; email: string } | undefined;
   if (existing) {
     // A database created before its owner filled in a profile holds the placeholder below. Once
     // the profile names them, the owner becomes that person rather than staying anonymous.
-    const email = profileEmail();
+    const email = await profileEmail();
     if (existing.email === PLACEHOLDER_OWNER_EMAIL && email) {
-      db.prepare("UPDATE users SET email = ? WHERE id = ?").run(
+      (await db.prepare("UPDATE users SET email = ? WHERE id = ?").run(
         email,
         existing.id,
-      );
+      ));
     }
     return existing.id;
   }
 
   const id = randomUUID();
-  db.prepare("INSERT INTO users (id, email) VALUES (?, ?)").run(
+  (await db.prepare("INSERT INTO users (id, email) VALUES (?, ?)").run(
     id,
-    profileEmail() || PLACEHOLDER_OWNER_EMAIL,
-  );
+    (await profileEmail()) || PLACEHOLDER_OWNER_EMAIL,
+  ));
   return id;
 }
 
@@ -527,8 +675,8 @@ export function runAsUser<T>(userId: string, fn: () => T): T {
  * For the two places with no request: the migrations that run at start-up, and the account
  * command. Both legitimately act as the single owner of an installation that has one.
  */
-export function asOwner<T>(fn: () => T): T {
-  return requestUser.run({ id: ownerId() }, fn);
+export async function asOwner<T>(fn: () => T | Promise<T>): Promise<T> {
+  return requestUser.run({ id: await ownerId() }, fn);
 }
 
 /** Whether a person is in scope, for the few places that have to ask rather than assume. */
@@ -543,10 +691,10 @@ export function hasCurrentUser(): boolean {
  * same order, so "the owner" cannot come to mean two different people depending on which function
  * was asked -- which is exactly how the second account would quietly gain the first one's rights.
  */
-export function ownerId(): string {
-  const row = db
+export async function ownerId(): Promise<string> {
+  const row = (await db
     .prepare("SELECT id FROM users ORDER BY created_at, id LIMIT 1")
-    .get() as { id: string } | undefined;
+    .get()) as { id: string } | undefined;
   if (!row) {
     throw new Error(
       "No user exists: initDatabase must run before any row is written.",
@@ -556,20 +704,20 @@ export function ownerId(): string {
 }
 
 /** Whether the person in scope owns this installation. Throws outside a request, like the rest. */
-export function currentUserIsOwner(): boolean {
-  return currentUserId() === ownerId();
+export async function currentUserIsOwner(): Promise<boolean> {
+  return currentUserId() === (await ownerId());
 }
 
 /** Keeps the owner's identity in step with the profile they edit. */
-export function setOwnerEmail(email: string) {
+export async function setOwnerEmail(email: string) {
   const trimmed = email.trim();
   if (!trimmed) {
     return;
   }
-  db.prepare("UPDATE users SET email = ? WHERE id = ?").run(
+  (await db.prepare("UPDATE users SET email = ? WHERE id = ?").run(
     trimmed,
     currentUserId(),
-  );
+  ));
 }
 
 /**
@@ -578,30 +726,30 @@ export function setOwnerEmail(email: string) {
  * foreign keys off and the sentinel default; the existing rows are then attributed to the owner.
  * What a table gains is an owner it cannot lose, not a nullable column somebody has to remember.
  */
-function addOwnerColumns() {
-  const owner = ensureOwner();
-  db.exec("PRAGMA foreign_keys = OFF;");
+async function addOwnerColumns() {
+  const owner = await ensureOwner();
+  await db.exec("PRAGMA foreign_keys = OFF;");
   try {
     for (const table of OWNED_TABLES) {
-      if (!tableExists(table)) continue;
-      if (!columnExists(table, "user_id")) {
-        db.exec(
+      if (!(await tableExists(table))) continue;
+      if (!(await columnExists(table, "user_id"))) {
+        await db.exec(
           `ALTER TABLE ${table}
              ADD COLUMN user_id TEXT NOT NULL DEFAULT '${UNATTRIBUTED}'
              REFERENCES users(id) ON DELETE CASCADE`,
         );
       }
-      db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(
+      (await db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(
         owner,
         UNATTRIBUTED,
-      );
+      ));
       // Every owner-filtered query the app will grow needs this, or it reads the whole table.
-      db.exec(
+      await db.exec(
         `CREATE INDEX IF NOT EXISTS idx_${table}_owner ON ${table}(user_id)`,
       );
     }
   } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
+    await db.exec("PRAGMA foreign_keys = ON;");
   }
 }
 
@@ -610,35 +758,35 @@ function addOwnerColumns() {
  * scope and one Type name per *database* rather than per person. SQLite cannot alter a primary
  * key or drop an inline UNIQUE, so each is rebuilt with the owner inside its key.
  */
-function rekeyForOwner() {
-  const owner = ensureOwner();
-  const keyed = (table: string, marker: string) => {
-    const row = db
+async function rekeyForOwner() {
+  const owner = await ensureOwner();
+  const keyed = async (table: string, marker: string) => {
+    const row = (await db
       .prepare(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
       )
-      .get(table) as { sql: string } | undefined;
+      .get(table)) as { sql: string } | undefined;
     return !row || row.sql.replace(/\s+/g, " ").includes(marker);
   };
 
-  const rebuild = (table: string, columns: string, create: string) => {
-    db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(
+  const rebuild = async (table: string, columns: string, create: string) => {
+    (await db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(
       owner,
       UNATTRIBUTED,
-    );
-    db.exec(`CREATE TABLE ${table}_rekeyed (${create});`);
-    db.exec(
+    ));
+    await db.exec(`CREATE TABLE ${table}_rekeyed (${create});`);
+    await db.exec(
       `INSERT INTO ${table}_rekeyed (${columns}) SELECT ${columns} FROM ${table};`,
     );
-    db.exec(`DROP TABLE ${table};`);
-    db.exec(`ALTER TABLE ${table}_rekeyed RENAME TO ${table};`);
+    await db.exec(`DROP TABLE ${table};`);
+    await db.exec(`ALTER TABLE ${table}_rekeyed RENAME TO ${table};`);
   };
 
-  db.exec("PRAGMA foreign_keys = OFF;");
+  await db.exec("PRAGMA foreign_keys = OFF;");
   try {
-    transaction(() => {
-      if (!keyed("net_worth_snapshots", "PRIMARY KEY (user_id, month)")) {
-        rebuild(
+    await transaction(async () => {
+      if (!(await keyed("net_worth_snapshots", "PRIMARY KEY (user_id, month)"))) {
+        await rebuild(
           "net_worth_snapshots",
           "user_id, month, liquid_paise, investments_paise, liabilities_paise, net_worth_paise, captured_at",
           `user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -654,12 +802,12 @@ function rekeyForOwner() {
 
       // D8 later replaces scope_id with two columns and keys the table on those instead, so a
       // database that has already been through that must not be dragged back to this shape.
-      const splitAlready = columnExists("budget_lines", "scope_subcategory_id");
+      const splitAlready = await columnExists("budget_lines", "scope_subcategory_id");
       if (
         !splitAlready &&
-        !keyed("budget_lines", "UNIQUE (user_id, month, scope_type, scope_id)")
+        !(await keyed("budget_lines", "UNIQUE (user_id, month, scope_type, scope_id)"))
       ) {
-        rebuild(
+        await rebuild(
           "budget_lines",
           "id, user_id, month, scope_type, scope_id, amount_paise, created_at, updated_at",
           `id TEXT PRIMARY KEY,
@@ -674,8 +822,8 @@ function rekeyForOwner() {
         );
       }
 
-      if (!keyed("category_types", "UNIQUE (user_id, name)")) {
-        rebuild(
+      if (!(await keyed("category_types", "UNIQUE (user_id, name)"))) {
+        await rebuild(
           "category_types",
           "id, user_id, name, behavior, icon, color, is_system, is_locked, sort_order, created_at",
           `id TEXT PRIMARY KEY,
@@ -693,7 +841,7 @@ function rekeyForOwner() {
       }
     });
   } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
+    await db.exec("PRAGMA foreign_keys = ON;");
   }
 
   // A rebuilt table keeps none of its indexes, so the ones it had come back.
@@ -702,12 +850,12 @@ function rekeyForOwner() {
     "budget_lines",
     "category_types",
   ]) {
-    db.exec(
+    await db.exec(
       `CREATE INDEX IF NOT EXISTS idx_${table}_owner ON ${table}(user_id);`,
     );
   }
-  ensureBudgetIndexes();
-  ensureTaxonomyIndexes();
+  await ensureBudgetIndexes();
+  await ensureTaxonomyIndexes();
 }
 
 /**
@@ -715,14 +863,14 @@ function rekeyForOwner() {
  * so only one of each could exist. It becomes two tables whose names say which kind they hold,
  * so no future reader has to know the difference by heart.
  */
-function splitSettings() {
+async function splitSettings() {
   // Only a database written by an earlier release still has the single settings table; this is the
   // one place that knows it ever existed, which is why nothing above creates it.
-  if (!tableExists("settings")) {
+  if (!(await tableExists("settings"))) {
     return;
   }
-  const owner = ensureOwner();
-  const rows = db.prepare("SELECT key, value FROM settings").all() as Array<{
+  const owner = await ensureOwner();
+  const rows = (await db.prepare("SELECT key, value FROM settings").all()) as Array<{
     key: string;
     value: string;
   }>;
@@ -733,15 +881,15 @@ function splitSettings() {
     "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
   );
 
-  transaction(() => {
+  await transaction(async () => {
     for (const row of rows) {
       if (PER_PERSON_SETTINGS.has(row.key)) {
-        mine.run(owner, row.key, row.value);
+        await mine.run(owner, row.key, row.value);
       } else {
-        shared.run(row.key, row.value);
+        await shared.run(row.key, row.value);
       }
     }
-    db.exec("DROP TABLE settings;");
+    await db.exec("DROP TABLE settings;");
   });
 }
 
@@ -766,10 +914,10 @@ const OWNER_PARENTS = [
   "subcategories",
 ];
 
-function ensureParentOwnerKeys() {
+async function ensureParentOwnerKeys() {
   for (const table of OWNER_PARENTS) {
-    if (!tableExists(table)) continue;
-    db.exec(
+    if (!(await tableExists(table))) continue;
+    await db.exec(
       `CREATE UNIQUE INDEX IF NOT EXISTS uq_${table}_id_owner ON ${table}(id, user_id);`,
     );
   }
@@ -970,23 +1118,23 @@ const COMPOSITE_CHILDREN: Array<{
 ];
 
 /** True once the table's own definition carries the marker, so this runs once and then never. */
-function alreadyComposite(table: string, marker: string) {
-  const row = db
+async function alreadyComposite(table: string, marker: string) {
+  const row = (await db
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(table) as { sql: string } | undefined;
+    .get(table)) as { sql: string } | undefined;
   return !row || row.sql.replace(/\s+/g, " ").includes(marker);
 }
 
-function addCompositeOwnerKeys() {
-  ensureParentOwnerKeys();
+async function addCompositeOwnerKeys() {
+  await ensureParentOwnerKeys();
 
   // A database that still holds a legacy category keeps its category_id columns -- dropLegacyCategories
   // leaves them alone and asks the owner to recategorise those rows first. Rebuilding a table here
   // writes out an explicit column list, so it would take those columns, and the values in them, with
   // it. Nothing is rebuilt until that cleanup has happened; the keys arrive on the next start.
   const legacyRemains =
-    columnExists("transactions", "category_id") ||
-    columnExists("transaction_splits", "category_id");
+    (await columnExists("transactions", "category_id")) ||
+    (await columnExists("transaction_splits", "category_id"));
   if (legacyRemains) {
     console.warn(
       "[db] Legacy category columns are still present, so the owner keys were not added yet. " +
@@ -995,52 +1143,59 @@ function addCompositeOwnerKeys() {
     return;
   }
 
-  const pending = COMPOSITE_CHILDREN.filter(
-    (child) =>
-      tableExists(child.table) && !alreadyComposite(child.table, child.marker),
-  );
+  // A loop, not `filter`: an async predicate hands `filter` a promise, which is always truthy, so
+  // every child would look pending and every table would be rebuilt.
+  const pending: typeof COMPOSITE_CHILDREN = [];
+  for (const child of COMPOSITE_CHILDREN) {
+    if (
+      (await tableExists(child.table)) &&
+      !(await alreadyComposite(child.table, child.marker))
+    ) {
+      pending.push(child);
+    }
+  }
   if (pending.length === 0) {
     return;
   }
-  createMigrationBackup("composite-owner-keys");
+  await createMigrationBackup("composite-owner-keys");
 
-  db.exec("PRAGMA foreign_keys = OFF;");
+  await db.exec("PRAGMA foreign_keys = OFF;");
   try {
-    transaction(() => {
+    await transaction(async () => {
       for (const child of pending) {
         const columns = child.columns.replace(/\s+/g, " ").trim();
-        db.exec(`CREATE TABLE ${child.table}_owned (${child.create});`);
-        db.exec(
+        await db.exec(`CREATE TABLE ${child.table}_owned (${child.create});`);
+        await db.exec(
           `INSERT INTO ${child.table}_owned (${columns})
            SELECT ${(child.select ?? columns).replace(/\s+/g, " ").trim()} FROM ${child.table};`,
         );
-        db.exec(`DROP TABLE ${child.table};`);
-        db.exec(`ALTER TABLE ${child.table}_owned RENAME TO ${child.table};`);
+        await db.exec(`DROP TABLE ${child.table};`);
+        await db.exec(`ALTER TABLE ${child.table}_owned RENAME TO ${child.table};`);
       }
     });
   } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
+    await db.exec("PRAGMA foreign_keys = ON;");
   }
 
   // A rebuilt table keeps none of its indexes, and a parent that was rebuilt loses the unique
   // index its own children depend on.
-  ensureParentOwnerKeys();
+  await ensureParentOwnerKeys();
   for (const child of pending) {
-    db.exec(
+    await db.exec(
       `CREATE INDEX IF NOT EXISTS idx_${child.table}_owner ON ${child.table}(user_id);`,
     );
   }
-  ensureAccountIndexes();
-  ensureTransactionIndexes();
-  ensureLoanIndexes();
-  ensureAutopayIndexes();
-  ensureBudgetIndexes();
-  ensureInvestmentIndexes();
-  ensureVacationIndexes();
-  ensureTaxonomyIndexes();
+  await ensureAccountIndexes();
+  await ensureTransactionIndexes();
+  await ensureLoanIndexes();
+  await ensureAutopayIndexes();
+  await ensureBudgetIndexes();
+  await ensureInvestmentIndexes();
+  await ensureVacationIndexes();
+  await ensureTaxonomyIndexes();
 
   // Nothing may have been orphaned on the way through.
-  const broken = db.prepare("PRAGMA foreign_key_check").all() as Array<{
+  const broken = (await db.prepare("PRAGMA foreign_key_check").all()) as Array<{
     table?: string;
   }>;
   if (broken.length > 0) {
@@ -1053,8 +1208,8 @@ function addCompositeOwnerKeys() {
   }
 }
 
-function ensureLoanIndexes() {
-  db.exec(`
+async function ensureLoanIndexes() {
+  await db.exec(`
     CREATE INDEX IF NOT EXISTS idx_loans_subcategory ON loans(subcategory_id);
     CREATE INDEX IF NOT EXISTS idx_loans_archived ON loans(is_archived);
     CREATE INDEX IF NOT EXISTS idx_loan_payments_loan ON loan_payments(loan_id);
@@ -1062,76 +1217,76 @@ function ensureLoanIndexes() {
   `);
 }
 
-function ensureAutopayIndexes() {
-  db.exec(`
+async function ensureAutopayIndexes() {
+  await db.exec(`
     CREATE INDEX IF NOT EXISTS idx_autopay_subscriptions_archived ON autopay_subscriptions(is_archived);
     CREATE INDEX IF NOT EXISTS idx_autopay_payments_subscription ON autopay_payments(subscription_id);
     CREATE INDEX IF NOT EXISTS idx_autopay_payments_transaction ON autopay_payments(transaction_id);
   `);
 }
 
-function ensureBudgetIndexes() {
-  db.exec(
+async function ensureBudgetIndexes() {
+  await db.exec(
     "CREATE INDEX IF NOT EXISTS idx_budget_lines_month ON budget_lines(month);",
   );
   // D8 replaced the single polymorphic scope_id with one column per kind, so the index that
   // served lookups by scope follows it. An older database still has the old column until the
   // migration below has run on it.
-  if (columnExists("budget_lines", "scope_subcategory_id")) {
-    db.exec(`
+  if (await columnExists("budget_lines", "scope_subcategory_id")) {
+    await db.exec(`
       DROP INDEX IF EXISTS idx_budget_lines_scope;
       CREATE INDEX IF NOT EXISTS idx_budget_lines_type_scope ON budget_lines(scope_type_id);
       CREATE INDEX IF NOT EXISTS idx_budget_lines_subcategory_scope ON budget_lines(scope_subcategory_id);
     `);
-  } else if (columnExists("budget_lines", "scope_id")) {
-    db.exec(
+  } else if (await columnExists("budget_lines", "scope_id")) {
+    await db.exec(
       "CREATE INDEX IF NOT EXISTS idx_budget_lines_scope ON budget_lines(scope_type, scope_id);",
     );
   }
 }
 
-function ensureVacationIndexes() {
-  db.exec(`
+async function ensureVacationIndexes() {
+  await db.exec(`
     CREATE INDEX IF NOT EXISTS idx_vacations_archived ON vacations(is_archived);
     CREATE INDEX IF NOT EXISTS idx_vacation_expenses_vacation ON vacation_expenses(vacation_id);
     CREATE INDEX IF NOT EXISTS idx_vacation_expenses_transaction ON vacation_expenses(transaction_id);
   `);
 }
 
-function ensureInvestmentIndexes() {
-  db.exec(`
+async function ensureInvestmentIndexes() {
+  await db.exec(`
     CREATE INDEX IF NOT EXISTS idx_investments_type ON investments(type);
     CREATE INDEX IF NOT EXISTS idx_investment_payments_investment ON investment_payments(investment_id);
     CREATE INDEX IF NOT EXISTS idx_investment_payments_transaction ON investment_payments(transaction_id);
   `);
 }
 
-function ensureInvestmentColumns() {
-  addColumnIfMissing("investments", "shares", "REAL");
-  addColumnIfMissing("investments", "purchase_date", "TEXT");
+async function ensureInvestmentColumns() {
+  await addColumnIfMissing("investments", "shares", "REAL");
+  await addColumnIfMissing("investments", "purchase_date", "TEXT");
   // The day the user last entered each figure; linked SIPs dated after it are added on top.
   // NULL (holdings from before this) means "the day the holding was added".
-  addColumnIfMissing("investments", "invested_as_of", "TEXT");
-  addColumnIfMissing("investments", "value_as_of", "TEXT");
+  await addColumnIfMissing("investments", "invested_as_of", "TEXT");
+  await addColumnIfMissing("investments", "value_as_of", "TEXT");
 }
 
-function migrateInvestmentTypes() {
-  const row = db
+async function migrateInvestmentTypes() {
+  const row = (await db
     .prepare(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'investments'",
     )
-    .get() as { sql?: string } | undefined;
+    .get()) as { sql?: string } | undefined;
 
   // Only rebuild older tables whose CHECK constraint predates the newest type ('bonds').
   if (!row?.sql || row.sql.includes("'bonds'")) {
     return;
   }
 
-  createMigrationBackup("investment-types");
-  db.exec("PRAGMA foreign_keys = OFF;");
-  db.exec("BEGIN;");
+  await createMigrationBackup("investment-types");
+  await db.exec("PRAGMA foreign_keys = OFF;");
+  await db.exec("BEGIN;");
   try {
-    db.exec(`
+    await db.exec(`
       CREATE TABLE investments_new (
         id TEXT PRIMARY KEY,
         type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'other')),
@@ -1157,30 +1312,30 @@ function migrateInvestmentTypes() {
       DROP TABLE investments;
       ALTER TABLE investments_new RENAME TO investments;
     `);
-    db.exec("COMMIT;");
+    await db.exec("COMMIT;");
   } catch (error) {
-    db.exec("ROLLBACK;");
+    await db.exec("ROLLBACK;");
     throw error;
   } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
+    await db.exec("PRAGMA foreign_keys = ON;");
   }
 }
 
-function migrateAccountNameConstraint() {
-  const row = db
+async function migrateAccountNameConstraint() {
+  const row = (await db
     .prepare(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'",
     )
-    .get() as { sql?: string } | undefined;
+    .get()) as { sql?: string } | undefined;
 
   if (!row?.sql?.includes("name TEXT NOT NULL COLLATE NOCASE UNIQUE")) {
     return;
   }
 
-  db.exec("PRAGMA foreign_keys = OFF;");
-  db.exec("BEGIN;");
+  await db.exec("PRAGMA foreign_keys = OFF;");
+  await db.exec("BEGIN;");
   try {
-    db.exec(`
+    await db.exec(`
       CREATE TABLE accounts_new (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL COLLATE NOCASE,
@@ -1202,30 +1357,30 @@ function migrateAccountNameConstraint() {
       DROP TABLE accounts;
       ALTER TABLE accounts_new RENAME TO accounts;
     `);
-    db.exec("COMMIT;");
+    await db.exec("COMMIT;");
   } catch (error) {
-    db.exec("ROLLBACK;");
+    await db.exec("ROLLBACK;");
     throw error;
   } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
+    await db.exec("PRAGMA foreign_keys = ON;");
   }
 }
 
-function migrateAccountTypes() {
-  const row = db
+async function migrateAccountTypes() {
+  const row = (await db
     .prepare(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'",
     )
-    .get() as { sql?: string } | undefined;
+    .get()) as { sql?: string } | undefined;
 
   if (row?.sql?.includes("'food_card'")) {
     return;
   }
 
-  db.exec("PRAGMA foreign_keys = OFF;");
-  db.exec("BEGIN;");
+  await db.exec("PRAGMA foreign_keys = OFF;");
+  await db.exec("BEGIN;");
   try {
-    db.exec(`
+    await db.exec(`
       CREATE TABLE accounts_new (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL COLLATE NOCASE,
@@ -1247,30 +1402,30 @@ function migrateAccountTypes() {
       DROP TABLE accounts;
       ALTER TABLE accounts_new RENAME TO accounts;
     `);
-    db.exec("COMMIT;");
+    await db.exec("COMMIT;");
   } catch (error) {
-    db.exec("ROLLBACK;");
+    await db.exec("ROLLBACK;");
     throw error;
   } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
+    await db.exec("PRAGMA foreign_keys = ON;");
   }
 }
 
-function migrateTransactionKinds() {
-  const row = db
+async function migrateTransactionKinds() {
+  const row = (await db
     .prepare(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transactions'",
     )
-    .get() as { sql?: string } | undefined;
+    .get()) as { sql?: string } | undefined;
 
   if (row?.sql?.includes("'investment'") && row.sql.includes("'emi'")) {
     return;
   }
 
-  db.exec("PRAGMA foreign_keys = OFF;");
-  db.exec("BEGIN;");
+  await db.exec("PRAGMA foreign_keys = OFF;");
+  await db.exec("BEGIN;");
   try {
-    db.exec(`
+    await db.exec(`
       CREATE TABLE transactions_new (
         id TEXT PRIMARY KEY,
         batch_id TEXT REFERENCES entry_batches(id) ON DELETE SET NULL,
@@ -1302,30 +1457,30 @@ function migrateTransactionKinds() {
       DROP TABLE transactions;
       ALTER TABLE transactions_new RENAME TO transactions;
     `);
-    db.exec("COMMIT;");
+    await db.exec("COMMIT;");
   } catch (error) {
-    db.exec("ROLLBACK;");
+    await db.exec("ROLLBACK;");
     throw error;
   } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
+    await db.exec("PRAGMA foreign_keys = ON;");
   }
 }
 
-function migrateTransactionSplitsNullable() {
-  const row = db
+async function migrateTransactionSplitsNullable() {
+  const row = (await db
     .prepare(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transaction_splits'",
     )
-    .get() as { sql?: string } | undefined;
+    .get()) as { sql?: string } | undefined;
 
   if (!row?.sql?.includes("category_id TEXT NOT NULL")) {
     return;
   }
 
-  db.exec("PRAGMA foreign_keys = OFF;");
-  db.exec("BEGIN;");
+  await db.exec("PRAGMA foreign_keys = OFF;");
+  await db.exec("BEGIN;");
   try {
-    db.exec(`
+    await db.exec(`
       CREATE TABLE transaction_splits_new (
         id TEXT PRIMARY KEY,
         transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
@@ -1341,38 +1496,38 @@ function migrateTransactionSplitsNullable() {
       DROP TABLE transaction_splits;
       ALTER TABLE transaction_splits_new RENAME TO transaction_splits;
     `);
-    db.exec("COMMIT;");
+    await db.exec("COMMIT;");
   } catch (error) {
-    db.exec("ROLLBACK;");
+    await db.exec("ROLLBACK;");
     throw error;
   } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
+    await db.exec("PRAGMA foreign_keys = ON;");
   }
 }
 
-function ensureSessionIndexes() {
-  if (!tableExists("sessions")) {
+async function ensureSessionIndexes() {
+  if (!(await tableExists("sessions"))) {
     return;
   }
-  db.exec(`
+  await db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
   `);
   // A session that has run out is of no use to anybody and is one more row to leak.
-  db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(
+  (await db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(
     new Date().toISOString(),
-  );
+  ));
 }
 
-function ensureAccountIndexes() {
-  db.exec(`
+async function ensureAccountIndexes() {
+  await db.exec(`
     CREATE INDEX IF NOT EXISTS idx_accounts_active_name ON accounts(is_archived, name);
     CREATE INDEX IF NOT EXISTS idx_accounts_type ON accounts(type);
   `);
 }
 
-function ensureTransactionIndexes() {
-  db.exec(`
+async function ensureTransactionIndexes() {
+  await db.exec(`
     CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
     CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type_id);
@@ -1382,25 +1537,25 @@ function ensureTransactionIndexes() {
   `);
 }
 
-function ensureTaxonomyIndexes() {
-  db.exec(`
+async function ensureTaxonomyIndexes() {
+  await db.exec(`
     CREATE INDEX IF NOT EXISTS idx_subcategories_type ON subcategories(type_id);
     CREATE INDEX IF NOT EXISTS idx_category_types_behavior ON category_types(behavior);
   `);
 }
 
-function ensureTaxonomySchema() {
+async function ensureTaxonomySchema() {
   const needsBackup =
-    !tableExists("category_types") ||
-    !tableExists("subcategories") ||
-    !columnExists("transactions", "type_id") ||
-    !columnExists("transactions", "subcategory_id");
+    !(await tableExists("category_types")) ||
+    !(await tableExists("subcategories")) ||
+    !(await columnExists("transactions", "type_id")) ||
+    !(await columnExists("transactions", "subcategory_id"));
 
   if (needsBackup) {
-    createMigrationBackup("taxonomy");
+    await createMigrationBackup("taxonomy");
   }
 
-  db.exec(`
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS category_types (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1430,17 +1585,17 @@ function ensureTaxonomySchema() {
     );
   `);
 
-  addColumnIfMissing(
+  await addColumnIfMissing(
     "transactions",
     "type_id",
     "TEXT REFERENCES category_types(id) ON DELETE RESTRICT",
   );
-  addColumnIfMissing(
+  await addColumnIfMissing(
     "transactions",
     "subcategory_id",
     "TEXT REFERENCES subcategories(id) ON DELETE RESTRICT",
   );
-  addColumnIfMissing(
+  await addColumnIfMissing(
     "transaction_splits",
     "subcategory_id",
     "TEXT REFERENCES subcategories(id) ON DELETE RESTRICT",
@@ -1454,7 +1609,7 @@ const SEEDED_DEFAULTS_SETTING = "seeded_default_taxonomy_ids";
  * are recorded against that person, so a default they delete stays deleted after a restart, while
  * a default added in a later release still reaches existing databases.
  */
-function seedTaxonomy() {
+async function seedTaxonomy() {
   const owner = currentUserId();
   const insertType = db.prepare(`
     INSERT OR IGNORE INTO category_types
@@ -1470,18 +1625,18 @@ function seedTaxonomy() {
     "SELECT 1 FROM category_types WHERE id = ? AND user_id = ?",
   );
 
-  const recorded = getSetting(SEEDED_DEFAULTS_SETTING);
+  const recorded = await getSetting(SEEDED_DEFAULTS_SETTING);
   let seeded: Set<string>;
   if (recorded !== undefined) {
     seeded = new Set(JSON.parse(recorded) as string[]);
   } else {
     const hasTaxonomy =
       (
-        db
+        (await db
           .prepare(
             "SELECT COUNT(*) AS count FROM category_types WHERE user_id = ?",
           )
-          .get(owner) as { count: number }
+          .get(owner)) as { count: number }
       ).count > 0;
     // Before this ledger existed every original default was inserted on each boot, so an
     // original default missing from an existing database is one the user deleted.
@@ -1495,9 +1650,15 @@ function seedTaxonomy() {
     );
   }
 
-  DEFAULT_CATEGORY_TYPES.forEach((type, typeIndex) => {
+  // for…of, not forEach: forEach discards the promise each callback returns, so every insert below
+  // was fired and forgotten -- seeding raced itself, the settings row was written before the rows
+  // it describes existed, and the transaction holding them could not commit because its own
+  // statements were still in flight.
+  let typeIndex = -1;
+  for (const type of DEFAULT_CATEGORY_TYPES) {
+    typeIndex += 1;
     if (!seeded.has(type.id)) {
-      insertType.run(
+      await insertType.run(
         type.id,
         owner,
         type.name,
@@ -1511,15 +1672,17 @@ function seedTaxonomy() {
       seeded.add(type.id);
     }
 
-    type.subcategories.forEach((subcategory, subIndex) => {
+    let subIndex = -1;
+    for (const subcategory of type.subcategories) {
+      subIndex += 1;
       if (seeded.has(subcategory.id)) {
-        return;
+        continue;
       }
       // A default SubType can only be added under a parent Type the user still has.
-      if (!typeExists.get(type.id, owner)) {
-        return;
+      if (!(await typeExists.get(type.id, owner))) {
+        continue;
       }
-      insertSubcategory.run(
+      await insertSubcategory.run(
         subcategory.id,
         owner,
         type.id,
@@ -1530,34 +1693,34 @@ function seedTaxonomy() {
         subIndex + 1,
       );
       seeded.add(subcategory.id);
-    });
-  });
+    }
+  }
 
-  setSetting(SEEDED_DEFAULTS_SETTING, JSON.stringify([...seeded].sort()));
+  await setSetting(SEEDED_DEFAULTS_SETTING, JSON.stringify([...seeded].sort()));
 }
 
-function migrateLegacyCategoriesToTaxonomy() {
-  if (getSetting("taxonomy_migration_v1") === "complete") {
+async function migrateLegacyCategoriesToTaxonomy() {
+  if ((await getSetting("taxonomy_migration_v1")) === "complete") {
     return;
   }
 
   // A database created after the legacy table was removed has nothing to migrate from, and
   // every statement below joins it. Record the migration as done and leave.
-  if (!tableExists("categories")) {
-    setSetting("taxonomy_migration_v1", "complete");
+  if (!(await tableExists("categories"))) {
+    await setSetting("taxonomy_migration_v1", "complete");
     return;
   }
 
-  transaction(() => {
-    db.prepare(
+  await transaction(async () => {
+    (await db.prepare(
       `UPDATE transactions
        SET type_id = 'type_card_payment',
            subcategory_id = NULL
        WHERE type_id IS NULL
          AND kind = 'card_payment'`,
-    ).run();
+    ).run());
 
-    db.prepare(
+    (await db.prepare(
       `UPDATE transactions
        SET type_id = 'type_loan',
            subcategory_id = 'sub_other_loan',
@@ -1565,34 +1728,34 @@ function migrateLegacyCategoriesToTaxonomy() {
        WHERE type_id IS NULL
          AND (kind = 'emi'
               OR category_id IN (SELECT id FROM categories WHERE name = 'EMI' COLLATE NOCASE))`,
-    ).run();
+    ).run());
 
-    db.prepare(
+    (await db.prepare(
       `UPDATE transactions
        SET type_id = 'type_income',
            subcategory_id = 'sub_other_income',
            status = CASE WHEN status = 'split' THEN status ELSE 'categorized' END
        WHERE type_id IS NULL
          AND kind = 'income'`,
-    ).run();
+    ).run());
 
-    db.prepare(
+    (await db.prepare(
       `UPDATE transactions
        SET type_id = 'type_investment',
            subcategory_id = NULL
        WHERE type_id IS NULL
          AND kind = 'investment'`,
-    ).run();
+    ).run());
 
-    db.prepare(
+    (await db.prepare(
       `UPDATE transactions
        SET type_id = 'type_transfer',
            subcategory_id = NULL
        WHERE type_id IS NULL
          AND kind = 'transfer'`,
-    ).run();
+    ).run());
 
-    db.prepare(
+    (await db.prepare(
       `UPDATE transactions
        SET type_id = 'type_expense',
            subcategory_id = (
@@ -1617,9 +1780,9 @@ function migrateLegacyCategoriesToTaxonomy() {
            END
        WHERE type_id IS NULL
          AND kind = 'expense'`,
-    ).run();
+    ).run());
 
-    db.prepare(
+    (await db.prepare(
       `UPDATE transaction_splits
        SET subcategory_id = (
          SELECT s.id
@@ -1629,50 +1792,50 @@ function migrateLegacyCategoriesToTaxonomy() {
          LIMIT 1
        )
        WHERE subcategory_id IS NULL`,
-    ).run();
+    ).run());
 
-    db.prepare(
+    (await db.prepare(
       `UPDATE transactions
        SET status = CASE WHEN status = 'split' THEN status ELSE 'uncategorized' END
        WHERE type_id IS NULL
           OR (kind IN ('expense', 'investment') AND subcategory_id IS NULL)`,
-    ).run();
+    ).run());
 
-    setSetting("taxonomy_migration_v1", "complete");
+    await setSetting("taxonomy_migration_v1", "complete");
   });
 }
 
-function tableExists(name: string) {
-  const row = db
+async function tableExists(name: string) {
+  const row = (await db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(name) as { name?: string } | undefined;
+    .get(name)) as { name?: string } | undefined;
   return Boolean(row);
 }
 
-function columnExists(table: string, column: string) {
-  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+async function columnExists(table: string, column: string) {
+  const rows = (await db.prepare(`PRAGMA table_info(${table})`).all()) as Array<{
     name: string;
   }>;
   return rows.some((row) => row.name === column);
 }
 
-function addColumnIfMissing(table: string, column: string, definition: string) {
-  if (columnExists(table, column)) {
+async function addColumnIfMissing(table: string, column: string, definition: string) {
+  if (await columnExists(table, column)) {
     return;
   }
-  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+  await db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
 }
 
 /**
  * Due days are optional and were added later, so the columns are appended in place. Existing rows
  * keep NULL, which means "no reminder", exactly how they behaved before.
  */
-function ensureDueDayColumns() {
-  addColumnIfMissing("loans", "emi_due_day", "INTEGER");
-  addColumnIfMissing("accounts", "payment_due_day", "INTEGER");
+async function ensureDueDayColumns() {
+  await addColumnIfMissing("loans", "emi_due_day", "INTEGER");
+  await addColumnIfMissing("accounts", "payment_due_day", "INTEGER");
 }
 
-function createMigrationBackup(label: string) {
+async function createMigrationBackup(label: string) {
   if (process.env.FINANCE_SKIP_MIGRATION_BACKUP === "1") {
     return;
   }
@@ -1687,7 +1850,7 @@ function createMigrationBackup(label: string) {
     return;
   }
 
-  db.prepare("VACUUM INTO ?").run(target);
+  (await db.prepare("VACUUM INTO ?").run(target));
   pruneBackupFiles(backupDir);
 }
 
@@ -1695,33 +1858,33 @@ function createMigrationBackup(label: string) {
  * Reads a setting from whichever of the two tables owns that kind of key (D2), so every existing
  * caller keeps working without having to know which is which.
  */
-function getSetting(key: string) {
+async function getSetting(key: string) {
   const row = (
     PER_PERSON_SETTINGS.has(key)
-      ? db
+      ? (await db
           .prepare(
             "SELECT value FROM user_settings WHERE user_id = ? AND key = ?",
           )
-          .get(currentUserId(), key)
-      : db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key)
+          .get(currentUserId(), key))
+      : (await db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key))
   ) as { value: string } | undefined;
   return row?.value;
 }
 
-function setSetting(key: string, value: string) {
+async function setSetting(key: string, value: string) {
   if (PER_PERSON_SETTINGS.has(key)) {
-    db.prepare(
+    (await db.prepare(
       `INSERT INTO user_settings (user_id, key, value)
        VALUES (?, ?, ?)
        ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`,
-    ).run(currentUserId(), key, value);
+    ).run(currentUserId(), key, value));
     return;
   }
-  db.prepare(
+  (await db.prepare(
     `INSERT INTO app_settings (key, value)
      VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-  ).run(key, value);
+  ).run(key, value));
 }
 
 /** The split in D2, as one list the server can ask about rather than two tables to remember. */
@@ -1729,33 +1892,32 @@ export function isPerPersonSetting(key: string) {
   return PER_PERSON_SETTINGS.has(key);
 }
 
-function seedSettings() {
+async function seedSettings() {
   const owner = currentUserId();
   const insert = db.prepare(`
     INSERT OR IGNORE INTO user_settings (user_id, key, value)
     VALUES (?, ?, ?)
   `);
-  const seed = (key: string, value: string) => insert.run(owner, key, value);
+  const seed = async (key: string, value: string) => insert.run(owner, key, value);
 
-  seed("currency", CURRENCY);
-  seed("week_start", WEEK_START);
-  seed("first_screen", "overview");
-  seed("card_utilization_alert_percent", "30");
-  seed("profile_name", "");
-  seed("profile_email", "");
-  seed("profile_age", "");
+  await seed("currency", CURRENCY);
+  await seed("week_start", WEEK_START);
+  await seed("first_screen", "overview");
+  await seed("card_utilization_alert_percent", "30");
+  await seed("profile_name", "");
+  await seed("profile_email", "");
+  await seed("profile_age", "");
 }
 
-export function transaction<T>(fn: () => T): T {
-  db.exec("BEGIN;");
-  try {
-    const result = fn();
-    db.exec("COMMIT;");
-    return result;
-  } catch (error) {
-    db.exec("ROLLBACK;");
-    throw error;
-  }
+/**
+ * Runs `fn` between BEGIN and COMMIT, rolling back if it throws.
+ *
+ * Awaits each step now that statements cross a wire. The await on `fn()` is the one that matters:
+ * without it the COMMIT would be sent while the body's own statements were still in flight, and
+ * the rollback on failure would arrive after the thing it was meant to undo had already committed.
+ */
+export async function transaction<T>(fn: () => T | Promise<T>): Promise<T> {
+  return db.transaction(fn);
 }
 
 export function asRecord<T>(row: unknown): T {

@@ -24,26 +24,31 @@ export const UNOWNED: Record<string, string> = {
   users: "the accounts themselves. A person's own row is exported separately, without its password hash."
 };
 
-const tableNames = (): string[] =>
+const tableNames = async (): Promise<string[]> =>
   (
-    db
+    (await db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
       )
-      .all() as Array<{ name: string }>
+      .all()) as Array<{ name: string }>
   ).map((row) => row.name);
 
-const columnsOf = (table: string): string[] =>
-  (db.prepare(`PRAGMA table_info("${table}")`).all() as Array<{ name: string }>).map((row) => row.name);
+const columnsOf = async (table: string): Promise<string[]> =>
+  ((await db.prepare(`PRAGMA table_info("${table}")`).all()) as Array<{ name: string }>).map((row) => row.name);
 
 /** Every table in this database that carries an owner. */
-export function ownedTables(): string[] {
-  return tableNames().filter((table) => columnsOf(table).includes("user_id"));
+export async function ownedTables(): Promise<string[]> {
+  // A loop rather than `filter`: the predicate asks the database, and `filter` cannot wait for it.
+  const owned: string[] = [];
+  for (const table of await tableNames()) {
+    if ((await columnsOf(table)).includes("user_id")) owned.push(table);
+  }
+  return owned;
 }
 
 /** Every table a person's export must contain: owned, minus what is deliberately held back. */
-export function exportedTables(): string[] {
-  return ownedTables().filter((table) => !(table in EXCLUDED));
+export async function exportedTables(): Promise<string[]> {
+  return (await ownedTables()).filter((table) => !(table in EXCLUDED));
 }
 
 /**
@@ -52,10 +57,10 @@ export function exportedTables(): string[] {
  * Called by the export itself, so a schema change that nobody classified fails the request rather
  * than quietly producing a file that is missing a table. A loud export beats a plausible one.
  */
-export function inventoryComplaints(): string[] {
+export async function inventoryComplaints(): Promise<string[]> {
   const complaints: string[] = [];
-  const tables = tableNames();
-  const owned = new Set(ownedTables());
+  const tables = await tableNames();
+  const owned = new Set(await ownedTables());
 
   for (const table of tables) {
     if (owned.has(table)) continue;
@@ -69,7 +74,7 @@ export function inventoryComplaints(): string[] {
   }
   for (const [table, reason] of Object.entries(UNOWNED)) {
     if (owned.has(table)) complaints.push(`UNOWNED names ${table}, which does carry a user_id`);
-    if (!tables.includes(table)) complaints.push(`UNOWNED names ${table}, which is not a table`);
+    if (!(await tables).includes(table)) complaints.push(`UNOWNED names ${table}, which is not a table`);
     if (!reason.trim()) complaints.push(`UNOWNED names ${table} with no reason`);
   }
   for (const table of Object.keys(EXCLUDED)) {
@@ -97,31 +102,31 @@ export type PersonExport = {
  * what the application knows, not a report about it -- a reader that reinterprets ₹1,23,456.78 as
  * a float has already lost the paise this app was built in.
  */
-export function buildExport(): PersonExport {
-  const complaints = inventoryComplaints();
-  if (complaints.length > 0) {
+export async function buildExport(): Promise<PersonExport> {
+  const complaints = await inventoryComplaints();
+  if ((await complaints).length > 0) {
     // Refusing beats producing a file that claims to be everything and is not. The schema changed
     // and nobody classified the change; that is a bug to fix, not a warning to bury in a footer.
     throw new Error(
-      `The export cannot describe this database yet: ${complaints.join("; ")}`
+      `The export cannot describe this database yet: ${(await complaints).join("; ")}`
     );
   }
 
   const userId = currentUserId();
-  const person = db
+  const person = (await db
     .prepare("SELECT id, email, created_at FROM users WHERE id = ?")
-    .get(userId) as { id: string; email: string; created_at: string } | undefined;
+    .get(userId)) as { id: string; email: string; created_at: string } | undefined;
   if (!person) {
     throw new Error("No such account.");
   }
 
   const tables: Record<string, Array<Record<string, unknown>>> = {};
   const rowCounts: Record<string, number> = {};
-  for (const table of exportedTables()) {
+  for (const table of await exportedTables()) {
     // Ordered by rowid so two exports of the same unchanged data are the same file.
-    const rows = db
+    const rows = (await db
       .prepare(`SELECT * FROM "${table}" WHERE user_id = ? ORDER BY rowid`)
-      .all(userId) as Array<Record<string, unknown>>;
+      .all(userId)) as Array<Record<string, unknown>>;
     tables[table] = rows;
     rowCounts[table] = rows.length;
   }

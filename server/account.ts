@@ -134,8 +134,8 @@ async function askForPassword(): Promise<string> {
   return first;
 }
 
-function findByEmail(email: string): UserRow | undefined {
-  return db.prepare("SELECT id, email, password_hash, created_at FROM users WHERE email = ?").get(email) as
+async function findByEmail(email: string): Promise<UserRow | undefined> {
+  return (await db.prepare("SELECT id, email, password_hash, created_at FROM users WHERE email = ?").get(email)) as
     | UserRow
     | undefined;
 }
@@ -157,17 +157,17 @@ async function main() {
   database.initDatabase();
 
   if (command === "list") {
-    const people = db
+    const people = (await db
       .prepare("SELECT id, email, password_hash, created_at FROM users ORDER BY created_at, id")
-      .all() as UserRow[];
+      .all()) as UserRow[];
     if (people.length === 0) {
       console.log("No accounts yet.");
       return;
     }
     for (const person of people) {
       const sessions = (
-        db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE user_id = ? AND expires_at > ?")
-          .get(person.id, new Date().toISOString()) as { n: number }
+        (await db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE user_id = ? AND expires_at > ?")
+          .get(person.id, new Date().toISOString())) as { n: number }
       ).n;
       const state = person.password_hash ? `${sessions} signed in` : "no password set -- cannot sign in";
       console.log(`${person.email}  (${state})`);
@@ -179,7 +179,7 @@ async function main() {
   if (!email || !email.includes("@")) usage();
 
   if (command === "create") {
-    if (findByEmail(email)) {
+    if (await findByEmail(email)) {
       console.error(`${email} already has an account. Use "password" to change it.`);
       process.exit(1);
     }
@@ -190,16 +190,16 @@ async function main() {
       process.exit(1);
     }
     const id = randomUUID();
-    db.prepare("INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)").run(
+    (await db.prepare("INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)").run(
       id,
       email,
       await hashPassword(password)
-    );
+    ));
     console.log(`Created ${email}.`);
     return;
   }
 
-  const person = findByEmail(email);
+  const person = await findByEmail(email);
   if (!person) {
     console.error(`No account for ${email}.`);
     process.exit(1);
@@ -212,15 +212,15 @@ async function main() {
       console.error(complaint);
       process.exit(1);
     }
-    db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(await hashPassword(password), person.id);
+    (await db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(await hashPassword(password),person.id));
     // Changing a password ends every session: that is the point of changing it.
-    const ended = db.prepare("DELETE FROM sessions WHERE user_id = ?").run(person.id);
+    const ended = (await db.prepare("DELETE FROM sessions WHERE user_id = ?").run(person.id));
     console.log(`Password changed for ${email}; ${Number(ended.changes)} session(s) ended.`);
     return;
   }
 
   if (command === "sessions") {
-    const ended = db.prepare("DELETE FROM sessions WHERE user_id = ?").run(person.id);
+    const ended = (await db.prepare("DELETE FROM sessions WHERE user_id = ?").run(person.id));
     console.log(`Ended ${Number(ended.changes)} session(s) for ${email}.`);
     return;
   }
