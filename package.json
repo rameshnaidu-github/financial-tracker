@@ -7,7 +7,7 @@
     "dev": "concurrently -k \"pnpm:server:dev\" \"pnpm:client:dev\"",
     "server:dev": "node --no-warnings --watch server/index.ts",
     "client:dev": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && node scripts/build-function.mjs && vite build",
     "start": "node --no-warnings server/index.ts",
     "app:start": "bash scripts/start.sh",
     "app:stop": "bash scripts/stop.sh",
@@ -39,6 +39,7 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "esbuild": "0.28.2",
     "ffmpeg-static": "5.3.0",
     "pgsql-ast-parser": "^12.0.2",
     "typescript": "^6.0.3"

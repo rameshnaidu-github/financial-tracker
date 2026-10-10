@@ -20,3 +20,6 @@ brag-output/work/*
 .env
 .env.*
 !.env.example
+
+# Built by scripts/build-function.mjs during the build; the sources are in server/.
+api/_server.js

@@ -6,6 +6,7 @@
   "regions": ["bom1"],
   "functions": {
     "api/index.ts": {
+      "includeFiles": "api/_server.js",
       "maxDuration": 30
     }
   },
