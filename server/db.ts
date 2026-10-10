@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { SCHEMA_SQL } from "./schema.ts";
 import {
   DEFAULT_CATEGORY_TYPES,
@@ -299,8 +299,67 @@ export const db: Adapter = postgresAdapter();
  * schema in one piece. Every statement is IF NOT EXISTS, so running this on every cold start costs
  * a round trip and changes nothing.
  */
+const SCHEMA_FINGERPRINT = createHash("sha256").update(SCHEMA_SQL).digest("hex").slice(0, 32);
+
+/**
+ * One constant, shared by every instance of this application and by nothing else.
+ *
+ * Advisory locks are a single global space keyed by number, so the value only has to be unlikely
+ * to collide with another application's choice in the same database.
+ */
+const SCHEMA_LOCK_ID = 8273401556120934;
+
+/** Whether the database already has this exact version of the schema. */
+async function schemaIsCurrent(): Promise<boolean> {
+  const table = (await db
+    .prepare("SELECT to_regclass('public.schema_state') AS present")
+    .get()) as { present: string | null } | undefined;
+  if (!table?.present) return false;
+  const row = (await db
+    .prepare("SELECT fingerprint FROM schema_state WHERE id = 1")
+    .get()) as { fingerprint: string } | undefined;
+  return row?.fingerprint === SCHEMA_FINGERPRINT;
+}
+
+/**
+ * Brings the database up to the shape the application needs, and seeds what it must contain.
+ *
+ * Applied once, not on every cold start. Every statement in the schema is IF NOT EXISTS, which
+ * made re-running it look free; it is not. The foreign keys are DROP CONSTRAINT / ADD CONSTRAINT
+ * pairs, each taking an ACCESS EXCLUSIVE lock on two tables, and a serverless platform boots many
+ * instances at once. Forty-one such pairs taken in overlapping order deadlock: measured against
+ * production, seven of twenty-four concurrent cold starts failed with SQLSTATE 40P01, which is
+ * what the owner saw as "The application could not start" after ten minutes of the site working.
+ *
+ * So the usual path is one cheap query that finds the schema current and returns. When it is not,
+ * a transaction-scoped advisory lock lets exactly one instance apply it while the others wait and
+ * then find it done. Transaction-scoped rather than session-scoped because a transaction pooler
+ * gives each statement its own backend: a session lock taken on one would be released on none.
+ *
+ * No migration chain. A hosted Postgres starts empty, so it gets the finished schema in one piece.
+ */
 export async function initDatabase() {
-  await db.exec(SCHEMA_SQL);
+  if (!(await schemaIsCurrent())) {
+    await db.transaction(async () => {
+      await db.prepare(`SELECT pg_advisory_xact_lock(${SCHEMA_LOCK_ID})`).get();
+      // Another instance may have finished while this one waited for the lock.
+      if (await schemaIsCurrent()) return;
+
+      await db.exec(SCHEMA_SQL);
+      await db
+        .prepare(
+          `INSERT INTO schema_state (id, fingerprint, applied_at) VALUES (1, ?, ?)
+           ON CONFLICT (id) DO UPDATE SET fingerprint = EXCLUDED.fingerprint, applied_at = EXCLUDED.applied_at`,
+        )
+        .run(SCHEMA_FINGERPRINT, new Date().toISOString().replace("T", " ").slice(0, 19));
+    });
+  }
+
+  // Seeding is not schema, and must not hide behind the schema's version. A newly shipped default
+  // lives in the application rather than in schema.sql, so the fingerprint does not change when
+  // one arrives -- guarding these behind it would mean a new default never reaching an existing
+  // database. They are inserts that do nothing on conflict, taking row locks rather than the
+  // ACCESS EXCLUSIVE locks that deadlocked, so running them on every start is safe.
   await ensureOwner();
   await asOwner(async () => {
     await seedTaxonomy();

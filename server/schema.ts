@@ -9,8 +9,23 @@ export const SCHEMA_SQL = `-- The application's schema, in Postgres.
 --
 -- Order matters only in that every table exists before any foreign key is added, which is why
 -- the keys are ALTERs at the end rather than clauses inside the CREATEs.
+--
+-- schema_state below is the one table added by hand rather than derived: it records which version
+-- of this file has been applied, so a cold start can find out without re-running it.
 
 CREATE EXTENSION IF NOT EXISTS citext;
+
+-- Which version of this file the database already has.
+--
+-- Re-running the whole schema looked free, because every statement is IF NOT EXISTS. It is not:
+-- the foreign keys below are DROP CONSTRAINT / ADD CONSTRAINT pairs, and each pair takes an
+-- ACCESS EXCLUSIVE lock on two tables. One row here lets a cold start answer "already applied"
+-- with a single cheap query instead.
+CREATE TABLE IF NOT EXISTS schema_state (
+  id BIGINT PRIMARY KEY,
+  fingerprint TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS accounts (
   id TEXT PRIMARY KEY,

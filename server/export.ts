@@ -21,6 +21,9 @@ export const EXCLUDED: Record<string, string> = {
 /** Tables that have no `user_id` at all, with why that is correct rather than an oversight. */
 export const UNOWNED: Record<string, string> = {
   app_settings: "settings that belong to the installation, not to a person",
+  schema_state:
+    "which version of the schema this database has. A fact about the database itself, the same " +
+    "for everyone in it, and meaningless outside it.",
   users: "the accounts themselves. A person's own row is exported separately, without its password hash."
 };
 
