@@ -405,4 +405,37 @@ ALTER TABLE vacation_expenses DROP CONSTRAINT IF EXISTS fk_vacation_expenses_39;
 ALTER TABLE vacation_expenses ADD CONSTRAINT fk_vacation_expenses_39 FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE;
 ALTER TABLE vacations DROP CONSTRAINT IF EXISTS fk_vacations_40;
 ALTER TABLE vacations ADD CONSTRAINT fk_vacations_40 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+
+-- Deny by default to anyone who does not bypass row level security.
+--
+-- The application reaches this database over a Postgres connection as a role that bypasses
+-- RLS, so none of this applies to it. What it closes is the REST endpoint a hosted Postgres
+-- puts in front of the same tables: its anonymous key is public by design, and with RLS off
+-- it could read and write everything here. Measured before this was added -- that key returned
+-- the owner's transactions and email over the open internet.
+--
+-- No policies, deliberately. A policy is a rule for granting access to some rows; there is
+-- nobody here who should reach these tables that way at all.
+ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE autopay_payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE autopay_subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE budget_lines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE category_types ENABLE ROW LEVEL SECURITY;
+ALTER TABLE entry_batches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE investment_payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE investments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE loan_payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE loans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE net_worth_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE schema_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subcategories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE transaction_links ENABLE ROW LEVEL SECURITY;
+ALTER TABLE transaction_splits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vacation_expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vacations ENABLE ROW LEVEL SECURITY;
 `;

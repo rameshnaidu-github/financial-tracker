@@ -309,6 +309,28 @@ const SCHEMA_FINGERPRINT = createHash("sha256").update(SCHEMA_SQL).digest("hex")
  */
 const SCHEMA_LOCK_ID = 8273401556120934;
 
+/**
+ * Takes the REST endpoint's roles off these tables, on a hosted database that has them.
+ *
+ * Row level security already denies them every row, but it does not cover TRUNCATE: that is a
+ * table privilege rather than a rule about rows, so a role holding it could still empty a table
+ * that RLS says it cannot read. The grants are the platform's default, not something this
+ * application asked for, and nothing here uses them -- it talks to Postgres directly.
+ *
+ * Written here rather than in schema.sql because the roles exist only on the hosted database, and
+ * a REVOKE naming a role that does not exist is an error, not a no-op.
+ */
+async function revokeRestApiRoles(): Promise<void> {
+  for (const role of ["anon", "authenticated"]) {
+    const present = (await db
+      .prepare("SELECT 1 AS yes FROM pg_roles WHERE rolname = ?")
+      .get(role)) as { yes: number } | undefined;
+    if (!present) continue;
+    // The role name is from this fixed list, never from input.
+    await db.exec(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ${role}`);
+  }
+}
+
 /** Whether the database already has this exact version of the schema. */
 async function schemaIsCurrent(): Promise<boolean> {
   const table = (await db
@@ -346,6 +368,7 @@ export async function initDatabase() {
       if (await schemaIsCurrent()) return;
 
       await db.exec(SCHEMA_SQL);
+      if (isHostedDatabase) await revokeRestApiRoles();
       await db
         .prepare(
           `INSERT INTO schema_state (id, fingerprint, applied_at) VALUES (1, ?, ?)
