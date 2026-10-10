@@ -380,11 +380,11 @@ async function ensureOwner() {
  * start-up and the account command -- say so by calling `asOwner`, which is a named act somebody
  * can grep for rather than a silence.
  */
-const requestUser = new AsyncLocalStorage<{ id: string }>();
+const requestUser = new AsyncLocalStorage<{ id?: string }>();
 
 export function currentUserId(): string {
   const person = requestUser.getStore();
-  if (!person) {
+  if (!person?.id) {
     throw new Error(
       "No user in scope. Every request must run inside forUser(); start-up and the account command use asOwner().",
     );
@@ -393,16 +393,34 @@ export function currentUserId(): string {
 }
 
 /**
- * Makes everything that follows on this async stack run as the given person.
+ * Opens an empty scope for one request and keeps it open for everything the request goes on to do.
  *
- * `enterWith` rather than `run`, because a request is not a callback: the handler and everything
- * it awaits come after the hook returns, and a store set with `run` is gone by then. That was
- * checked rather than assumed -- resolving a promise inside `run` leaves the store undefined --
- * and so was the risk that comes with `enterWith`, which is one request seeing another's person:
- * forty overlapping requests for five people, each awaiting several times, never saw the wrong
- * one.
+ * The scope is opened with `run`, not `enterWith`, and the callback it is given is the rest of the
+ * request. `enterWith` was the earlier answer to "the handler comes after the hook returns", but it
+ * only changes the *current* async resource: Fastify resumes a request from a context captured
+ * before the hook ran, so the person set that way was gone by the time the handler asked for it --
+ * every signed-in request answered 500 with "No user in scope".
+ *
+ * What survives from that reasoning is the shape: the store is a mutable holder, entered empty
+ * before anyone is known, so `forUser` can fill it in later without needing to own the stack.
+ */
+export function beginRequestScope<T>(fn: () => T): T {
+  return requestUser.run({}, fn);
+}
+
+/**
+ * Makes everything in this request run as the given person.
+ *
+ * Inside a scope this fills in the holder, so the identity reaches the handler and everything it
+ * awaits. Outside one -- a caller that owns its own stack and never opened a scope -- it falls
+ * back to entering the current context, which is correct there because there is nothing to resume.
  */
 export function forUser(userId: string): void {
+  const store = requestUser.getStore();
+  if (store) {
+    store.id = userId;
+    return;
+  }
   requestUser.enterWith({ id: userId });
 }
 
@@ -421,7 +439,9 @@ export async function asOwner<T>(fn: () => T | Promise<T>): Promise<T> {
 
 /** Whether a person is in scope, for the few places that have to ask rather than assume. */
 export function hasCurrentUser(): boolean {
-  return requestUser.getStore() !== undefined;
+  // A scope is opened before anyone is known, so the holder existing is not the same as a person
+  // being in it.
+  return requestUser.getStore()?.id !== undefined;
 }
 
 /**
