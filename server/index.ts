@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZodError } from "zod";
 import { currentBatchQuerySchema } from "../shared/finance.ts";
-import { currentUserIsOwner, db, forUser, initDatabase } from "./db.ts";
+import { beginRequestScope, currentUserIsOwner, db, forUser, initDatabase } from "./db.ts";
 import { buildExport, exportFilename } from "./export.ts";
 import { isTrustedRequestOrigin, securityHeaders } from "./security.ts";
 import { SESSION_COOKIE, SESSION_DAYS, endSession, signIn, userForToken } from "./auth.ts";
@@ -126,6 +126,15 @@ function sessionCookie(request: FastifyRequest, token: string, maxAge: number) {
     .filter(Boolean)
     .join("; ");
 }
+
+// The first hook, so every later hook and the handler itself run inside one scope.
+//
+// done() is called inside run(), which is what keeps the scope open for the rest of the request:
+// Fastify continues its chain from that call. The scope starts empty and the auth hook below fills
+// in the person once it knows one.
+app.addHook("onRequest", (_request, _reply, done) => {
+  beginRequestScope(() => done());
+});
 
 app.addHook("onRequest", async (request, reply) => {
   if (!isTrustedRequestOrigin(request.headers.origin, request.headers.host)) {
@@ -250,18 +259,18 @@ app.get("/api/auth/me", async (request) => {
   const person = (request as FastifyRequest & { person?: { id: string; email: string } }).person;
   // isOwner so the page can leave out what it would only be refused anyway. The refusal in the
   // onRequest hook is what actually protects the backup; this is politeness, not the guard.
-  return person ? { signedIn: true, email: person.email, isOwner: currentUserIsOwner() } : { signedIn: false };
+  return person ? { signedIn: true, email: person.email, isOwner: await currentUserIsOwner() } : { signedIn: false };
 });
 
 app.get("/api/bootstrap", async () => ({
-  settings: getSettings(),
-  profile: getProfile(),
+  settings: await getSettings(),
+  profile: await getProfile(),
   accounts: (await listAccounts()).filter((account) => !account.isArchived),
-  categoryTypes: listCategoryTypes(),
-  loans: listLoans(true),
-  subscriptions: listAutopaySubscriptions(true),
-  investments: listInvestments(),
-  vacations: listVacations(true)
+  categoryTypes: await listCategoryTypes(),
+  loans: await listLoans(true),
+  subscriptions: await listAutopaySubscriptions(true),
+  investments: await listInvestments(),
+  vacations: await listVacations(true)
 }));
 
 app.get("/api/profile", async () => getProfile());
@@ -278,7 +287,7 @@ app.get("/api/overview", async (request) => {
 app.get("/api/accounts", async () => (await listAccounts()).filter((account) => !account.isArchived));
 
 app.post("/api/accounts", async (request, reply) => {
-  const account = createAccount(request.body as never);
+  const account = await createAccount(request.body as never);
   return reply.status(201).send(account);
 });
 
@@ -295,7 +304,7 @@ app.delete("/api/accounts/:id", async (request) => {
 app.get("/api/category-types", async () => listCategoryTypes());
 
 app.post("/api/category-types", async (request, reply) => {
-  const categoryType = createCategoryType(request.body as never);
+  const categoryType = await createCategoryType(request.body as never);
   return reply.status(201).send(categoryType);
 });
 
@@ -305,7 +314,7 @@ app.delete("/api/category-types/:id", async (request) => {
 });
 
 app.post("/api/subcategories", async (request, reply) => {
-  const subcategory = createSubcategory(request.body as never);
+  const subcategory = await createSubcategory(request.body as never);
   return reply.status(201).send(subcategory);
 });
 
@@ -320,7 +329,7 @@ app.get("/api/loans", async (request) => {
 });
 
 app.post("/api/loans", async (request, reply) => {
-  const loan = createLoan(request.body as never);
+  const loan = await createLoan(request.body as never);
   return reply.status(201).send(loan);
 });
 
@@ -340,7 +349,7 @@ app.get("/api/subscriptions", async (request) => {
 });
 
 app.post("/api/subscriptions", async (request, reply) => {
-  const subscription = createAutopaySubscription(request.body as never);
+  const subscription = await createAutopaySubscription(request.body as never);
   return reply.status(201).send(subscription);
 });
 
@@ -403,7 +412,7 @@ app.get("/api/transactions", async (request) => {
 });
 
 app.post("/api/transactions", async (request, reply) => {
-  const result = createTransaction(request.body as never);
+  const result = await createTransaction(request.body as never);
   return reply.status(201).send(result);
 });
 
@@ -473,7 +482,7 @@ app.get("/api/budgets", async (request) => {
 });
 
 app.post("/api/budgets", async (request, reply) => {
-  const line = createBudgetLine(request.body as never);
+  const line = await createBudgetLine(request.body as never);
   return reply.status(201).send(line);
 });
 
@@ -495,7 +504,7 @@ app.delete("/api/budgets/:id", async (request) => {
 app.get("/api/investments", async () => listInvestments());
 
 app.post("/api/investments", async (request, reply) => {
-  const investment = createInvestment(request.body as never);
+  const investment = await createInvestment(request.body as never);
   return reply.status(201).send(investment);
 });
 
@@ -512,7 +521,7 @@ app.delete("/api/investments/:id", async (request) => {
 app.get("/api/vacations", async () => listVacations(true));
 
 app.post("/api/vacations", async (request, reply) => {
-  const vacation = createVacation(request.body as never);
+  const vacation = await createVacation(request.body as never);
   return reply.status(201).send(vacation);
 });
 
@@ -550,7 +559,7 @@ app.post("/api/import/transactions", expensiveRouteLimit, async (request, reply)
 app.get("/api/export/all.json", expensiveRouteLimit, async (_request, reply) => {
   // Whoever is signed in gets their own data and nobody else's: `buildExport` filters by the
   // person in scope, the same way every other query in the application does.
-  const body = buildExport();
+  const body = await buildExport();
   return reply
     .header("content-type", "application/json; charset=utf-8")
     .header("content-disposition", `attachment; filename="${exportFilename()}"`)
@@ -563,7 +572,7 @@ app.get("/api/export/transactions.csv", expensiveRouteLimit, async (request, rep
     .header("content-type", "text/csv; charset=utf-8")
     .header("content-disposition", "attachment; filename=\"transactions.csv\"")
     .send(
-      exportTransactionsCsv({
+      await exportTransactionsCsv({
         accountId: blankToUndefined(query.accountId),
         typeId: blankToUndefined(query.typeId),
         subcategoryId: blankToUndefined(query.subcategoryId),
