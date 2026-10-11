@@ -68,6 +68,11 @@ export const Api = {
   signIn: (email: string, password: string) =>
     api<{ ok: true }>("/api/auth/sign-in", { method: "POST", body: { email, password } }),
   signOut: () => api<{ ok: true }>("/api/auth/sign-out", { method: "POST" }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    api<{ ok: true; sessionsEnded: number }>("/api/auth/password", {
+      method: "POST",
+      body: { currentPassword, newPassword },
+    }),
   bootstrap: () => api<Bootstrap>("/api/bootstrap"),
   profile: () => api<UserProfile>("/api/profile"),
   updateProfile: (body: Partial<UserProfile>) =>

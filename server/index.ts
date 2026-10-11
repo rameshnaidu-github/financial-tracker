@@ -11,7 +11,17 @@ import { currentBatchQuerySchema } from "../shared/finance.ts";
 import { beginRequestScope, currentUserIsOwner, db, forUser, initDatabase } from "./db.ts";
 import { buildExport, exportFilename } from "./export.ts";
 import { isTrustedRequestOrigin, securityHeaders } from "./security.ts";
-import { SESSION_COOKIE, SESSION_DAYS, endSession, signIn, userForToken } from "./auth.ts";
+import {
+  SESSION_COOKIE,
+  SESSION_DAYS,
+  endSession,
+  hashPassword,
+  passwordComplaint,
+  signIn,
+  startSession,
+  userForToken,
+  verifyPassword,
+} from "./auth.ts";
 import {
   createAccount,
   createAutopaySubscription,
@@ -248,6 +258,43 @@ app.post("/api/auth/sign-in", signInLimit, async (request, reply) => {
   return reply
     .header("set-cookie", sessionCookie(request, session.token, SESSION_MAX_AGE))
     .send({ ok: true });
+});
+
+app.post("/api/auth/password", signInLimit, async (request, reply) => {
+  // Not an owner-only route: everybody changes their own, and nobody changes anybody else's.
+  // The person is whoever the session says, never whoever the body says.
+  const person = (request as FastifyRequest & { person?: { id: string; email: string } }).person;
+  if (!person) return reply.status(401).send({ error: "Not signed in." });
+
+  const body = request.body as { currentPassword?: string; newPassword?: string } | undefined;
+  const current = String(body?.currentPassword ?? "");
+  const next = String(body?.newPassword ?? "");
+
+  const complaint = passwordComplaint(next);
+  if (complaint) return reply.status(400).send({ error: complaint });
+  if (next === current) return reply.status(400).send({ error: "That is the password you already have." });
+
+  // The current one is required even though they are signed in: a session left open on a shared
+  // machine should not be enough to lock its owner out.
+  const row = (await db.prepare("SELECT password_hash FROM users WHERE id = ?").get(person.id)) as
+    | { password_hash: string | null }
+    | undefined;
+  if (!row?.password_hash || !(await verifyPassword(current, row.password_hash))) {
+    return reply.status(401).send({ error: "That is not your current password." });
+  }
+
+  await db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(await hashPassword(next), person.id);
+
+  // Every session of theirs ends, including this one, and this browser is given a new one. A
+  // password is changed because the old one should stop working, and a session issued under it
+  // would otherwise outlive it by up to thirty days -- which matters most in exactly the case
+  // this route exists for: a temporary password somebody else chose and may still have.
+  const ended = await db.prepare("DELETE FROM sessions WHERE user_id = ?").run(person.id);
+  const session = await startSession(person.id);
+
+  return reply
+    .header("set-cookie", sessionCookie(request, session.token, SESSION_MAX_AGE))
+    .send({ ok: true, sessionsEnded: ended.changes ?? 0 });
 });
 
 app.post("/api/auth/sign-out", async (request, reply) => {

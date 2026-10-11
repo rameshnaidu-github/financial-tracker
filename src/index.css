@@ -1,0 +1,34 @@
+
+/* Changing your own password, inside the profile settings list. */
+.settings-row.password-row {
+  display: grid;
+  gap: 0.5rem;
+  cursor: default;
+  text-align: left;
+}
+
+.settings-row.password-row label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.settings-row.password-row input {
+  font: inherit;
+  padding: 0.5rem 0.625rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.settings-row.password-row .password-error {
+  color: var(--danger, #dc2626);
+}
+
+.settings-row.password-row .password-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
