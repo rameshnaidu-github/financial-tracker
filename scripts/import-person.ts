@@ -60,6 +60,70 @@ const LOCAL_ONLY_SETTINGS = new Set(["last_backup_at", "last_backup_path", "last
 // A new account arrives already holding these, so finding them is not a sign of work to protect.
 const SEEDED = new Set(["category_types", "subcategories", "user_settings"]);
 
+/**
+ * Their file may be older than this installation.
+ *
+ * It is a copy of this application from before per-person rows existed, so it has no users table
+ * and no user_id anywhere -- which makes every row in it theirs by construction -- and a handful
+ * of tables and columns that have since been renamed or dropped. None of this is guesswork: each
+ * entry below was checked against the file in front of us before it was written.
+ */
+
+/** A table this installation calls one thing and an older file calls another. */
+const SOURCE_ALIAS: Record<string, string> = {
+  // Settings became per-person; the file has one flat table.
+  user_settings: "settings",
+};
+
+/** Columns an older file still carries that this schema has no place for. */
+const DROP_COLUMNS: Record<string, Set<string>> = {
+  // Superseded by subcategory_id. Measured in the file being imported: 0 of 365 transactions and
+  // 0 splits still had a value in it, so nothing is being discarded.
+  transactions: new Set(["category_id"]),
+  transaction_splits: new Set(["category_id"]),
+};
+
+/** Tables an older file has that this one does not, and which hold nothing worth carrying. */
+const SOURCE_ONLY = new Set(["categories"]);
+
+/** The settings that belong to a person. The rest describe an installation or a machine. */
+const PERSON_SETTINGS = new Set([
+  "profile_name", "profile_email", "profile_age", "card_utilization_alert_percent",
+  "first_screen", "week_start", "currency", "seeded_default_taxonomy_ids",
+]);
+
+/**
+ * Brings one row up to date, or drops it by returning undefined.
+ *
+ * Only shapes that were actually found are handled. A column this does not know about reaches the
+ * insert unchanged and fails loudly there, which is the right outcome: a silent drop would be a
+ * row of somebody's money quietly not arriving.
+ */
+function adapt(table: string, row: Record<string, unknown>): Record<string, unknown> | undefined {
+  const out = { ...row };
+  for (const column of DROP_COLUMNS[table] ?? []) delete out[column];
+
+  if (table === "user_settings") {
+    // The flat settings table, split into what is a person's and what is not.
+    if (!PERSON_SETTINGS.has(String(out.key))) return undefined;
+    return { key: out.key, value: out.value };
+  }
+
+  if (table === "budget_lines" && "scope_id" in out) {
+    // One scope_id became two columns, one per kind of scope.
+    const scope = String(out.scope_type ?? "");
+    const id = out.scope_id ?? null;
+    delete out.scope_id;
+    out.scope_type_id = scope === "type" ? id : null;
+    out.scope_subcategory_id = scope === "subcategory" ? id : null;
+    if (id !== null && out.scope_type_id === null && out.scope_subcategory_id === null) {
+      throw new Error(`budget_lines row ${String(out.id)} has scope_type "${scope}", which this does not know how to carry across`);
+    }
+  }
+
+  return out;
+}
+
 export class ImportRefused extends Error {}
 
 export async function importPerson(options: ImportOptions): Promise<ImportResult> {
@@ -151,13 +215,19 @@ export async function importPerson(options: ImportOptions): Promise<ImportResult
       }
 
       for (const table of ORDER) {
-        if (NEVER.has(table) || !sourceTables.has(table)) continue;
+        if (NEVER.has(table)) continue;
+        const from = sourceTables.has(table) ? table : SOURCE_ALIAS[table];
+        if (!from || !sourceTables.has(from)) continue;
+
         let rows = (sourceUserId
-          ? source.prepare(`SELECT * FROM "${table}" WHERE user_id = ?`).all(sourceUserId)
-          : source.prepare(`SELECT * FROM "${table}"`).all()) as Array<Record<string, unknown>>;
+          ? source.prepare(`SELECT * FROM "${from}" WHERE user_id = ?`).all(sourceUserId)
+          : source.prepare(`SELECT * FROM "${from}"`).all()) as Array<Record<string, unknown>>;
         if (table === "user_settings") {
           rows = rows.filter((row) => !LOCAL_ONLY_SETTINGS.has(String(row.key)));
         }
+        rows = rows
+          .map((row) => adapt(table, row))
+          .filter((row): row is Record<string, unknown> => row !== undefined);
         if (rows.length === 0) continue;
 
         perTable.push([table, rows.length]);
