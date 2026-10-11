@@ -431,7 +431,10 @@ a.secondary-action:active {
 
 .primary-action,
 .secondary-action {
-  min-height: 42px;
+  /* 44px, because that is the smallest target a thumb finds reliably. styles.css already asked
+     for it; this rule used to set 42 and win on specificity, so every button in the application
+     was two pixels short of the thing it was measured against. */
+  min-height: 44px;
   border-radius: 999px;
   padding: 0 18px;
   font-weight: 600;
@@ -520,6 +523,7 @@ textarea {
   border-radius: var(--radius-control);
   border-color: var(--line);
   background: var(--panel);
+  min-height: 44px;
   transition:
     border-color var(--dur-fast) var(--ease-spring),
     box-shadow var(--dur-fast) var(--ease-spring);
@@ -719,7 +723,9 @@ textarea:focus {
 /* ---------- Mobile ---------- */
 @media (max-width: 1120px) {
   .main-shell {
-    padding: 20px 16px 104px;
+    /* The last card clears the floating nav, and the nav sits above the home indicator, so the
+       room reserved for it has to grow by the same inset or the final row hides underneath. */
+    padding: 20px 16px calc(104px + var(--safe-bottom));
   }
 
   .mobile-nav {
@@ -882,8 +888,8 @@ textarea:focus {
 
 /* Icon-only row actions keep a square hit area; the pill padding above must not squeeze the icon. */
 .secondary-action.row-icon-action {
-  width: 38px;
-  min-width: 38px;
+  width: 44px;
+  min-width: 44px;
   padding: 0;
 }
 
@@ -928,6 +934,19 @@ select {
   min-height: 0;
   padding: 0;
   background-image: none;
+}
+
+/* On a touch screen that reset leaves a 20px band -- the select's own line of text -- as the only
+   part of a 56px field that answers a tap. The control takes the full 44px instead, and
+   styles.css gives some of it back by tightening the field's padding and gap.
+   This has to live here rather than beside that padding change: both sheets say
+   `.control-field select`, and at equal specificity the one loaded later wins, which is this one. */
+@media (max-width: 1120px) {
+  .control-field select,
+  .control-field input[type="date"],
+  .control-field input[type="month"] {
+    min-height: 44px;
+  }
 }
 
 :root[data-theme="dark"] .control-field select {
@@ -2534,5 +2553,40 @@ button.mix-bar-head:hover > span {
   .intro-actions > button {
     flex: 1 1 auto;
     justify-content: center;
+  }
+}
+
+/* ---------- Transaction rows on a phone ---------- */
+
+/* A row stacked merchant, tags, amount, actions runs to 200px, so twelve of them are 2,400px of
+   scrolling and 365 would be eighty screens. The amount is short and the merchant line is not, so
+   they share a line: the figure sits where the eye already is rather than below it.
+
+   Grid areas rather than reordering the markup, because the reading order is right already --
+   what changes is only where the boxes land. */
+@media (max-width: 1120px) {
+  .ledger-row.transaction-row-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: start;
+  }
+
+  .ledger-row.transaction-row-card .transaction-primary-cell {
+    grid-area: 1 / 1 / 2 / 2;
+  }
+
+  .ledger-row.transaction-row-card .transaction-amount-cell {
+    grid-area: 1 / 2 / 2 / 3;
+    align-self: center;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .ledger-row.transaction-row-card .transaction-tag-strip {
+    grid-area: 2 / 1 / 3 / -1;
+  }
+
+  .ledger-row.transaction-row-card .row-actions {
+    grid-area: 3 / 1 / 4 / -1;
   }
 }
