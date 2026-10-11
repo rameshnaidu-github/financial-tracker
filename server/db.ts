@@ -360,6 +360,22 @@ async function schemaIsCurrent(): Promise<boolean> {
  *
  * No migration chain. A hosted Postgres starts empty, so it gets the finished schema in one piece.
  */
+/**
+ * Gives one account the taxonomy and settings every account starts with.
+ *
+ * Seeding used to happen once, for the owner, inside initDatabase. It could not have worked for
+ * anyone else: the defaults ship fixed ids, `id` was unique across the whole database, and the
+ * insert was INSERT OR IGNORE -- so a second account silently received nothing and then had
+ * nothing its own transactions could legally point at. The key is per person now, so this is
+ * callable for anyone, and it is called wherever an account is made.
+ */
+export async function seedPerson(userId: string): Promise<void> {
+  await runAsUserAsync(userId, async () => {
+    await seedTaxonomy();
+    await seedSettings();
+  });
+}
+
 export async function initDatabase() {
   if (!(await schemaIsCurrent())) {
     await db.transaction(async () => {
@@ -508,6 +524,11 @@ export function forUser(userId: string): void {
 
 /** The callback form, for a caller that owns its own stack. */
 export function runAsUser<T>(userId: string, fn: () => T): T {
+  return requestUser.run({ id: userId }, fn);
+}
+
+/** The same, for work that has to be awaited inside the scope rather than after it. */
+export function runAsUserAsync<T>(userId: string, fn: () => Promise<T>): Promise<T> {
   return requestUser.run({ id: userId }, fn);
 }
 

@@ -6828,6 +6828,104 @@ function AccountImpactCard({ account, transactions }: { account: Account; transa
   );
 }
 
+/**
+ * Changing your own password, from inside the application.
+ *
+ * Until this existed the only way to set one was a command line with the database credential, so
+ * an account made for somebody else kept whatever password the person who made it had chosen --
+ * and they knew it. Everything else here is about money; this is the one screen that is about
+ * whose money it is.
+ */
+function PasswordRow() {
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [again, setAgain] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  const close = () => {
+    setOpen(false);
+    setCurrent("");
+    setNext("");
+    setAgain("");
+    setError(null);
+  };
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    if (next !== again) {
+      setError("The two new passwords do not match.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await Api.changePassword(current, next);
+      setDone(true);
+      close();
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : "That did not work.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button className="settings-row" onClick={() => { setDone(false); setOpen(true); }}>
+        <span>Password</span>
+        <strong>{done ? "Changed" : "Change"}</strong>
+      </button>
+    );
+  }
+
+  return (
+    <form className="settings-row password-row" onSubmit={submit}>
+      <span>Password</span>
+      <label>
+        Current password
+        <input
+          type="password"
+          autoComplete="current-password"
+          value={current}
+          onChange={(event) => setCurrent(event.target.value)}
+          required
+        />
+      </label>
+      <label>
+        New password
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={next}
+          onChange={(event) => setNext(event.target.value)}
+          required
+        />
+      </label>
+      <label>
+        New password again
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={again}
+          onChange={(event) => setAgain(event.target.value)}
+          required
+        />
+      </label>
+      {error ? <small className="password-error">{error}</small> : null}
+      <small>Changing it signs out every other browser.</small>
+      <div className="password-actions">
+        <button type="button" onClick={close} disabled={busy}>Cancel</button>
+        <button type="submit" disabled={busy || !current || !next || !again}>
+          {busy ? "Changing…" : "Change password"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function ProfilePage({
   onPlayIntro,
   introOnLaunch,
@@ -7038,6 +7136,7 @@ function ProfilePage({
             <strong>{theme === "dark" ? "Switch on" : "Switch on"}</strong>
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
+          <PasswordRow />
           <button className="settings-row" onClick={onSignOut}>
             <span>Signed in</span>
             <strong>Sign out</strong>
