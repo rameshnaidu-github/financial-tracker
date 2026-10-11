@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS schema_state (
 );
 
 CREATE TABLE IF NOT EXISTS accounts (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   name CITEXT NOT NULL,
   type TEXT NOT NULL CHECK (type IN ('bank', 'credit_card', 'food_card')),
   starting_balance_paise BIGINT NOT NULL DEFAULT 0,
@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   payment_due_day BIGINT,
-  user_id TEXT NOT NULL DEFAULT ''
+  user_id TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -42,15 +43,17 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 
 CREATE TABLE IF NOT EXISTS autopay_payments (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   subscription_id TEXT NOT NULL,
-  transaction_id TEXT NOT NULL UNIQUE,
-  created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS')
+  transaction_id TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
+  PRIMARY KEY (id, user_id),
+  UNIQUE (user_id, transaction_id)
 );
 
 CREATE TABLE IF NOT EXISTS autopay_subscriptions (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   name CITEXT NOT NULL,
   amount_paise BIGINT NOT NULL CHECK (amount_paise > 0),
   start_date TEXT NOT NULL,
@@ -58,11 +61,12 @@ CREATE TABLE IF NOT EXISTS autopay_subscriptions (
   is_archived BIGINT NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
-  user_id TEXT NOT NULL DEFAULT ''
+  user_id TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS budget_lines (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   month TEXT NOT NULL CHECK (month ~ '^[0-9][0-9][0-9][0-9]-[0-9][0-9]$'),
   scope_type TEXT NOT NULL CHECK (scope_type IN ('type', 'subcategory')),
@@ -74,11 +78,12 @@ CREATE TABLE IF NOT EXISTS budget_lines (
   -- Exactly one scope, and it must be the one scope_type names.
        CHECK ((scope_type = 'type' AND scope_type_id IS NOT NULL AND scope_subcategory_id IS NULL)
            OR (scope_type = 'subcategory' AND scope_subcategory_id IS NOT NULL AND scope_type_id IS NULL)),
-  UNIQUE (user_id, month, scope_type, scope_type_id, scope_subcategory_id)
+  UNIQUE (user_id, month, scope_type, scope_type_id, scope_subcategory_id),
+  PRIMARY KEY (id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS category_types (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   name CITEXT NOT NULL,
   behavior TEXT NOT NULL CHECK (behavior IN ('expense', 'income', 'loan', 'investment', 'transfer', 'card_payment', 'refund')),
@@ -88,29 +93,33 @@ CREATE TABLE IF NOT EXISTS category_types (
   is_locked BIGINT NOT NULL DEFAULT 0,
   sort_order BIGINT NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
-  UNIQUE (user_id, name)
+  UNIQUE (user_id, name),
+  PRIMARY KEY (id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS entry_batches (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   week_start TEXT NOT NULL,
   week_end TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('draft', 'saved')) DEFAULT 'draft',
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   saved_at TEXT,
-  user_id TEXT NOT NULL DEFAULT ''
+  user_id TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS investment_payments (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   investment_id TEXT NOT NULL,
-  transaction_id TEXT NOT NULL UNIQUE,
-  created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS')
+  transaction_id TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
+  PRIMARY KEY (id, user_id),
+  UNIQUE (user_id, transaction_id)
 );
 
 CREATE TABLE IF NOT EXISTS investments (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'other')),
   name TEXT NOT NULL,
   invested_paise BIGINT NOT NULL CHECK (invested_paise >= 0),
@@ -122,14 +131,15 @@ CREATE TABLE IF NOT EXISTS investments (
   updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   invested_as_of TEXT,
   value_as_of TEXT,
-  user_id TEXT NOT NULL DEFAULT ''
+  user_id TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS loan_payments (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   loan_id TEXT NOT NULL,
-  transaction_id TEXT NOT NULL UNIQUE,
+  transaction_id TEXT NOT NULL,
   payment_type TEXT NOT NULL CHECK (payment_type IN ('emi', 'prepayment')),
   amount_paise BIGINT NOT NULL CHECK (amount_paise > 0),
   principal_paise BIGINT NOT NULL CHECK (principal_paise >= 0),
@@ -137,11 +147,13 @@ CREATE TABLE IF NOT EXISTS loan_payments (
   outstanding_before_paise BIGINT NOT NULL CHECK (outstanding_before_paise >= 0),
   outstanding_after_paise BIGINT NOT NULL CHECK (outstanding_after_paise >= 0),
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
-  updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS')
+  updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
+  PRIMARY KEY (id, user_id),
+  UNIQUE (user_id, transaction_id)
 );
 
 CREATE TABLE IF NOT EXISTS loans (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   name CITEXT NOT NULL,
   subcategory_id TEXT NOT NULL,
@@ -154,7 +166,8 @@ CREATE TABLE IF NOT EXISTS loans (
   emi_due_day BIGINT,
   is_archived BIGINT NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
-  updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS')
+  updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
+  PRIMARY KEY (id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS net_worth_snapshots (
@@ -177,7 +190,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE TABLE IF NOT EXISTS subcategories (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   type_id TEXT NOT NULL,
   name CITEXT NOT NULL,
@@ -187,29 +200,32 @@ CREATE TABLE IF NOT EXISTS subcategories (
   is_locked BIGINT NOT NULL DEFAULT 0,
   sort_order BIGINT NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
-  UNIQUE(type_id, name)
+  UNIQUE (user_id, type_id, name),
+  PRIMARY KEY (id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS transaction_links (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   source_transaction_id TEXT NOT NULL,
   target_transaction_id TEXT NOT NULL,
   link_type TEXT NOT NULL CHECK (link_type IN ('refund', 'reversal', 'duplicate', 'card_payment')),
   amount_paise BIGINT,
-  created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS')
+  created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
+  PRIMARY KEY (id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS transaction_splits (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   transaction_id TEXT NOT NULL,
   subcategory_id TEXT,
-  amount_paise BIGINT NOT NULL CHECK (amount_paise > 0)
+  amount_paise BIGINT NOT NULL CHECK (amount_paise > 0),
+  PRIMARY KEY (id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   batch_id TEXT,
   date TEXT NOT NULL,
@@ -226,7 +242,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   transfer_account_id TEXT,
   linked_transaction_id TEXT,
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
-  updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS')
+  updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
+  PRIMARY KEY (id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS user_settings (
@@ -244,15 +261,17 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS vacation_expenses (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   vacation_id TEXT NOT NULL,
-  transaction_id TEXT NOT NULL UNIQUE,
-  created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS')
+  transaction_id TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
+  PRIMARY KEY (id, user_id),
+  UNIQUE (user_id, transaction_id)
 );
 
 CREATE TABLE IF NOT EXISTS vacations (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   name TEXT NOT NULL,
   start_date TEXT,
   end_date TEXT,
@@ -261,7 +280,8 @@ CREATE TABLE IF NOT EXISTS vacations (
   is_archived BIGINT NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
-  user_id TEXT NOT NULL DEFAULT ''
+  user_id TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (id, user_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_accounts_active_name ON accounts(is_archived, name);
@@ -318,6 +338,67 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_loans_id_owner ON loans(id, user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_subcategories_id_owner ON subcategories(id, user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_transactions_id_owner ON transactions(id, user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_vacations_id_owner ON vacations(id, user_id);
+-- The same uniqueness, made per person.
+ALTER TABLE autopay_payments DROP CONSTRAINT IF EXISTS autopay_payments_transaction_id_key;
+ALTER TABLE autopay_payments DROP CONSTRAINT IF EXISTS autopay_payments_user_id_transaction_id_key;
+ALTER TABLE autopay_payments ADD CONSTRAINT autopay_payments_user_id_transaction_id_key UNIQUE (user_id, transaction_id);
+ALTER TABLE investment_payments DROP CONSTRAINT IF EXISTS investment_payments_transaction_id_key;
+ALTER TABLE investment_payments DROP CONSTRAINT IF EXISTS investment_payments_user_id_transaction_id_key;
+ALTER TABLE investment_payments ADD CONSTRAINT investment_payments_user_id_transaction_id_key UNIQUE (user_id, transaction_id);
+ALTER TABLE loan_payments DROP CONSTRAINT IF EXISTS loan_payments_transaction_id_key;
+ALTER TABLE loan_payments DROP CONSTRAINT IF EXISTS loan_payments_user_id_transaction_id_key;
+ALTER TABLE loan_payments ADD CONSTRAINT loan_payments_user_id_transaction_id_key UNIQUE (user_id, transaction_id);
+ALTER TABLE vacation_expenses DROP CONSTRAINT IF EXISTS vacation_expenses_transaction_id_key;
+ALTER TABLE vacation_expenses DROP CONSTRAINT IF EXISTS vacation_expenses_user_id_transaction_id_key;
+ALTER TABLE vacation_expenses ADD CONSTRAINT vacation_expenses_user_id_transaction_id_key UNIQUE (user_id, transaction_id);
+ALTER TABLE subcategories DROP CONSTRAINT IF EXISTS subcategories_type_id_name_key;
+ALTER TABLE subcategories DROP CONSTRAINT IF EXISTS subcategories_user_id_type_id_name_key;
+ALTER TABLE subcategories ADD CONSTRAINT subcategories_user_id_type_id_name_key UNIQUE (user_id, type_id, name);
+
+-- The same key, on a database that already has the old one.
+--
+-- A row's id was unique across the whole database, but the default taxonomy ships fixed ids --
+-- type_expense, sub_groceries, sub_transfer_self -- that every installation shares. So a second
+-- person could not hold their own copy of it: `duplicate key value violates unique constraint
+-- category_types_pkey`. Their transactions then had nothing valid to point at, because every
+-- child key here is already composite.
+--
+-- Only the primary key was ever keyed on id alone. The UNIQUE (id, user_id) indexes and the
+-- composite foreign keys that depend on them were already right, which is why this is a key
+-- change rather than a redesign, and why no foreign key has to be touched.
+ALTER TABLE accounts DROP CONSTRAINT IF EXISTS accounts_pkey;
+ALTER TABLE accounts ADD CONSTRAINT accounts_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE autopay_payments DROP CONSTRAINT IF EXISTS autopay_payments_pkey;
+ALTER TABLE autopay_payments ADD CONSTRAINT autopay_payments_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE autopay_subscriptions DROP CONSTRAINT IF EXISTS autopay_subscriptions_pkey;
+ALTER TABLE autopay_subscriptions ADD CONSTRAINT autopay_subscriptions_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE budget_lines DROP CONSTRAINT IF EXISTS budget_lines_pkey;
+ALTER TABLE budget_lines ADD CONSTRAINT budget_lines_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE category_types DROP CONSTRAINT IF EXISTS category_types_pkey;
+ALTER TABLE category_types ADD CONSTRAINT category_types_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE entry_batches DROP CONSTRAINT IF EXISTS entry_batches_pkey;
+ALTER TABLE entry_batches ADD CONSTRAINT entry_batches_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE investment_payments DROP CONSTRAINT IF EXISTS investment_payments_pkey;
+ALTER TABLE investment_payments ADD CONSTRAINT investment_payments_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS investments_pkey;
+ALTER TABLE investments ADD CONSTRAINT investments_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE loan_payments DROP CONSTRAINT IF EXISTS loan_payments_pkey;
+ALTER TABLE loan_payments ADD CONSTRAINT loan_payments_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE loans DROP CONSTRAINT IF EXISTS loans_pkey;
+ALTER TABLE loans ADD CONSTRAINT loans_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE subcategories DROP CONSTRAINT IF EXISTS subcategories_pkey;
+ALTER TABLE subcategories ADD CONSTRAINT subcategories_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE transaction_links DROP CONSTRAINT IF EXISTS transaction_links_pkey;
+ALTER TABLE transaction_links ADD CONSTRAINT transaction_links_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE transaction_splits DROP CONSTRAINT IF EXISTS transaction_splits_pkey;
+ALTER TABLE transaction_splits ADD CONSTRAINT transaction_splits_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_pkey;
+ALTER TABLE transactions ADD CONSTRAINT transactions_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE vacation_expenses DROP CONSTRAINT IF EXISTS vacation_expenses_pkey;
+ALTER TABLE vacation_expenses ADD CONSTRAINT vacation_expenses_pkey PRIMARY KEY (id, user_id);
+ALTER TABLE vacations DROP CONSTRAINT IF EXISTS vacations_pkey;
+ALTER TABLE vacations ADD CONSTRAINT vacations_pkey PRIMARY KEY (id, user_id);
+
 
 ALTER TABLE accounts DROP CONSTRAINT IF EXISTS fk_accounts_0;
 ALTER TABLE accounts ADD CONSTRAINT fk_accounts_0 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;

@@ -210,6 +210,9 @@ async function main() {
       email,
       await hashPassword(password)
     ));
+    // A new account starts with the same taxonomy and settings the owner's did. Without this it
+    // would sign in to an application with no categories, and nothing it could record.
+    await database.seedPerson(id);
     console.log(`Created ${email}.`);
     return;
   }
