@@ -1628,20 +1628,18 @@ a {
   font-weight: 600;
 }
 
-/* Two to a row, always: an odd control keeps its column rather than stretching across,
-   and both panels' control blocks end up the same height without being told to. */
+/* One row, as many columns as there are controls.
+   Fixed at two columns this wrapped the moment a panel had three -- Trends carries Period, Chart
+   and Type, Budget vs actual carries Period, Chart and SubType -- so both panels spent a second
+   row on one lonely control. auto-fit lets a row of three or four sit on one line and still fold
+   when the panel is genuinely too narrow for them, which is what the old 520px rule did by hand.
+   The minimum is the width at which a label and its value stop fitting side by side. */
 .trend-controls {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   align-items: stretch;
   gap: 10px;
   margin-bottom: 12px;
-}
-
-@media (max-width: 520px) {
-  .trend-controls {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 /* Compact: the label sits beside its value instead of above it, which halves the height
@@ -4963,4 +4961,145 @@ a {
   display: flex;
   gap: 0.5rem;
   justify-content: flex-end;
+}
+
+/* Showing the password while signing in.
+   The button sits inside the field's own box -- the field is already position: relative for its
+   chevron -- so the input keeps its width and the row keeps its shape. */
+.control-field.password-field input {
+  padding-right: 46px;
+}
+
+.password-reveal {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  /* 44px, the same minimum every other target in the application was measured against in
+     mobile-10. The glyph stays 18px; it is the hit area that grows. */
+  width: 44px;
+  height: 44px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+}
+
+.password-reveal:hover,
+.password-reveal:focus-visible {
+  color: var(--text);
+}
+
+/* The budget month, as two choices rather than a typed string.
+   A native month field accepted "2026-9" and the server rejected it, which is a mistake a person
+   can only find out about after making it. Two dropdowns cannot express the short form at all. */
+.budget-month-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.budget-month-picker .control-field {
+  min-width: 0;
+}
+
+/* A balance that has fallen under the minimum somebody set.
+   The same red the card utilisation alert uses, so the two read as one idea rather than two. */
+.account-card-primary strong.below-minimum {
+  color: var(--danger, #dc2626);
+}
+
+
+/* ---------- The printed report ---------- */
+
+/* Mounted only while printing, and never shown on screen: it is a second copy of every page, and
+   two of everything on screen would be confusing as well as slow. */
+.print-report {
+  display: none;
+}
+
+@media print {
+  /* The chrome goes. Navigation, the floating bar and the intro are all ways of getting somewhere
+     else, which paper does not have. */
+  .sidebar,
+  .mobile-nav,
+  .topbar,
+  .intro-overlay,
+  .toast,
+  .mobile-more-backdrop,
+  .content-area {
+    display: none !important;
+  }
+
+  .app-shell,
+  .main-shell {
+    display: block;
+    padding: 0;
+    margin: 0;
+  }
+
+  .print-report {
+    display: block;
+    padding: 0;
+    color: #111;
+    background: #fff;
+  }
+
+  .print-report-head {
+    margin-bottom: 18px;
+    border-bottom: 1px solid #ccc;
+    padding-bottom: 10px;
+  }
+
+  .print-report-head h1 {
+    margin: 0;
+    font-size: 20pt;
+  }
+
+  .print-report-head p {
+    margin: 4px 0 0;
+    color: #555;
+    font-size: 10pt;
+  }
+
+  /* One page per sheet, so a section never starts four lines from the bottom. The last one does
+     not force a blank sheet after it. */
+  .print-page {
+    break-after: page;
+    page-break-after: always;
+  }
+
+  .print-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  .print-page-title {
+    margin: 0 0 10px;
+    font-size: 14pt;
+  }
+
+  /* Anything whose only purpose is to be pressed. On paper it is a box that does nothing. */
+  .print-report button,
+  .print-report .secondary-action,
+  .print-report .primary-action,
+  .print-report .icon-button,
+  .print-report .disclosure-toggle {
+    display: none !important;
+  }
+
+  /* A card split across a sheet boundary loses its heading, which is where its meaning is. */
+  .print-report .panel,
+  .print-report .account-card,
+  .print-report .loan-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  @page {
+    margin: 12mm;
+  }
 }

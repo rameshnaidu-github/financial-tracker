@@ -55,6 +55,48 @@ export function currentMonth() {
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
 }
 
+/**
+ * A year and a month number, as the one string shape the server accepts.
+ *
+ * The server's schema is /^\d{4}-(0[1-9]|1[0-2])$/, so "2026-9" is rejected and "2026-09" is not.
+ * A free-text month field let a person type the first and find out afterwards; composing the value
+ * here instead means the short form cannot be expressed at all.
+ */
+export function monthValue(year: number, month: number) {
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+}
+
+/** The inverse, for setting two dropdowns from one stored value. */
+export function splitMonth(value: string) {
+  const match = /^(\d{4})-(\d{1,2})$/.exec(value);
+  const today = new Date();
+  if (!match) return { year: today.getFullYear(), month: today.getMonth() + 1 };
+  const year = Number(match[1]);
+  const month = Math.min(12, Math.max(1, Number(match[2])));
+  return { year, month };
+}
+
+/** The twelve months, in order, labelled the way they are read. */
+export const MONTH_CHOICES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+].map((label, index) => ({ value: index + 1, label }));
+
+/**
+ * The years worth offering.
+ *
+ * Five back for history that is still being entered, one forward for planning, and whatever year
+ * is already selected even if it falls outside that -- a stored month must always be choosable, or
+ * opening the page would silently move somebody's budget to another year.
+ */
+export function yearChoices(selected: number, today = new Date()) {
+  const now = today.getFullYear();
+  const years = new Set<number>();
+  for (let y = now - 5; y <= now + 1; y += 1) years.add(y);
+  years.add(selected);
+  return [...years].sort((a, b) => b - a);
+}
+
 export function mondayWeekRange(date = new Date()) {
   const current = new Date(date);
   current.setHours(0, 0, 0, 0);

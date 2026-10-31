@@ -77,7 +77,7 @@ export const Api = {
   profile: () => api<UserProfile>("/api/profile"),
   updateProfile: (body: Partial<UserProfile>) =>
     api<UserProfile>("/api/profile", { method: "PATCH", body }),
-  updateSettings: (body: { cardUtilizationAlertPercent: number }) =>
+  updateSettings: (body: { cardUtilizationAlertPercent?: number; minimumBankBalancePaise?: number }) =>
     api<Record<string, string>>("/api/settings", { method: "PATCH", body }),
   wealth: () => api<WealthSummary>("/api/wealth"),
   upcoming: (windowDays = 7) =>

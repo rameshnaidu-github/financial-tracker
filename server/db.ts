@@ -412,6 +412,7 @@ const PER_PERSON_SETTINGS = new Set([
   "profile_email",
   "profile_age",
   "card_utilization_alert_percent",
+  "minimum_bank_balance_paise",
   "first_screen",
   "week_start",
   "currency",
@@ -730,6 +731,8 @@ async function seedSettings() {
   await seed("week_start", WEEK_START);
   await seed("first_screen", "overview");
   await seed("card_utilization_alert_percent", "30");
+  // Off by default: nobody should be told their balance is low against a figure they never chose.
+  await seed("minimum_bank_balance_paise", "0");
   await seed("profile_name", "");
   await seed("profile_email", "");
   await seed("profile_age", "");

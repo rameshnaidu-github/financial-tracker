@@ -11,6 +11,8 @@ import {
   CircleAlert,
   CreditCard,
   Download,
+  Eye,
+  EyeSlash,
   FileSpreadsheet,
   Home,
   Info,
@@ -40,6 +42,7 @@ import {
 import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Api } from "./api";
 import {
+  MONTH_CHOICES,
   currentMonth,
   formatINR,
   formatINRCompact,
@@ -47,9 +50,12 @@ import {
   formatMonth,
   formatShortDate,
   mondayWeekRange,
+  monthValue,
   parseAmountToPaise,
   signedAmount,
-  todayISO
+  splitMonth,
+  todayISO,
+  yearChoices,
 } from "./format";
 import { IconGlyph } from "./icons";
 import { accountImpact } from "./account-impact";
@@ -302,6 +308,7 @@ const TRANSACTION_PAGE_SIZE = 10;
 function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordShown, setPasswordShown] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -338,15 +345,28 @@ function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
               autoFocus
             />
           </label>
-          <label className="control-field">
+          <label className="control-field password-field">
             <span className="control-label">Password</span>
             <input
-              type="password"
+              type={passwordShown ? "text" : "password"}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               autoComplete="current-password"
               required
             />
+            {/* A button, not a checkbox: it does something rather than recording a preference, and
+                it must not submit the form it sits inside. aria-pressed carries the state to a
+                screen reader, which cannot see the icon change. */}
+            <button
+              type="button"
+              className="password-reveal"
+              onClick={() => setPasswordShown((shown) => !shown)}
+              aria-pressed={passwordShown}
+              aria-label={passwordShown ? "Hide password" : "Show password"}
+              title={passwordShown ? "Hide password" : "Show password"}
+            >
+              {passwordShown ? <EyeSlash size={18} /> : <Eye size={18} />}
+            </button>
           </label>
           {error && (
             <p className="sign-in-error" role="alert">
@@ -364,6 +384,29 @@ function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
 
 export default function App() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
+
+  /**
+   * The whole application as one document, for printing or saving as a PDF.
+   *
+   * Every page is mounted at once only while this is true. Mounting all thirteen permanently
+   * would mean thirteen sets of requests on every visit for a button most people never press.
+   *
+   * The pages fetch their own data, so there is a wait before the dialog opens -- a print dialog
+   * freezes the page as it finds it, and without the wait the report would be a stack of loading
+   * states. afterprint puts the application back whether the reader saved or cancelled.
+   */
+  const [printing, setPrinting] = useState(false);
+
+  useEffect(() => {
+    if (!printing) return undefined;
+    const done = () => setPrinting(false);
+    const timer = window.setTimeout(() => window.print(), 1400);
+    window.addEventListener("afterprint", done);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("afterprint", done);
+    };
+  }, [printing]);
   // Null until the first request answers: rendering the sign-in screen before knowing would
   // flash it at somebody who is already signed in.
   const [signedIn, setSignedIn] = useState<boolean | null>(null);
@@ -553,6 +596,19 @@ export default function App() {
     [showNotice]
   );
 
+  const saveMinBalance = useCallback(
+    async (paise: number) => {
+      try {
+        const settings = await Api.updateSettings({ minimumBankBalancePaise: paise });
+        setBootstrap((current) => (current ? { ...current, settings } : current));
+        showNotice(paise > 0 ? "Minimum balance alert saved." : "Minimum balance alert turned off.");
+      } catch (err) {
+        showNotice(err instanceof Error ? err.message : "Could not save the setting.");
+      }
+    },
+    [showNotice]
+  );
+
   const accounts = bootstrap?.accounts ?? [];
   const loans = bootstrap?.loans ?? [];
   const subscriptions = bootstrap?.subscriptions ?? [];
@@ -561,6 +617,12 @@ export default function App() {
   const categoryTypes = bootstrap?.categoryTypes ?? [];
   const categories = flattenSubcategories(categoryTypes);
   const profile = bootstrap?.profile ?? emptyProfile;
+  // Paise, stored as a string like every other setting. Zero means the alert is off.
+  const minBankBalancePaise = (() => {
+    const parsed = Number(bootstrap?.settings?.minimum_bank_balance_paise ?? "0");
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : 0;
+  })();
+
   const cardAlertPercent = (() => {
     const parsed = Number(bootstrap?.settings?.card_utilization_alert_percent ?? "30");
     return Number.isFinite(parsed) && parsed >= 1 && parsed <= 100 ? Math.round(parsed) : 30;
@@ -662,6 +724,182 @@ export default function App() {
     );
   }
 
+  /**
+   * One page, by name.
+   *
+   * This was thirteen `activePage === x &&` branches. The report prints every page, which
+   * means something has to be able to render a page that is not the one being looked at, and
+   * a condition on the current page cannot do that. The bodies are unchanged.
+   */
+  const renderPage = (page: Page) => {
+    switch (page) {
+      case "overview":
+        return (
+        <OverviewPage
+                      selectedAccountId={selectedAccountId}
+                      selectedAccount={selectedAccount}
+                      refreshKey={refreshKey}
+                      onNavigate={navigate}
+                    />
+        );
+      case "weekly":
+        return (
+        <WeeklyEntryPage
+                      selectedAccountId={selectedAccountId}
+                      accounts={activeAccounts}
+                      loans={loans.filter((loan) => !loan.isArchived)}
+                      subscriptions={subscriptions.filter((subscription) => !subscription.isArchived)}
+                      mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
+                      vacations={vacations.filter((vacation) => !vacation.isArchived)}
+                      categoryTypes={categoryTypes}
+                      refresh={refresh}
+                      refreshKey={refreshKey}
+                      showNotice={showNotice}
+                      onNavigate={navigate}
+                      onAccountSelect={setSelectedAccountId}
+                    />
+        );
+      case "transactions":
+        return (
+        <TransactionsPage
+                      selectedAccountId={selectedAccountId}
+                      accounts={activeAccounts}
+                      loans={loans.filter((loan) => !loan.isArchived)}
+                      subscriptions={subscriptions}
+                      mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
+                      vacations={vacations.filter((vacation) => !vacation.isArchived)}
+                      categoryTypes={categoryTypes}
+                      refresh={refresh}
+                      refreshKey={refreshKey}
+                      showNotice={showNotice}
+                      requestConfirm={requestConfirm}
+                    />
+        );
+      case "reports":
+        return (
+        <ReportsPage
+                      selectedAccountId={selectedAccountId}
+                      categoryTypes={categoryTypes}
+                      refreshKey={refreshKey}
+                      onNavigate={navigate}
+                    />
+        );
+      case "budgets":
+        return (
+        <BudgetPlannerPage
+                      refreshKey={refreshKey}
+                      showNotice={showNotice}
+                      requestConfirm={requestConfirm}
+                    />
+        );
+      case "accounts":
+        return (
+        <AccountsPage
+                      accounts={accounts}
+                      cardAlertPercent={cardAlertPercent}
+                      minBankBalancePaise={minBankBalancePaise}
+                      refresh={refresh}
+                      showNotice={showNotice}
+                      requestConfirm={requestConfirm}
+                    />
+        );
+      case "loans":
+        return (
+        <LoansPage
+                      loans={loans}
+                      categoryTypes={categoryTypes}
+                      refresh={refresh}
+                      showNotice={showNotice}
+                      requestConfirm={requestConfirm}
+                    />
+        );
+      case "investments":
+        return (
+        <InvestmentsPage
+                      investments={investments}
+                      refresh={refresh}
+                      showNotice={showNotice}
+                      requestConfirm={requestConfirm}
+                    />
+        );
+      case "vacations":
+        return (
+        <VacationsPage
+                      vacations={vacations}
+                      refresh={refresh}
+                      showNotice={showNotice}
+                      requestConfirm={requestConfirm}
+                    />
+        );
+      case "subscriptions":
+        return (
+        <SubscriptionsPage
+                      subscriptions={subscriptions}
+                      refresh={refresh}
+                      showNotice={showNotice}
+                      requestConfirm={requestConfirm}
+                    />
+        );
+      case "categories":
+        return (
+        <CategoriesPage
+                      categoryTypes={categoryTypes}
+                      refresh={refresh}
+                      showNotice={showNotice}
+                      requestConfirm={requestConfirm}
+                    />
+        );
+      case "faq":
+        return (
+        <FaqPage />
+        );
+      case "profile":
+        return (
+        <ProfilePage
+                      onSignOut={() => {
+                        void Api.signOut()
+                          .catch(() => undefined)
+                          .finally(() => {
+                            setSignedIn(false);
+                            setBootstrap(null);
+                          });
+                      }}
+                      onPlayIntro={() => setIntroOpen(true)}
+                      introOnLaunch={introOnLaunch}
+                      onToggleIntroOnLaunch={toggleIntroOnLaunch}
+                      profile={profileDraft}
+                      savedProfile={bootstrap.profile}
+                      settings={bootstrap.settings}
+                      backupStatus={backupStatus}
+                      isOwner={isOwner}
+                      theme={theme}
+                      saving={profileSaving}
+                      cardAlertPercent={cardAlertPercent}
+                      minBankBalancePaise={minBankBalancePaise}
+                      onProfileChange={setProfileDraft}
+                      onSaveProfile={saveProfile}
+                      onSaveCardAlert={saveCardAlert}
+                      onSaveMinBalance={saveMinBalance}
+              onDownloadReport={() => setPrinting(true)}
+              preparingReport={printing}
+                      onThemeToggle={() =>
+                        setTheme((value) => {
+                          const next = value === "dark" ? "light" : "dark";
+                          try {
+                            window.localStorage.setItem(THEME_KEY, next);
+                          } catch {
+                            // Private windows can refuse storage; the choice still applies for this visit.
+                          }
+                          return next;
+                        })
+                      }
+                    />
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="app-shell">
       {introOpen && <IntroVideo onClose={closeIntro} />}
@@ -733,150 +971,29 @@ export default function App() {
         </header>
 
         <section className="content-area" ref={contentRef}>
-          {activePage === "overview" && (
-            <OverviewPage
-              selectedAccountId={selectedAccountId}
-              selectedAccount={selectedAccount}
-              refreshKey={refreshKey}
-              onNavigate={navigate}
-            />
-          )}
-          {activePage === "weekly" && (
-            <WeeklyEntryPage
-              selectedAccountId={selectedAccountId}
-              accounts={activeAccounts}
-              loans={loans.filter((loan) => !loan.isArchived)}
-              subscriptions={subscriptions.filter((subscription) => !subscription.isArchived)}
-              mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
-              vacations={vacations.filter((vacation) => !vacation.isArchived)}
-              categoryTypes={categoryTypes}
-              refresh={refresh}
-              refreshKey={refreshKey}
-              showNotice={showNotice}
-              onNavigate={navigate}
-              onAccountSelect={setSelectedAccountId}
-            />
-          )}
-          {activePage === "transactions" && (
-            <TransactionsPage
-              selectedAccountId={selectedAccountId}
-              accounts={activeAccounts}
-              loans={loans.filter((loan) => !loan.isArchived)}
-              subscriptions={subscriptions}
-              mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
-              vacations={vacations.filter((vacation) => !vacation.isArchived)}
-              categoryTypes={categoryTypes}
-              refresh={refresh}
-              refreshKey={refreshKey}
-              showNotice={showNotice}
-              requestConfirm={requestConfirm}
-            />
-          )}
-          {activePage === "reports" && (
-            <ReportsPage
-              selectedAccountId={selectedAccountId}
-              categoryTypes={categoryTypes}
-              refreshKey={refreshKey}
-              onNavigate={navigate}
-            />
-          )}
-          {activePage === "budgets" && (
-            <BudgetPlannerPage
-              refreshKey={refreshKey}
-              showNotice={showNotice}
-              requestConfirm={requestConfirm}
-            />
-          )}
-          {activePage === "accounts" && (
-            <AccountsPage
-              accounts={accounts}
-              cardAlertPercent={cardAlertPercent}
-              refresh={refresh}
-              showNotice={showNotice}
-              requestConfirm={requestConfirm}
-            />
-          )}
-          {activePage === "loans" && (
-            <LoansPage
-              loans={loans}
-              categoryTypes={categoryTypes}
-              refresh={refresh}
-              showNotice={showNotice}
-              requestConfirm={requestConfirm}
-            />
-          )}
-          {activePage === "investments" && (
-            <InvestmentsPage
-              investments={investments}
-              refresh={refresh}
-              showNotice={showNotice}
-              requestConfirm={requestConfirm}
-            />
-          )}
-          {activePage === "vacations" && (
-            <VacationsPage
-              vacations={vacations}
-              refresh={refresh}
-              showNotice={showNotice}
-              requestConfirm={requestConfirm}
-            />
-          )}
-          {activePage === "subscriptions" && (
-            <SubscriptionsPage
-              subscriptions={subscriptions}
-              refresh={refresh}
-              showNotice={showNotice}
-              requestConfirm={requestConfirm}
-            />
-          )}
-          {activePage === "categories" && (
-            <CategoriesPage
-              categoryTypes={categoryTypes}
-              refresh={refresh}
-              showNotice={showNotice}
-              requestConfirm={requestConfirm}
-            />
-          )}
-          {activePage === "faq" && <FaqPage />}
-          {activePage === "profile" && (
-            <ProfilePage
-              onSignOut={() => {
-                void Api.signOut()
-                  .catch(() => undefined)
-                  .finally(() => {
-                    setSignedIn(false);
-                    setBootstrap(null);
-                  });
-              }}
-              onPlayIntro={() => setIntroOpen(true)}
-              introOnLaunch={introOnLaunch}
-              onToggleIntroOnLaunch={toggleIntroOnLaunch}
-              profile={profileDraft}
-              savedProfile={bootstrap.profile}
-              settings={bootstrap.settings}
-              backupStatus={backupStatus}
-              isOwner={isOwner}
-              theme={theme}
-              saving={profileSaving}
-              cardAlertPercent={cardAlertPercent}
-              onProfileChange={setProfileDraft}
-              onSaveProfile={saveProfile}
-              onSaveCardAlert={saveCardAlert}
-              onThemeToggle={() =>
-                setTheme((value) => {
-                  const next = value === "dark" ? "light" : "dark";
-                  try {
-                    window.localStorage.setItem(THEME_KEY, next);
-                  } catch {
-                    // Private windows can refuse storage; the choice still applies for this visit.
-                  }
-                  return next;
-                })
-              }
-            />
-          )}
+          {renderPage(activePage)}
         </section>
       </main>
+
+      {printing && (
+        <div className="print-report">
+          <header className="print-report-head">
+            <h1>Financial Tracker</h1>
+            <p>
+              {profileDraft.name ? `${profileDraft.name} · ` : ""}
+              {new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}
+            </p>
+          </header>
+          {/* Derived from the navigation rather than a second list, so a page added to the app is
+              in the report without anybody remembering to add it here. */}
+          {navItems.map((item) => (
+            <section key={item.page} className="print-page">
+              <h2 className="print-page-title">{item.label}</h2>
+              {renderPage(item.page)}
+            </section>
+          ))}
+        </div>
+      )}
 
       {moreOpen && (
         <div className="mobile-more-backdrop" onClick={() => setMoreOpen(false)}>
@@ -3918,10 +4035,34 @@ function BudgetPlannerPage({
       <Panel
         title="Monthly Budget"
         action={
-          <label className="control-field budget-month-control">
-            <span className="control-label">Month</span>
-            <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
-          </label>
+          <div className="budget-month-picker">
+            <label className="control-field budget-month-control">
+              <span className="control-label">Month</span>
+              <select
+                value={splitMonth(month).month}
+                onChange={(event) => setMonth(monthValue(splitMonth(month).year, Number(event.target.value)))}
+              >
+                {MONTH_CHOICES.map((choice) => (
+                  <option key={choice.value} value={choice.value}>
+                    {choice.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="control-field budget-year-control">
+              <span className="control-label">Year</span>
+              <select
+                value={splitMonth(month).year}
+                onChange={(event) => setMonth(monthValue(Number(event.target.value), splitMonth(month).month))}
+              >
+                {yearChoices(splitMonth(month).year).map((year) => (
+                  <option key={year} value={year}>
+                    {year}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         }
       >
         {error ? (
@@ -4177,12 +4318,14 @@ function budgetSummaryTone(plan: BudgetPlan): "neutral" | "warning" | "good" {
 function AccountsPage({
   accounts,
   cardAlertPercent,
+  minBankBalancePaise,
   refresh,
   showNotice,
   requestConfirm
 }: {
   accounts: Account[];
   cardAlertPercent: number;
+  minBankBalancePaise: number;
   refresh: () => Promise<void>;
   showNotice: (message: string) => void;
   requestConfirm: (request: ConfirmRequest) => void;
@@ -4222,6 +4365,7 @@ function AccountsPage({
                 key={account.id}
                 account={account}
                 alertPercent={cardAlertPercent}
+                minBankBalancePaise={minBankBalancePaise}
                 onRemove={remove}
                 onSaved={async (message) => {
                   await refresh();
@@ -6941,6 +7085,10 @@ function ProfilePage({
   onProfileChange,
   onSaveProfile,
   onSaveCardAlert,
+  minBankBalancePaise,
+  onSaveMinBalance,
+  onDownloadReport,
+  preparingReport,
   onThemeToggle,
   onSignOut
 }: {
@@ -6958,6 +7106,10 @@ function ProfilePage({
   onProfileChange: (profile: UserProfile) => void;
   onSaveProfile: () => Promise<void> | void;
   onSaveCardAlert: (percent: number) => Promise<void> | void;
+  minBankBalancePaise: number;
+  onSaveMinBalance: (paise: number) => Promise<void> | void;
+  onDownloadReport: () => void;
+  preparingReport: boolean;
   onThemeToggle: () => void;
   onSignOut: () => void;
 }) {
@@ -6965,6 +7117,8 @@ function ProfilePage({
   const displayEmail = profile.email || "Local profile";
   const [editing, setEditing] = useState(false);
   const [cardAlertDraft, setCardAlertDraft] = useState(String(cardAlertPercent));
+  // Shown in rupees, stored in paise: nobody sets a minimum balance to the paisa.
+  const [minBalanceDraft, setMinBalanceDraft] = useState(String(Math.round(minBankBalancePaise / 100)));
   // Only a real difference counts as unsaved: opening the editor changes nothing by itself.
   const profileDirty =
     profile.name !== savedProfile.name ||
@@ -6975,7 +7129,16 @@ function ProfilePage({
     setCardAlertDraft(String(cardAlertPercent));
   }, [cardAlertPercent]);
 
+  useEffect(() => {
+    setMinBalanceDraft(String(Math.round(minBankBalancePaise / 100)));
+  }, [minBankBalancePaise]);
+
   const draftValue = Number.parseInt(cardAlertDraft, 10);
+  const minBalanceRupees = Number.parseInt(minBalanceDraft, 10);
+  // A blank box is not zero: zero is a deliberate "off", and blank is someone mid-edit.
+  const minBalanceValid =
+    minBalanceDraft.trim() !== "" && Number.isFinite(minBalanceRupees) && minBalanceRupees >= 0 && minBalanceRupees <= 10_000_000;
+  const minBalancePaiseDraft = minBalanceValid ? minBalanceRupees * 100 : minBankBalancePaise;
   const draftIsValid = Number.isInteger(draftValue) && draftValue >= 1 && draftValue <= 100;
   const profileAgeText = profile.age.trim();
   const profileAge = Number.parseInt(profileAgeText, 10);
@@ -7114,16 +7277,32 @@ function ProfilePage({
             </div>
             <small>Credit cards turn red when utilization crosses this value (1-100).</small>
           </div>
-          <div className="settings-row backup-row">
-            <span>Your data</span>
-            <a className="secondary-action" href={Api.exportAllUrl()} download>
-              Download
-            </a>
-            <small>
-              Accounts, transactions, budgets, loans, investments, subscriptions and trips.
-              Everything this app holds for you, in one file, and yours only.
-            </small>
+          <div className="settings-row card-alert-row">
+            <span>Minimum bank balance alert</span>
+            <div className="card-alert-controls">
+              <span className="card-alert-suffix">₹</span>
+              <input
+                aria-label="Minimum bank balance in rupees"
+                inputMode="numeric"
+                value={minBalanceDraft}
+                onChange={(event) => setMinBalanceDraft(event.target.value)}
+              />
+              <button
+                type="button"
+                className="secondary-action"
+                disabled={!minBalanceValid || minBalancePaiseDraft === minBankBalancePaise}
+                onClick={() => void onSaveMinBalance(minBalancePaiseDraft)}
+              >
+                Save
+              </button>
+            </div>
+            <small>Bank and food card balances turn red below this. Zero turns the alert off.</small>
           </div>
+          <button className="settings-row" onClick={onDownloadReport} disabled={preparingReport}>
+            <span>Report</span>
+            <strong>{preparingReport ? "Preparing…" : "Download"}</strong>
+            <small>Every page as one document. Choose "Save as PDF" in the print dialog.</small>
+          </button>
           {isOwner === true ? (
             <div className="settings-row backup-row">
               <span>Backups</span>
@@ -7150,12 +7329,14 @@ function ProfilePage({
 function AccountManagerLine({
   account,
   alertPercent,
+  minBankBalancePaise,
   onRemove,
   onSaved,
   onError
 }: {
   account: Account;
   alertPercent: number;
+  minBankBalancePaise: number;
   onRemove?: (account: Account) => void;
   onSaved?: (message: string) => Promise<void>;
   onError?: (message: string) => void;
@@ -7218,6 +7399,11 @@ function AccountManagerLine({
   const isCard = account.type === "credit_card";
   const primaryValue = isCard ? account.outstandingPaise : account.balancePaise;
   const primaryLabel = isCard ? "Outstanding" : "Balance";
+  // The mirror of the card's utilisation alert: a balance that has fallen under the figure the
+  // person set. Cards are excluded -- their number is what is owed, where small is good -- and a
+  // minimum of zero means the alert is off rather than meaning every account qualifies.
+  const belowMinimum =
+    !isCard && !account.isArchived && minBankBalancePaise > 0 && account.balancePaise < minBankBalancePaise;
 
   return (
     <article className={`loan-card account-card ${account.isArchived ? "archived" : ""}`}>
@@ -7233,8 +7419,8 @@ function AccountManagerLine({
         </div>
         <div className="loan-header-actions">
           <div className="account-card-primary">
-            <strong>{formatINR(primaryValue)}</strong>
-            <span>{primaryLabel}</span>
+            <strong className={belowMinimum ? "below-minimum" : undefined}>{formatINR(primaryValue)}</strong>
+            <span>{belowMinimum ? `Below ${formatINR(minBankBalancePaise)}` : primaryLabel}</span>
           </div>
           <button
             type="button"
@@ -8019,6 +8205,6 @@ function formatBackupStatus(status: BackupStatus | null) {
 function formatBackupDetail(status: BackupStatus | null) {
   if (!status) return "The app could not reach the database to ask.";
   return status.managedBy === "host"
-    ? "The database is hosted, and its host takes the backups. The app does not copy it, and could not: a hosted database does not hand a client its own storage. Download your data above for a copy you keep yourself."
-    : "This database is running locally and nothing is backing it up. Download your data above for a copy you keep yourself.";
+    ? "The database is hosted, and its host takes the backups. The app does not copy it, and could not: a hosted database does not hand a client its own storage."
+    : "This database is running locally and nothing is backing it up.";
 }
