@@ -2015,6 +2015,50 @@ a {
   background: var(--danger);
 }
 
+/* The outstanding, split between this cycle's spending and the EMIs running on the card. The same
+   bar as utilisation above it -- same height, same track, same rounded ends, which is the whole
+   point of drawing it this way -- but laid out as two segments that always total the full width.
+   The ends are rounded by the track's own overflow, so the segments square off where they meet. */
+.card-limit-meter.split {
+  display: flex;
+}
+
+.card-limit-meter.split span {
+  border-radius: 0;
+  background: var(--accent);
+}
+
+.card-limit-meter.split span.emi {
+  background: var(--warning);
+}
+
+.outstanding-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.outstanding-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.outstanding-legend i {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.outstanding-legend .emi i {
+  background: var(--warning);
+}
+
 .card-limit-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5104,11 +5148,3 @@ a {
   }
 }
 
-/* The two halves of a credit card's outstanding, under the figure they add up to. */
-.account-card-primary .outstanding-split {
-  display: block;
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 0.72rem;
-  white-space: nowrap;
-}

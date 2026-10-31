@@ -137,3 +137,26 @@ export function formatMonth(month: string) {
     year: "numeric"
   });
 }
+
+/**
+ * A credit card's outstanding, cut into the part that is this cycle's own spending and the part
+ * that is EMIs still running on the card.
+ *
+ * The two percentages are derived from one rounding rather than two, because a bar and the legend
+ * printed under it read these same numbers: rounded separately they can differ by a percent, and
+ * the words then contradict the picture directly above them.
+ *
+ * It returns `show: false` rather than a split wherever one would mislead -- a card with no EMIs
+ * would only be repeating its own total back as "100% spending", and a card that owes nothing, or
+ * is in credit overall, has no whole to take a percentage of.
+ */
+export function outstandingSplit(spendPaise: number, emiPaise: number) {
+  const totalPaise = spendPaise + emiPaise;
+  const show = emiPaise > 0 && totalPaise > 0;
+  // A cycle paid ahead of itself leaves the spending part negative while the EMIs still stand.
+  // Clamping keeps the bar a bar; the amounts beside it are printed unclamped.
+  const spendPercent = show
+    ? Math.min(Math.max(Math.round((spendPaise / totalPaise) * 100), 0), 100)
+    : 0;
+  return { show, totalPaise, spendPaise, emiPaise, spendPercent, emiPercent: 100 - spendPercent };
+}

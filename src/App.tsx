@@ -51,6 +51,7 @@ import {
   formatShortDate,
   mondayWeekRange,
   monthValue,
+  outstandingSplit,
   parseAmountToPaise,
   signedAmount,
   splitMonth,
@@ -4810,7 +4811,10 @@ function LoanCard({
           </span>
           <div>
             <strong>{loan.name}</strong>
-            <span>{loan.subcategoryName}</span>
+            {/* An EMI says which card it runs on here, in the row as it stands: that is the one
+                thing telling two EMIs of the same kind apart, and opening each to find out was
+                the question this answers. Ordinary loans have no card and show only their type. */}
+            <span>{loan.accountName ? `${loan.subcategoryName} · ${loan.accountName}` : loan.subcategoryName}</span>
           </div>
         </div>
         <div className="loan-header-actions">
@@ -6967,6 +6971,7 @@ function CardLimitSummary({ account, alertPercent }: { account: Account; alertPe
   const available = account.availableLimitPaise ?? Math.max(limit - outstanding, 0);
   const usage = creditUtilization(account);
   const highUsage = usage > alertPercent;
+  const split = outstandingSplit(account.spendOutstandingPaise, account.emiOutstandingPaise);
 
   return (
     <div className="card-limit-summary">
@@ -6977,6 +6982,32 @@ function CardLimitSummary({ account, alertPercent }: { account: Account; alertPe
       <div className="card-limit-meter">
         <span className={highUsage ? "danger" : ""} style={{ width: `${usage}%` }} />
       </div>
+      {/* The same outstanding again, cut a different way: how much of what is owed is this
+          cycle's own spending and how much is EMIs still running. A second bar rather than a line
+          of text, so the two readings of the card can be compared at a glance -- and both the
+          widths and the legend read the one pair of percentages, so they cannot disagree. */}
+      {split.show && (
+        <>
+          <div className="card-utilization-row">
+            <span>Outstanding</span>
+            <strong>100%</strong>
+          </div>
+          <div className="card-limit-meter split">
+            <span className="spend" style={{ width: `${split.spendPercent}%` }} />
+            <span className="emi" style={{ width: `${split.emiPercent}%` }} />
+          </div>
+          <div className="outstanding-legend">
+            <span className="spend">
+              <i />
+              Monthly utilization {split.spendPercent}% · {formatINR(split.spendPaise)}
+            </span>
+            <span className="emi">
+              <i />
+              EMIs {split.emiPercent}% · {formatINR(split.emiPaise)}
+            </span>
+          </div>
+        </>
+      )}
       <div className="card-limit-grid">
         <div>
           <span>Total Amount</span>
@@ -7427,13 +7458,6 @@ function AccountManagerLine({
           <div className="account-card-primary">
             <strong className={belowMinimum ? "below-minimum" : undefined}>{formatINR(primaryValue)}</strong>
             <span>{belowMinimum ? `Below ${formatINR(minimumBalancePaise)}` : primaryLabel}</span>
-            {/* Only worth saying when there is something to split: a card with no EMIs would just
-                be repeating its own total back in two lines. */}
-            {isCard && account.emiOutstandingPaise > 0 && (
-              <small className="outstanding-split">
-                {formatINR(account.spendOutstandingPaise)} spends · {formatINR(account.emiOutstandingPaise)} EMIs
-              </small>
-            )}
           </div>
           <button
             type="button"
