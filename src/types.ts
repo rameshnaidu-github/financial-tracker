@@ -101,6 +101,8 @@ export type Transaction = {
   linkedTransactionId: string | null;
   /** How much of this purchase has already come back as linked refunds. */
   refundedPaise: number;
+  /** For a card payment: how much of it settled EMI installments running on that card. */
+  cardEmiPaise: number;
   loanId: string | null;
   loanName: string | null;
   loanPaymentType: LoanPaymentType | null;
@@ -454,6 +456,11 @@ export type CreateTransactionPayload = {
   subscriptionId?: string;
   investmentId?: string;
   vacationId?: string;
+  /** For a card payment: the EMIs on that card this payment settled, and for how much each. */
+  cardEmiPayments?: Array<{
+    loanId: string;
+    amountPaise: number;
+  }>;
   splits?: Array<{
     amountPaise: number;
   }>;

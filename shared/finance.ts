@@ -470,6 +470,16 @@ export const transactionSplitSchema = z.object({
   amountPaise: positivePaiseSchema
 });
 
+/**
+ * How much of a card payment went to one EMI running on that card. A card EMI is never paid on its
+ * own -- the bank charges the installment to the card and it is settled with the bill -- so the
+ * payment says which EMIs it covered and for how much, instead of each needing its own payment.
+ */
+export const cardEmiPaymentSchema = z.object({
+  loanId: idSchema,
+  amountPaise: positivePaiseSchema
+});
+
 const transactionObjectSchema = z.object({
     batchId: idSchema.optional(),
     date: dateSchema,
@@ -489,6 +499,7 @@ const transactionObjectSchema = z.object({
     subscriptionId: optionalIdSchema.optional(),
     investmentId: optionalIdSchema.optional(),
     vacationId: optionalIdSchema.optional(),
+    cardEmiPayments: z.array(cardEmiPaymentSchema).optional(),
     splits: z.array(transactionSplitSchema).optional()
   });
 
@@ -500,6 +511,34 @@ export const createTransactionSchema = transactionObjectSchema.superRefine((valu
           code: "custom",
           path: ["splits"],
           message: "Split amounts must exactly match the transaction amount."
+        });
+      }
+    }
+
+    if (value.cardEmiPayments?.length) {
+      if (value.kind !== "card_payment") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["cardEmiPayments"],
+          message: "Only a credit-card payment can settle the EMIs on that card."
+        });
+      }
+      const loanIds = new Set(value.cardEmiPayments.map((payment) => payment.loanId));
+      if (loanIds.size !== value.cardEmiPayments.length) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["cardEmiPayments"],
+          message: "One payment can cover an EMI only once."
+        });
+      }
+      // The EMI part comes out of this payment, so it cannot be larger than the payment. The rest
+      // is left to settle the card's own spending, and may legitimately be nothing at all.
+      const emiTotal = value.cardEmiPayments.reduce((sum, payment) => sum + payment.amountPaise, 0);
+      if (emiTotal > value.amountPaise) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["cardEmiPayments"],
+          message: "The EMI part of a payment can't be more than the payment itself."
         });
       }
     }
@@ -650,5 +689,6 @@ export type UpdateInvestmentInput = z.infer<typeof updateInvestmentSchema>;
 export type CreateVacationInput = z.infer<typeof createVacationSchema>;
 export type UpdateVacationInput = z.infer<typeof updateVacationSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
+export type CardEmiPaymentInput = z.infer<typeof cardEmiPaymentSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
 export type CreateBatchInput = z.infer<typeof createBatchSchema>;

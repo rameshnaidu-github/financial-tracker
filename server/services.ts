@@ -197,6 +197,7 @@ export type TransactionSummary = {
   transferAccountName: string | null;
   linkedTransactionId: string | null;
   refundedPaise: number;
+  cardEmiPaise: number;
   loanId: string | null;
   loanName: string | null;
   loanPaymentType: LoanPaymentType | null;
@@ -1707,6 +1708,8 @@ async function insertValidatedTransaction(parsed: CreateTransactionInput) {
     await refreshLoanPayments(parsed.loanId);
   }
 
+  await syncCardEmiCharges(id, parsed);
+
   await syncAutopayPaymentForTransaction(id, parsed);
   await syncInvestmentPaymentForTransaction(id, parsed);
   await syncVacationExpenseForTransaction(id, parsed);
@@ -1784,11 +1787,15 @@ export async function updateTransaction(id: string, input: UpdateTransactionInpu
   if (!existing) {
     throw notFound("Transaction not found.");
   }
+  await refuseIfSettledByCardPayment(existing);
   const existingLoanPayment = await getLoanPaymentForTransaction(id);
   const existingAutopayPayment = await getAutopayPaymentForTransaction(id);
   const existingInvestmentPayment = await getInvestmentPaymentForTransaction(id);
   const existingVacationExpense = await getVacationExpenseForTransaction(id);
   const existingSplits = await getTransactionSplits(id);
+  // Carried through the merge so that editing a payment's date or note leaves the installments it
+  // settled exactly as they were, rather than silently dropping them.
+  const existingCardEmiCharges = await cardEmiChargesForPayment(id);
   const patch = updateTransactionSchema.parse(input);
   if (Object.prototype.hasOwnProperty.call(patch, "loanId") && !patch.loanId) {
     patch.loanPaymentType = undefined;
@@ -1814,6 +1821,9 @@ export async function updateTransaction(id: string, input: UpdateTransactionInpu
     subscriptionId: existingAutopayPayment?.subscription_id ?? undefined,
     investmentId: existingInvestmentPayment?.investment_id ?? undefined,
     vacationId: existingVacationExpense?.vacation_id ?? undefined,
+    cardEmiPayments: existingCardEmiCharges.length
+      ? existingCardEmiCharges.map((charge) => ({ loanId: charge.loan_id, amountPaise: charge.amount_paise }))
+      : undefined,
     splits:existingSplits.length ? existingSplits : undefined
   };
   Object.assign(mergedInput, patch);
@@ -1830,6 +1840,9 @@ export async function updateTransaction(id: string, input: UpdateTransactionInpu
   if (merged.kind !== "emi") {
     merged.loanId = undefined;
     merged.loanPaymentType = undefined;
+  }
+  if (merged.kind !== "card_payment") {
+    merged.cardEmiPayments = undefined;
   }
 
   const account = await requireAccount(merged.accountId);
@@ -1885,6 +1898,8 @@ export async function updateTransaction(id: string, input: UpdateTransactionInpu
 
     (await db.prepare("DELETE FROM vacation_expenses WHERE transaction_id = ? AND user_id = ?").run(id, currentUserId()));
     await syncVacationExpenseForTransaction(id, merged);
+
+    await syncCardEmiCharges(id, merged, existing.transfer_account_id);
   });
 
   return {
@@ -1900,13 +1915,34 @@ export async function updateTransaction(id: string, input: UpdateTransactionInpu
 }
 
 export async function deleteTransaction(id: string) {
+  const existing = await getTransactionRow(id);
+  if (existing) {
+    await refuseIfSettledByCardPayment(existing);
+  }
   const loanPayment = await getLoanPaymentForTransaction(id);
-  const result = (await db.prepare("DELETE FROM transactions WHERE id = ? AND user_id = ?").run(id, currentUserId()));
-  if (result.changes === 0) {
+  // A payment takes the installments it settled with it, and they go first: the link between
+  // them is a key on (transaction, owner), so letting the database blank it would blank the owner
+  // along with it. Leaving them would be worse still -- each charge would stand on the card with
+  // nothing paying it off.
+  const settledCharges = await cardEmiChargesForPayment(id);
+  let changed = 0;
+  await transaction(async () => {
+    for (const charge of settledCharges) {
+      (await db.prepare("DELETE FROM transactions WHERE id = ? AND user_id = ?").run(charge.id, currentUserId()));
+    }
+    changed = Number(
+      (await db.prepare("DELETE FROM transactions WHERE id = ? AND user_id = ?").run(id, currentUserId())).changes
+    );
+  });
+  if (changed === 0) {
     throw notFound("Transaction not found.");
   }
+  const loansToRefresh = new Set(settledCharges.map((charge) => charge.loan_id));
   if (loanPayment) {
-    await refreshLoanPayments(loanPayment.loan_id);
+    loansToRefresh.add(loanPayment.loan_id);
+  }
+  for (const loanId of loansToRefresh) {
+    await refreshLoanPayments(loanId);
   }
   return { ok: true };
 }
@@ -4226,6 +4262,142 @@ async function syncLoanPaymentForTransaction(transactionId: string, input: Creat
   ));
 }
 
+/**
+ * The installment charges a card payment carries, oldest first.
+ *
+ * A card EMI is never paid on its own: the bank charges the month's installment to the card and
+ * it is settled with the bill. So an installment is recorded as what it is -- a charge on the
+ * card, under the loan's own SubType -- tied to the payment that settled it. That keeps three
+ * things true at once: the card's outstanding is right (the charge goes on, the payment takes it
+ * off), the EMI's balance comes down by the principal in it, and the month's Loan total still
+ * counts the installment, which it could not if the amount were folded into the payment -- a
+ * payment is left out of every report on purpose, its charges having been counted when made.
+ */
+async function cardEmiChargesForPayment(paymentId: string) {
+  return asRecords<{ id: string; loan_id: string; amount_paise: number; date: string; account_id: string }>(
+    (await db
+      .prepare(
+        `SELECT t.id, lp.loan_id, t.amount_paise, t.date, t.account_id
+         FROM transactions t
+         JOIN loan_payments lp ON lp.transaction_id = t.id AND lp.user_id = t.user_id
+         WHERE t.linked_transaction_id = ? AND t.user_id = ? AND t.kind = 'emi'
+         ORDER BY t.created_at ASC, t.id ASC`
+      )
+      .all(paymentId, currentUserId()))
+  );
+}
+
+/** The EMI an allocation names, if it really is an unpaid EMI running on the card being paid. */
+async function requireCardEmiOnCard(loanId: string, cardId: string) {
+  const loan = await requireActiveLoan(loanId);
+  if (loan.account_id !== cardId) {
+    throw badRequest(
+      loan.account_id
+        ? `${loan.name} runs on a different card, so this payment cannot settle it.`
+        : `${loan.name} is an ordinary loan, not an EMI on this card.`
+    );
+  }
+  const paid = asRecord<{ principal_paise: number }>(
+    (await db
+      .prepare(
+        `SELECT COALESCE(SUM(principal_paise), 0) AS principal_paise
+         FROM loan_payments WHERE loan_id = ? AND user_id = ?`
+      )
+      .get(loan.id, currentUserId()))
+  ).principal_paise;
+  if (loan.starting_outstanding_paise - paid <= 0) {
+    throw badRequest(`${loan.name} is already paid off.`);
+  }
+  return loan;
+}
+
+/**
+ * Bring a card payment's installment charges in line with what it says it covered.
+ *
+ * Rebuilding is the simplest way to be sure the charges and the payment agree, but it is skipped
+ * when nothing about them would change: editing a payment's note should not quietly re-date the
+ * installments under it, and re-inserting them would shuffle the order the amortisation reads.
+ */
+async function syncCardEmiCharges(
+  paymentId: string,
+  parsed: CreateTransactionInput,
+  previousCardId?: string | null
+) {
+  const existing = await cardEmiChargesForPayment(paymentId);
+  const wanted = parsed.kind === "card_payment" ? parsed.cardEmiPayments ?? [] : [];
+
+  if (existing.length && previousCardId && parsed.transferAccountId !== previousCardId) {
+    throw badRequest(
+      "This payment settled EMI installments on the card it was paying. Delete it and record a " +
+        "new payment to move it to another card."
+    );
+  }
+
+  const unchanged =
+    existing.length === wanted.length &&
+    existing.every(
+      (charge, index) =>
+        charge.loan_id === wanted[index].loanId &&
+        charge.amount_paise === wanted[index].amountPaise &&
+        charge.date === parsed.date &&
+        charge.account_id === parsed.transferAccountId
+    );
+  if (unchanged) {
+    return;
+  }
+
+  const loansToRefresh = new Set(existing.map((charge) => charge.loan_id));
+  for (const charge of existing) {
+    (await db.prepare("DELETE FROM transactions WHERE id = ? AND user_id = ?").run(charge.id, currentUserId()));
+  }
+
+  for (const allocation of wanted) {
+    const emi = await requireCardEmiOnCard(allocation.loanId, parsed.transferAccountId ?? "");
+    await insertValidatedTransaction(
+      createTransactionSchema.parse({
+        batchId: parsed.batchId,
+        date: parsed.date,
+        // Charged to the card, exactly as the bank charges it there, and paid off by the payment
+        // this charge hangs from.
+        accountId: parsed.transferAccountId,
+        method: "credit_card",
+        // The EMI's own name. The row already says Loan and the SubType beside it, so adding
+        // "EMI" here only reads back as "Phone on EMI EMI".
+        merchant: emi.name,
+        subcategoryId: emi.subcategory_id,
+        amountPaise: allocation.amountPaise,
+        direction: "outflow",
+        kind: "emi",
+        linkedTransactionId: paymentId,
+        loanId: emi.id,
+        loanPaymentType: "emi"
+      })
+    );
+    loansToRefresh.add(emi.id);
+  }
+
+  for (const loanId of loansToRefresh) {
+    await refreshLoanPayments(loanId);
+  }
+}
+
+/**
+ * An installment settled by a card payment is not an event of its own -- it exists because that
+ * payment covered it. Editing or deleting it alone would leave the payment claiming to have
+ * settled something that is no longer there, and the card's outstanding wrong by that much.
+ */
+async function refuseIfSettledByCardPayment(row: TransactionRow) {
+  if (row.kind !== "emi" || !row.linked_transaction_id) {
+    return;
+  }
+  const parent = await getTransactionRow(row.linked_transaction_id);
+  if (parent?.kind === "card_payment") {
+    throw badRequest(
+      "This installment was settled by a credit-card payment. Change that payment instead."
+    );
+  }
+}
+
 async function getAccount(id: string) {
   const account = await getAccountRow(id);
   if (!account) {
@@ -5198,6 +5370,7 @@ function mapSubcategory(row: SubcategoryRow): SubcategorySummary {
 
 type JoinedFields = {
   refunded_paise: number;
+  card_emi_paise: number;
   account_name: string;
   account_type: AccountType;
   category_name: string | null;
@@ -5260,6 +5433,8 @@ const transactionSelectFields = `
   t.linked_transaction_id,
   (SELECT COALESCE(SUM(r.amount_paise), 0) FROM transactions r
    WHERE r.linked_transaction_id = t.id AND r.kind IN ('refund', 'reversal')) AS refunded_paise,
+  (SELECT COALESCE(SUM(e.amount_paise), 0) FROM transactions e
+   WHERE e.linked_transaction_id = t.id AND e.kind = 'emi' AND e.user_id = t.user_id) AS card_emi_paise,
   t.created_at,
   t.updated_at,
   a.name AS account_name,
@@ -5316,6 +5491,7 @@ function mapTransaction(row: TransactionRow & JoinedFields): TransactionSummary 
     transferAccountName: row.transfer_account_name,
     linkedTransactionId: row.linked_transaction_id,
     refundedPaise: row.refunded_paise ?? 0,
+    cardEmiPaise: row.card_emi_paise ?? 0,
     loanId: row.loan_id,
     loanName: row.loan_name,
     loanPaymentType: row.loan_payment_type,

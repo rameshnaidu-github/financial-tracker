@@ -734,6 +734,7 @@ export default function App() {
                       selectedAccountId={selectedAccountId}
                       accounts={activeAccounts}
                       loans={loans.filter((loan) => !loan.isArchived)}
+                      cardEmis={cardEmis.filter((emi) => !emi.isArchived)}
                       subscriptions={subscriptions.filter((subscription) => !subscription.isArchived)}
                       mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
                       vacations={vacations.filter((vacation) => !vacation.isArchived)}
@@ -1545,6 +1546,7 @@ function WeeklyEntryPage({
   selectedAccountId,
   accounts,
   loans,
+  cardEmis,
   subscriptions,
   mutualFunds,
   vacations,
@@ -1558,6 +1560,7 @@ function WeeklyEntryPage({
   selectedAccountId: string;
   accounts: Account[];
   loans: Loan[];
+  cardEmis: Loan[];
   subscriptions: AutopaySubscription[];
   mutualFunds: Investment[];
   vacations: Vacation[];
@@ -1581,6 +1584,10 @@ function WeeklyEntryPage({
   const [importOpen, setImportOpen] = useState(false);
   const [duplicateCount, setDuplicateCount] = useState(0);
   const [saving, setSaving] = useState(false);
+  // Which EMIs on the card being paid this payment covers, and for how much each, keyed by EMI.
+  // A key present means ticked, so unticking one forgets its amount rather than keeping a zero.
+  const [cardEmiAmounts, setCardEmiAmounts] = useState<Record<string, string>>({});
+  const [settleCardEmis, setSettleCardEmis] = useState(false);
   const [form, setForm] = useState({
     date: todayISO(),
     accountId: firstAccount?.id ?? "",
@@ -1633,6 +1640,13 @@ function WeeklyEntryPage({
     }
   }, [categoryTypes, defaultType?.id, form.typeId]);
 
+  // The tick describes one card's EMIs. Pointing the payment at another card, or at something
+  // that is not a card payment at all, leaves it describing EMIs that are no longer on offer.
+  useEffect(() => {
+    setSettleCardEmis(false);
+    setCardEmiAmounts({});
+  }, [form.transferAccountId, form.typeId]);
+
   const selectedAccount = accounts.find((account) => account.id === form.accountId);
   const cardAccounts = accounts.filter((account) => account.type === "credit_card");
   const selectedType = categoryTypes.find((type) => type.id === form.typeId);
@@ -1644,6 +1658,19 @@ function WeeklyEntryPage({
   const isSelfTransferSelected = form.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID;
   const isExpenseSelected = selectedBehavior === "expense";
   const selfTransferTargets = selfTransferTargetAccounts(accounts, form.accountId);
+  // The EMIs running on the card this payment is for. A card EMI is never paid on its own: the
+  // bank charges the month's installment to the card, so the bill settles it along with the
+  // spending. One already paid off has nothing left to settle.
+  const cardEmisForPayment =
+    selectedBehavior === "card_payment" && form.transferAccountId
+      ? cardEmis.filter((emi) => emi.accountId === form.transferAccountId && emi.outstandingPaise > 0)
+      : [];
+  const cardEmiAllocations = cardEmisForPayment
+    .filter((emi) => cardEmiAmounts[emi.id] !== undefined)
+    .map((emi) => ({ loanId: emi.id, amountPaise: parseAmountToPaise(cardEmiAmounts[emi.id] ?? "") }))
+    .filter((allocation) => allocation.amountPaise > 0);
+  const cardEmiTotalPaise = cardEmiAllocations.reduce((sum, allocation) => sum + allocation.amountPaise, 0);
+  const paymentAmountPaise = parseAmountToPaise(form.amount);
   const expenseTotal = transactions
     .filter((transaction) => transaction.kind === "expense")
     .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
@@ -1688,7 +1715,11 @@ function WeeklyEntryPage({
           form.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? form.subscriptionId || undefined : undefined,
         investmentId:
           form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? form.investmentId || undefined : undefined,
-        vacationId: behavior === "expense" ? form.vacationId || undefined : undefined
+        vacationId: behavior === "expense" ? form.vacationId || undefined : undefined,
+        cardEmiPayments:
+          behavior === "card_payment" && settleCardEmis && cardEmiAllocations.length
+            ? cardEmiAllocations
+            : undefined
       };
 
       const result = await Api.createTransaction(payload);
@@ -1704,6 +1735,8 @@ function WeeklyEntryPage({
         subscriptionId: "",
         investmentId: ""
       }));
+      setSettleCardEmis(false);
+      setCardEmiAmounts({});
       await reloadWeek();
       await refresh();
       showNotice(
@@ -1965,6 +1998,87 @@ function WeeklyEntryPage({
                   </label>
                 </>
               )}
+              {/* A card EMI is part of the card's bill, not a payment of its own. So the bill asks
+                  which of the card's EMIs it covers, and each ticked one is then charged to the
+                  card and settled by this payment -- the card's outstanding and the EMI's balance
+                  both move, from the one entry. */}
+              {selectedBehavior === "card_payment" && cardEmisForPayment.length > 0 && (
+                <label className="vacation-check wide">
+                  <input
+                    type="checkbox"
+                    checked={settleCardEmis}
+                    onChange={(event) => {
+                      const on = event.target.checked;
+                      setSettleCardEmis(on);
+                      // Ticked, every EMI on the card starts at its monthly installment, which is
+                      // what a bill normally carries. Each one can then be unticked or changed.
+                      setCardEmiAmounts(
+                        on
+                          ? Object.fromEntries(
+                              cardEmisForPayment.map((emi) => [emi.id, (emi.monthlyEmiPaise / 100).toFixed(2)])
+                            )
+                          : {}
+                      );
+                    }}
+                  />
+                  <span>EMIs on this card part of this payment?</span>
+                </label>
+              )}
+              {selectedBehavior === "card_payment" && settleCardEmis && cardEmisForPayment.length > 0 && (
+                <div className="card-emi-settle wide">
+                  {cardEmisForPayment.map((emi) => {
+                    const picked = cardEmiAmounts[emi.id] !== undefined;
+                    return (
+                      <div className="card-emi-settle-row" key={emi.id}>
+                        <label className="card-emi-settle-pick">
+                          <input
+                            type="checkbox"
+                            checked={picked}
+                            onChange={(event) =>
+                              setCardEmiAmounts((current) => {
+                                const next = { ...current };
+                                if (event.target.checked) {
+                                  next[emi.id] = (emi.monthlyEmiPaise / 100).toFixed(2);
+                                } else {
+                                  delete next[emi.id];
+                                }
+                                return next;
+                              })
+                            }
+                          />
+                          <span>
+                            <strong>{emi.name}</strong>
+                            <small>
+                              {formatINR(emi.monthlyEmiPaise)} a month · {formatINR(emi.outstandingPaise)} left
+                            </small>
+                          </span>
+                        </label>
+                        <input
+                          className="card-emi-settle-amount"
+                          value={cardEmiAmounts[emi.id] ?? ""}
+                          onChange={(event) =>
+                            setCardEmiAmounts((current) => ({ ...current, [emi.id]: event.target.value }))
+                          }
+                          placeholder="₹0"
+                          inputMode="decimal"
+                          disabled={!picked}
+                          aria-label={`How much of this payment settles ${emi.name}`}
+                        />
+                      </div>
+                    );
+                  })}
+                  {/* The payment, read as its two parts. Shown against the amount entered so that
+                      an EMI part larger than the payment is visible here rather than only as a
+                      refusal on saving. */}
+                  <p className="card-emi-settle-total">
+                    {formatINR(cardEmiTotalPaise)} of EMIs
+                    {paymentAmountPaise > 0 &&
+                      (paymentAmountPaise >= cardEmiTotalPaise
+                        ? ` · ${formatINR(paymentAmountPaise - cardEmiTotalPaise)} towards this cycle's spending`
+                        : " · more than the payment itself")}
+                  </p>
+                </div>
+              )}
               <label>
                 Amount
                 <input
@@ -2098,6 +2212,8 @@ type TransactionEditDraft = {
   subscriptionId: string;
   investmentId: string;
   vacationId: string;
+  /** For a card payment: how much of it settled EMI installments running on that card. */
+  cardEmiPaise: number;
 };
 
 function TransactionsPage({
@@ -2923,6 +3039,15 @@ function TransactionEditRow({
             </select>
           )}
         </label>
+        {behavior === "card_payment" && draft.cardEmiPaise > 0 && (
+          /* An edit must not silently drop what this payment settled, so the installments under it
+             are left alone and only stated here. Changing which EMIs a payment covered means
+             recording the payment again -- the one case where that is simpler than an edit. */
+          <p className="card-emi-settle-note">
+            Settles {formatINR(draft.cardEmiPaise)} of EMIs on this card. Delete and re-add the payment to
+            change which EMIs it covers.
+          </p>
+        )}
         {isSelfTransferSelected && (
           <label>
             Account
@@ -6840,7 +6965,12 @@ function categoryFromTransaction(transaction: Transaction): Category {
   if (transaction.kind === "card_payment" && transaction.transferAccountName) {
     return {
       id: transaction.transferAccountId ?? "",
-      name: transaction.transferAccountName,
+      // A bill that also settled EMIs says so in the row: without it, two payments of different
+      // amounts on the same card look like the same thing.
+      name:
+        transaction.cardEmiPaise > 0
+          ? `${transaction.transferAccountName} · ${formatINR(transaction.cardEmiPaise)} EMIs`
+          : transaction.transferAccountName,
       icon: "credit-card",
       color: transaction.typeColor ?? "#ea580c",
       isSystem: true,
@@ -8013,7 +8143,8 @@ function draftFromTransaction(
     loanPaymentType: transaction.loanPaymentType ?? "emi",
     subscriptionId: transaction.subscriptionId ?? "",
     investmentId: transaction.investmentId ?? "",
-    vacationId: transaction.vacationId ?? ""
+    vacationId: transaction.vacationId ?? "",
+    cardEmiPaise: transaction.cardEmiPaise
   };
 }
 

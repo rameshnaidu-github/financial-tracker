@@ -2395,6 +2395,89 @@ a {
   cursor: pointer;
 }
 
+/* The EMIs a card's bill is settling, revealed by the tick above them. One row each -- the EMI,
+   what it costs a month and what is left of it, and how much of this payment goes to it -- so a
+   bill can be split the way the statement splits it. */
+.card-emi-settle {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--panel-soft);
+}
+
+.card-emi-settle-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+
+.card-emi-settle-pick {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 180px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+/* A checkbox is an input, and inputs here are full-width form fields by default. */
+.card-emi-settle-pick input[type="checkbox"] {
+  width: 16px;
+  min-height: 0;
+  height: 16px;
+  flex: 0 0 auto;
+  padding: 0;
+  accent-color: #0ea5e9;
+  cursor: pointer;
+}
+
+.card-emi-settle-pick span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.card-emi-settle-pick strong {
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+.card-emi-settle-pick small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.card-emi-settle-amount {
+  flex: 0 0 128px;
+  width: 128px;
+}
+
+.card-emi-settle-total {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 850;
+}
+
+/* On an edit the installments are stated, not offered: changing which EMIs a payment covered
+   means recording the payment again. */
+.card-emi-settle-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 .add-button {
   align-self: end;
 }
