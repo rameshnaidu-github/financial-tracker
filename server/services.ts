@@ -385,7 +385,15 @@ export async function getProfile(): Promise<UserProfile> {
 
 export async function updateAppSettings(input: UpdateSettingsInput) {
   const parsed = updateSettingsSchema.parse(input);
-  await setSetting("card_utilization_alert_percent", String(parsed.cardUtilizationAlertPercent));
+  // Only what was sent. Writing both every time would mean the settings screen had to know the
+  // current value of the one it is not changing, and sending a stale copy back would undo an edit
+  // made in another tab.
+  if (parsed.cardUtilizationAlertPercent !== undefined) {
+    await setSetting("card_utilization_alert_percent", String(parsed.cardUtilizationAlertPercent));
+  }
+  if (parsed.minimumBankBalancePaise !== undefined) {
+    await setSetting("minimum_bank_balance_paise", String(parsed.minimumBankBalancePaise));
+  }
   return getSettings();
 }
 

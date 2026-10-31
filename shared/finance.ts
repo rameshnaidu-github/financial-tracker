@@ -424,9 +424,16 @@ export const updateVacationSchema = z
   })
   .refine((value) => Object.keys(value).length > 0, "No vacation changes provided.");
 
-export const updateSettingsSchema = z.object({
-  cardUtilizationAlertPercent: z.number().int().min(1).max(100)
-});
+export const updateSettingsSchema = z
+  .object({
+    cardUtilizationAlertPercent: z.number().int().min(1).max(100).optional(),
+    // Paise, like every other amount here. Zero is meaningful -- it turns the alert off -- so the
+    // floor is 0 rather than 1, and the ceiling is a crore, past which this is not the tool.
+    minimumBankBalancePaise: z.number().int().min(0).max(1_000_000_000).optional(),
+  })
+  // Both became optional so either can be saved without the other; without this, an empty object
+  // would be accepted and quietly change nothing.
+  .refine((value) => Object.keys(value).length > 0, "No settings changes provided.");
 
 export const updateProfileSchema = z.object({
   name: z.string().trim().max(80).optional(),
