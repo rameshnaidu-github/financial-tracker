@@ -270,9 +270,18 @@ export const createAccountSchema = z
     type: accountTypeSchema,
     startingBalancePaise: paiseSchema,
     creditLimitPaise: paiseSchema.optional(),
-    paymentDueDay: dueDaySchema.nullish()
+    paymentDueDay: dueDaySchema.nullish(),
+    // Zero, and the default, means no alert for this account.
+    minimumBalancePaise: paiseSchema.optional()
   })
   .superRefine((value, ctx) => {
+    if (value.type === "credit_card" && value.minimumBalancePaise) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["minimumBalancePaise"],
+        message: "A credit card has an outstanding rather than a balance, so a minimum does not apply."
+      });
+    }
     if (value.type === "credit_card" && value.creditLimitPaise === undefined) {
       ctx.addIssue({
         code: "custom",
@@ -296,6 +305,7 @@ export const updateAccountSchema = z
     startingBalancePaise: paiseSchema.optional(),
     creditLimitPaise: paiseSchema.optional(),
     paymentDueDay: dueDaySchema.nullish(),
+    minimumBalancePaise: paiseSchema.optional(),
     isArchived: z.boolean().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "No account changes provided.");
@@ -324,7 +334,10 @@ export const createLoanSchema = z
     annualInterestRateBps: z.number().int().min(0).max(100_000),
     tenureMonths: z.number().int().positive().max(600),
     monthlyEmiPaise: positivePaiseSchema,
-    emiDueDay: dueDaySchema.nullish()
+    emiDueDay: dueDaySchema.nullish(),
+    // The credit card this EMI sits on. Absent for an ordinary loan; the service refuses an id
+    // that is not a credit card, which a schema cannot know on its own.
+    accountId: idSchema.nullish()
   })
   .superRefine((value, ctx) => {
     if (value.startingOutstandingPaise > value.principalAmountPaise) {
@@ -427,9 +440,6 @@ export const updateVacationSchema = z
 export const updateSettingsSchema = z
   .object({
     cardUtilizationAlertPercent: z.number().int().min(1).max(100).optional(),
-    // Paise, like every other amount here. Zero is meaningful -- it turns the alert off -- so the
-    // floor is 0 rather than 1, and the ceiling is a crore, past which this is not the tool.
-    minimumBankBalancePaise: z.number().int().min(0).max(1_000_000_000).optional(),
   })
   // Both became optional so either can be saved without the other; without this, an empty object
   // would be accepted and quietly change nothing.

@@ -315,6 +315,7 @@ app.get("/api/bootstrap", async () => ({
   accounts: (await listAccounts()).filter((account) => !account.isArchived),
   categoryTypes: await listCategoryTypes(),
   loans: await listLoans(true),
+  cardEmis: await listLoans(true, "card-emi"),
   subscriptions: await listAutopaySubscriptions(true),
   investments: await listInvestments(),
   vacations: await listVacations(true)
@@ -371,8 +372,10 @@ app.delete("/api/subcategories/:id", async (request) => {
 });
 
 app.get("/api/loans", async (request) => {
-  const query = request.query as { includeArchived?: string };
-  return listLoans(query.includeArchived === "true");
+  const query = request.query as { includeArchived?: string; kind?: string };
+  // Anything other than the one word is an ordinary loan, so a stray query string cannot mix the
+  // two lists together.
+  return listLoans(query.includeArchived === "true", query.kind === "card-emi" ? "card-emi" : "loan");
 });
 
 app.post("/api/loans", async (request, reply) => {

@@ -5103,3 +5103,12 @@ a {
     margin: 12mm;
   }
 }
+
+/* The two halves of a credit card's outstanding, under the figure they add up to. */
+.account-card-primary .outstanding-split {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}

@@ -107,7 +107,7 @@ import {
 // System Type that ties a refund to the purchase it came from (see shared/finance.ts).
 const REFUND_TYPE_ID = "type_refund";
 
-type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "vacations" | "subscriptions" | "categories" | "faq" | "profile";
+type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "cardEmis" | "vacations" | "subscriptions" | "categories" | "faq" | "profile";
 type Theme = "light" | "dark";
 type DonutSegment = {
   id: string;
@@ -149,6 +149,7 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home; group?: Na
   { page: "accounts", label: "Accounts", icon: WalletCards, group: "Own & owe" },
   { page: "loans", label: "Loans", icon: Landmark, group: "Own & owe" },
   { page: "investments", label: "Investments", icon: TrendingUp, group: "Own & owe" },
+  { page: "cardEmis", label: "Card EMIs", icon: CreditCard, group: "Own & owe" },
   { page: "categories", label: "Categories", icon: Tags, group: "Setup" },
   { page: "faq", label: "FAQ", icon: CircleHelp, group: "Setup" },
   { page: "profile", label: "Profile", icon: UserCircle }
@@ -222,6 +223,7 @@ const mobileLabels: Record<Page, string> = {
   accounts: "Accts",
   loans: "Loan",
   investments: "Invest",
+  cardEmis: "EMIs",
   vacations: "Trips",
   subscriptions: "Auto",
   categories: "Cats",
@@ -238,6 +240,7 @@ const pagePaths: Record<Page, string> = {
   accounts: "/accounts",
   loans: "/loans",
   investments: "/investments",
+  cardEmis: "/card-emis",
   vacations: "/vacations",
   subscriptions: "/subscriptions",
   categories: "/categories",
@@ -596,33 +599,15 @@ export default function App() {
     [showNotice]
   );
 
-  const saveMinBalance = useCallback(
-    async (paise: number) => {
-      try {
-        const settings = await Api.updateSettings({ minimumBankBalancePaise: paise });
-        setBootstrap((current) => (current ? { ...current, settings } : current));
-        showNotice(paise > 0 ? "Minimum balance alert saved." : "Minimum balance alert turned off.");
-      } catch (err) {
-        showNotice(err instanceof Error ? err.message : "Could not save the setting.");
-      }
-    },
-    [showNotice]
-  );
-
   const accounts = bootstrap?.accounts ?? [];
   const loans = bootstrap?.loans ?? [];
+  const cardEmis = bootstrap?.cardEmis ?? [];
   const subscriptions = bootstrap?.subscriptions ?? [];
   const investments = bootstrap?.investments ?? [];
   const vacations = bootstrap?.vacations ?? [];
   const categoryTypes = bootstrap?.categoryTypes ?? [];
   const categories = flattenSubcategories(categoryTypes);
   const profile = bootstrap?.profile ?? emptyProfile;
-  // Paise, stored as a string like every other setting. Zero means the alert is off.
-  const minBankBalancePaise = (() => {
-    const parsed = Number(bootstrap?.settings?.minimum_bank_balance_paise ?? "0");
-    return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : 0;
-  })();
-
   const cardAlertPercent = (() => {
     const parsed = Number(bootstrap?.settings?.card_utilization_alert_percent ?? "30");
     return Number.isFinite(parsed) && parsed >= 1 && parsed <= 100 ? Math.round(parsed) : 30;
@@ -797,7 +782,6 @@ export default function App() {
         <AccountsPage
                       accounts={accounts}
                       cardAlertPercent={cardAlertPercent}
-                      minBankBalancePaise={minBankBalancePaise}
                       refresh={refresh}
                       showNotice={showNotice}
                       requestConfirm={requestConfirm}
@@ -821,6 +805,17 @@ export default function App() {
                       showNotice={showNotice}
                       requestConfirm={requestConfirm}
                     />
+        );
+      case "cardEmis":
+        return (
+          <LoansPage
+            loans={cardEmis}
+            categoryTypes={categoryTypes}
+            cards={activeAccounts.filter((account) => account.type === "credit_card")}
+            refresh={refresh}
+            showNotice={showNotice}
+            requestConfirm={requestConfirm}
+          />
         );
       case "vacations":
         return (
@@ -875,11 +870,9 @@ export default function App() {
                       theme={theme}
                       saving={profileSaving}
                       cardAlertPercent={cardAlertPercent}
-                      minBankBalancePaise={minBankBalancePaise}
                       onProfileChange={setProfileDraft}
                       onSaveProfile={saveProfile}
                       onSaveCardAlert={saveCardAlert}
-                      onSaveMinBalance={saveMinBalance}
               onDownloadReport={() => setPrinting(true)}
               preparingReport={printing}
                       onThemeToggle={() =>
@@ -4318,14 +4311,12 @@ function budgetSummaryTone(plan: BudgetPlan): "neutral" | "warning" | "good" {
 function AccountsPage({
   accounts,
   cardAlertPercent,
-  minBankBalancePaise,
   refresh,
   showNotice,
   requestConfirm
 }: {
   accounts: Account[];
   cardAlertPercent: number;
-  minBankBalancePaise: number;
   refresh: () => Promise<void>;
   showNotice: (message: string) => void;
   requestConfirm: (request: ConfirmRequest) => void;
@@ -4365,7 +4356,6 @@ function AccountsPage({
                 key={account.id}
                 account={account}
                 alertPercent={cardAlertPercent}
-                minBankBalancePaise={minBankBalancePaise}
                 onRemove={remove}
                 onSaved={async (message) => {
                   await refresh();
@@ -4410,16 +4400,21 @@ function AccountsPage({
 function LoansPage({
   loans,
   categoryTypes,
+  cards,
   refresh,
   showNotice,
   requestConfirm
 }: {
   loans: Loan[];
   categoryTypes: CategoryType[];
+  /** Present on the EMI page only. Its presence is what makes this the EMI page. */
+  cards?: Account[];
   refresh: () => Promise<void>;
   showNotice: (message: string) => void;
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
+  const isCardEmi = Array.isArray(cards);
+  const noun = isCardEmi ? "EMI" : "loan";
   const [editingLoan, setEditingLoan] = useState<Loan | null>(null);
   const activeLoans = loans.filter((loan) => !loan.isArchived);
   const archivedLoans = loans.filter((loan) => loan.isArchived);
@@ -4490,7 +4485,7 @@ function LoansPage({
 
       <div className="two-column loans-layout">
         <div className="section-column">
-        <Panel title="Loan tracker">
+        <Panel title={isCardEmi ? "EMI tracker" : "Loan tracker"}>
           {activeLoans.length === 0 ? (
             <EmptyState text="No active loans yet." />
           ) : (
@@ -4523,25 +4518,26 @@ function LoansPage({
           )}
         </Panel>
 
-      <Panel title="Outstanding by loan">
+      <Panel title={`Outstanding by ${noun}`}>
           <MixChart
             segments={loanSegments}
             totalPaise={activeOutstanding}
-            ariaLabel="Outstanding by loan"
+            ariaLabel={`Outstanding by ${noun}`}
             centerLabel="Outstanding"
             centerValue={formatINRWhole(activeOutstanding)}
             className="overview-donut-chart"
-            emptyText="Nothing outstanding yet. Add a loan to see the split."
+            emptyText={`Nothing outstanding yet. Add ${isCardEmi ? "an EMI" : "a loan"} to see the split.`}
           />
         </Panel>
         </div>
 
-        <Panel title={editingLoan ? "Edit loan" : "Add loan"}>
+        <Panel title={`${editingLoan ? "Edit" : "Add"} ${noun}`}>
           {loanType ? (
             <LoanForm
               key={editingLoan?.id ?? "new-loan"}
               loan={editingLoan}
               loanType={loanType}
+              cards={cards}
               onCancel={editingLoan ? () => setEditingLoan(null) : undefined}
               onSaved={async (message) => {
                 setEditingLoan(null);
@@ -4550,7 +4546,7 @@ function LoansPage({
               }}
             />
           ) : (
-            <EmptyState text="Loan Type is missing. Add a Type with Loan behavior in Categories first." />
+            <EmptyState text={`${isCardEmi ? "EMI" : "Loan"} needs a Type with Loan behavior. Add one in Categories first.`} />
           )}
         </Panel>
       </div>
@@ -4563,14 +4559,19 @@ function LoansPage({
 function LoanForm({
   loan,
   loanType,
+  cards,
   onSaved,
   onCancel
 }: {
   loan: Loan | null;
   loanType: CategoryType;
+  /** Present on the EMI page: the credit cards an EMI may sit on. Absent on the Loans page. */
+  cards?: Account[];
   onSaved: (message: string) => Promise<void>;
   onCancel?: () => void;
 }) {
+  const isCardEmi = Array.isArray(cards);
+  const [accountId, setAccountId] = useState(loan?.accountId ?? cards?.[0]?.id ?? "");
   const defaultSubcategoryId = loan?.subcategoryId ?? loanType.subcategories[0]?.id ?? "__custom__";
   const [subcategoryChoice, setSubcategoryChoice] = useState(defaultSubcategoryId);
   const [customSubType, setCustomSubType] = useState("");
@@ -4582,6 +4583,7 @@ function LoanForm({
   const [tenureMonths, setTenureMonths] = useState(loan ? String(loan.tenureMonths) : "");
   const [monthlyEmi, setMonthlyEmi] = useState(loan ? amountInputFromPaise(loan.monthlyEmiPaise) : "");
   const [emiDueDay, setEmiDueDay] = useState(loan?.emiDueDay ? String(loan.emiDueDay) : "");
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   // Your bank's EMI is the source of truth; this is the textbook figure for the terms entered.
@@ -4627,12 +4629,15 @@ function LoanForm({
         tenureMonths: Number.parseInt(tenureMonths, 10),
         monthlyEmiPaise: parseAmountToPaise(monthlyEmi),
         // Left blank means no reminder; clearing it on an existing loan turns the reminder off.
-        emiDueDay: emiDueDay.trim() ? Number.parseInt(emiDueDay, 10) : null
+        emiDueDay: emiDueDay.trim() ? Number.parseInt(emiDueDay, 10) : null,
+        // Only the EMI form sends a card. The Loans form omits it entirely, which is what keeps
+        // an ordinary loan out of the EMI list.
+        ...(isCardEmi ? { accountId } : {})
       };
 
       if (loan) {
         await Api.updateLoan(loan.id, payload);
-        await onSaved("Loan updated.");
+        await onSaved(isCardEmi ? "EMI updated." : "Loan updated.");
       } else {
         await Api.createLoan(payload);
         setSubcategoryChoice(loanType.subcategories[0]?.id ?? "__custom__");
@@ -4645,7 +4650,7 @@ function LoanForm({
         setTenureMonths("");
         setMonthlyEmi("");
         setEmiDueDay("");
-        await onSaved("Loan added.");
+        await onSaved(isCardEmi ? "EMI added." : "Loan added.");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save loan.");
@@ -4724,6 +4729,25 @@ function LoanForm({
           />
         </label>
       </div>
+      {isCardEmi && (
+        <>
+          <label>
+            Credit card
+            <select value={accountId} onChange={(event) => setAccountId(event.target.value)} required>
+              {(cards ?? []).length === 0 && <option value="">No credit cards yet</option>}
+              {(cards ?? []).map((card) => (
+                <option key={card.id} value={card.id}>
+                  {card.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <small className="field-hint">
+            This EMI's unpaid balance is added to that card's outstanding. Do not also enter the
+            original purchase as a transaction on the card, or it will be counted twice.
+          </small>
+        </>
+      )}
       <small className="field-hint">
         The EMI due day is the day of the month it leaves your account. Set it and the Overview reminds you before it is due.
       </small>
@@ -6108,6 +6132,8 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
   const [starting, setStarting] = useState("");
   const [limit, setLimit] = useState("");
   const [dueDay, setDueDay] = useState("");
+  // Blank and zero both mean no alert for this account, which is the default.
+  const [minimumBalance, setMinimumBalance] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -6122,12 +6148,16 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
         type,
         startingBalancePaise: parseAmountToPaise(starting),
         creditLimitPaise: type === "credit_card" ? parseAmountToPaise(limit) : undefined,
-        paymentDueDay: type === "credit_card" && dueDay.trim() ? Number.parseInt(dueDay, 10) : null
+        paymentDueDay: type === "credit_card" && dueDay.trim() ? Number.parseInt(dueDay, 10) : null,
+        // A card has an outstanding rather than a balance, so it never carries a minimum.
+        minimumBalancePaise:
+          type === "credit_card" || !minimumBalance.trim() ? undefined : parseAmountToPaise(minimumBalance)
       });
       setName("");
       setStarting("");
       setLimit("");
       setDueDay("");
+      setMinimumBalance("");
       await onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add account.");
@@ -6154,6 +6184,20 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
         {type === "credit_card" ? "Starting outstanding" : "Starting balance"}
         <input value={starting} onChange={(event) => setStarting(event.target.value)} placeholder="₹0" inputMode="decimal" />
       </label>
+      {type !== "credit_card" && (
+        <label>
+          Minimum balance
+          <input
+            value={minimumBalance}
+            onChange={(event) => setMinimumBalance(event.target.value)}
+            placeholder="₹0"
+            inputMode="decimal"
+          />
+          <small className="field-hint">
+            This balance turns red below this figure. Leave blank for no alert.
+          </small>
+        </label>
+      )}
       {type === "credit_card" && (
         <>
           <label>
@@ -7085,8 +7129,6 @@ function ProfilePage({
   onProfileChange,
   onSaveProfile,
   onSaveCardAlert,
-  minBankBalancePaise,
-  onSaveMinBalance,
   onDownloadReport,
   preparingReport,
   onThemeToggle,
@@ -7106,8 +7148,6 @@ function ProfilePage({
   onProfileChange: (profile: UserProfile) => void;
   onSaveProfile: () => Promise<void> | void;
   onSaveCardAlert: (percent: number) => Promise<void> | void;
-  minBankBalancePaise: number;
-  onSaveMinBalance: (paise: number) => Promise<void> | void;
   onDownloadReport: () => void;
   preparingReport: boolean;
   onThemeToggle: () => void;
@@ -7117,8 +7157,6 @@ function ProfilePage({
   const displayEmail = profile.email || "Local profile";
   const [editing, setEditing] = useState(false);
   const [cardAlertDraft, setCardAlertDraft] = useState(String(cardAlertPercent));
-  // Shown in rupees, stored in paise: nobody sets a minimum balance to the paisa.
-  const [minBalanceDraft, setMinBalanceDraft] = useState(String(Math.round(minBankBalancePaise / 100)));
   // Only a real difference counts as unsaved: opening the editor changes nothing by itself.
   const profileDirty =
     profile.name !== savedProfile.name ||
@@ -7129,17 +7167,7 @@ function ProfilePage({
     setCardAlertDraft(String(cardAlertPercent));
   }, [cardAlertPercent]);
 
-  useEffect(() => {
-    setMinBalanceDraft(String(Math.round(minBankBalancePaise / 100)));
-  }, [minBankBalancePaise]);
-
-  const draftValue = Number.parseInt(cardAlertDraft, 10);
-  const minBalanceRupees = Number.parseInt(minBalanceDraft, 10);
-  // A blank box is not zero: zero is a deliberate "off", and blank is someone mid-edit.
-  const minBalanceValid =
-    minBalanceDraft.trim() !== "" && Number.isFinite(minBalanceRupees) && minBalanceRupees >= 0 && minBalanceRupees <= 10_000_000;
-  const minBalancePaiseDraft = minBalanceValid ? minBalanceRupees * 100 : minBankBalancePaise;
-  const draftIsValid = Number.isInteger(draftValue) && draftValue >= 1 && draftValue <= 100;
+  const draftValue = Number.parseInt(cardAlertDraft, 10);  const draftIsValid = Number.isInteger(draftValue) && draftValue >= 1 && draftValue <= 100;
   const profileAgeText = profile.age.trim();
   const profileAge = Number.parseInt(profileAgeText, 10);
   const profileCanSave =
@@ -7277,27 +7305,6 @@ function ProfilePage({
             </div>
             <small>Credit cards turn red when utilization crosses this value (1-100).</small>
           </div>
-          <div className="settings-row card-alert-row">
-            <span>Minimum bank balance alert</span>
-            <div className="card-alert-controls">
-              <span className="card-alert-suffix">₹</span>
-              <input
-                aria-label="Minimum bank balance in rupees"
-                inputMode="numeric"
-                value={minBalanceDraft}
-                onChange={(event) => setMinBalanceDraft(event.target.value)}
-              />
-              <button
-                type="button"
-                className="secondary-action"
-                disabled={!minBalanceValid || minBalancePaiseDraft === minBankBalancePaise}
-                onClick={() => void onSaveMinBalance(minBalancePaiseDraft)}
-              >
-                Save
-              </button>
-            </div>
-            <small>Bank and food card balances turn red below this. Zero turns the alert off.</small>
-          </div>
           <button className="settings-row" onClick={onDownloadReport} disabled={preparingReport}>
             <span>Report</span>
             <strong>{preparingReport ? "Preparing…" : "Download"}</strong>
@@ -7329,14 +7336,12 @@ function ProfilePage({
 function AccountManagerLine({
   account,
   alertPercent,
-  minBankBalancePaise,
   onRemove,
   onSaved,
   onError
 }: {
   account: Account;
   alertPercent: number;
-  minBankBalancePaise: number;
   onRemove?: (account: Account) => void;
   onSaved?: (message: string) => Promise<void>;
   onError?: (message: string) => void;
@@ -7402,8 +7407,9 @@ function AccountManagerLine({
   // The mirror of the card's utilisation alert: a balance that has fallen under the figure the
   // person set. Cards are excluded -- their number is what is owed, where small is good -- and a
   // minimum of zero means the alert is off rather than meaning every account qualifies.
+  const minimumBalancePaise = account.minimumBalancePaise ?? 0;
   const belowMinimum =
-    !isCard && !account.isArchived && minBankBalancePaise > 0 && account.balancePaise < minBankBalancePaise;
+    !isCard && !account.isArchived && minimumBalancePaise > 0 && account.balancePaise < minimumBalancePaise;
 
   return (
     <article className={`loan-card account-card ${account.isArchived ? "archived" : ""}`}>
@@ -7420,7 +7426,14 @@ function AccountManagerLine({
         <div className="loan-header-actions">
           <div className="account-card-primary">
             <strong className={belowMinimum ? "below-minimum" : undefined}>{formatINR(primaryValue)}</strong>
-            <span>{belowMinimum ? `Below ${formatINR(minBankBalancePaise)}` : primaryLabel}</span>
+            <span>{belowMinimum ? `Below ${formatINR(minimumBalancePaise)}` : primaryLabel}</span>
+            {/* Only worth saying when there is something to split: a card with no EMIs would just
+                be repeating its own total back in two lines. */}
+            {isCard && account.emiOutstandingPaise > 0 && (
+              <small className="outstanding-split">
+                {formatINR(account.spendOutstandingPaise)} spends · {formatINR(account.emiOutstandingPaise)} EMIs
+              </small>
+            )}
           </div>
           <button
             type="button"

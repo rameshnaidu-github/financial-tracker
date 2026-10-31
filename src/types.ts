@@ -29,6 +29,9 @@ export type Account = {
   creditLimitPaise: number | null;
   balancePaise: number;
   outstandingPaise: number;
+  minimumBalancePaise: number;
+  spendOutstandingPaise: number;
+  emiOutstandingPaise: number;
   availableLimitPaise: number | null;
   paymentDueDay: number | null;
   isArchived: boolean;
@@ -156,6 +159,8 @@ export type Loan = {
   subcategoryName: string;
   subcategoryIcon: string;
   subcategoryColor: string;
+  accountId: string | null;
+  accountName: string | null;
   principalAmountPaise: number;
   startingOutstandingPaise: number;
   outstandingPaise: number;
@@ -185,6 +190,7 @@ export type Bootstrap = {
   accounts: Account[];
   categoryTypes: CategoryType[];
   loans: Loan[];
+  cardEmis: Loan[];
   subscriptions: AutopaySubscription[];
   investments: Investment[];
   vacations: Vacation[];

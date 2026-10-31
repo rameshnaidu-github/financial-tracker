@@ -64,6 +64,7 @@ export type AccountRow = {
   starting_balance_paise: number;
   credit_limit_paise: number | null;
   payment_due_day: number | null;
+  minimum_balance_paise: number;
   is_archived: number;
   created_at: string;
   updated_at: string;
@@ -76,7 +77,13 @@ export type AccountSummary = {
   startingBalancePaise: number;
   creditLimitPaise: number | null;
   balancePaise: number;
+  /** The balance this account should not fall below. Zero means no alert. */
+  minimumBalancePaise: number;
   outstandingPaise: number;
+  /** For a credit card: the part of the outstanding that is ordinary spending on the card. */
+  spendOutstandingPaise: number;
+  /** For a credit card: the unpaid principal of the EMIs sitting on it. */
+  emiOutstandingPaise: number;
   availableLimitPaise: number | null;
   paymentDueDay: number | null;
   isArchived: boolean;
@@ -214,6 +221,7 @@ export type UserProfile = {
 export type LoanRow = {
   id: string;
   name: string;
+  account_id: string | null;
   subcategory_id: string;
   principal_amount_paise: number;
   starting_outstanding_paise: number;
@@ -248,6 +256,8 @@ export type LoanSummary = {
   subcategoryName: string;
   subcategoryIcon: string;
   subcategoryColor: string;
+  accountId: string | null;
+  accountName: string | null;
   principalAmountPaise: number;
   startingOutstandingPaise: number;
   outstandingPaise: number;
@@ -391,9 +401,6 @@ export async function updateAppSettings(input: UpdateSettingsInput) {
   if (parsed.cardUtilizationAlertPercent !== undefined) {
     await setSetting("card_utilization_alert_percent", String(parsed.cardUtilizationAlertPercent));
   }
-  if (parsed.minimumBankBalancePaise !== undefined) {
-    await setSetting("minimum_bank_balance_paise", String(parsed.minimumBankBalancePaise));
-  }
   return getSettings();
 }
 
@@ -417,15 +424,22 @@ export async function updateProfile(input: UpdateProfileInput): Promise<UserProf
   return getProfile();
 }
 
-export async function listLoans(includeArchived = false): Promise<LoanSummary[]> {
+/**
+ * Loans, or the EMIs that sit on a credit card -- one table, told apart by whether a card is set.
+ *
+ * `kind` is not optional by accident. A caller that forgets it would get both kinds mixed into
+ * one list, which is precisely the bug this split exists to prevent, so there is no default.
+ */
+export async function listLoans(includeArchived = false, kind: "loan" | "card-emi" = "loan"): Promise<LoanSummary[]> {
+  const cardFilter = kind === "card-emi" ? " AND account_id IS NOT NULL" : " AND account_id IS NULL";
   const rows = asRecords<LoanRow>(
     (await db
       .prepare(
         `SELECT id, name, subcategory_id, principal_amount_paise, starting_outstanding_paise,
                 start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day,
-                is_archived, created_at, updated_at
+                account_id, is_archived, created_at, updated_at
          FROM loans
-         WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
+         WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}${cardFilter}
          -- The name column is declared COLLATE NOCASE, which SQLite applies to the ordering as
          -- well as to comparisons, so repeating it here changes nothing -- and it is the one
          -- construct Postgres has no spelling for.
@@ -460,17 +474,34 @@ function rupees(paise: number) {
   return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 }
 
+/**
+ * The card an EMI sits on, checked rather than trusted.
+ *
+ * The composite key already stops an id belonging to somebody else, but it cannot say that a bank
+ * account is not a credit card -- and an EMI on a savings account would quietly distort that
+ * account's balance.
+ */
+async function requireCreditCard(accountId: string) {
+  const row = (await db
+    .prepare("SELECT id, type FROM accounts WHERE id = ? AND user_id = ?")
+    .get(accountId, currentUserId())) as { id: string; type: string } | undefined;
+  if (!row) throw notFound("That card does not exist.");
+  if (row.type !== "credit_card") throw badRequest("An EMI can only be linked to a credit card.");
+  return row.id;
+}
+
 export async function createLoan(input: CreateLoanInput): Promise<LoanSummary> {
   const parsed = createLoanSchema.parse(input);
   validateLoanTerms(parsed);
   const subcategory = await requireLoanSubcategory(parsed.subcategoryId);
+  const accountId = parsed.accountId ? await requireCreditCard(parsed.accountId) : null;
   const id = randomUUID();
 
   (await db.prepare(
     `INSERT INTO loans
       (id, name, subcategory_id, principal_amount_paise, starting_outstanding_paise,
-       start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day, user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day, account_id, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     parsed.name,(await subcategory).id,
@@ -481,6 +512,7 @@ export async function createLoan(input: CreateLoanInput): Promise<LoanSummary> {
     parsed.tenureMonths,
     parsed.monthlyEmiPaise,
     parsed.emiDueDay ?? null,
+    accountId,
     currentUserId()
   ));
 
@@ -1308,7 +1340,7 @@ export async function listAccounts(includeArchived = true): Promise<AccountSumma
   const rows = asRecords<AccountRow>(
     (await db
       .prepare(
-        `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day,
+        `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day, minimum_balance_paise,
                 is_archived, created_at, updated_at
          FROM accounts
          WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
@@ -1317,7 +1349,10 @@ export async function listAccounts(includeArchived = true): Promise<AccountSumma
       .all(currentUserId()))
   );
 
-  return Promise.all(rows.map(mapAccountWithBalance));
+  // Fetched once for the whole listing rather than once per card, and passed in explicitly:
+  // rows.map(mapAccountWithBalance) would hand the array index to the second parameter.
+  const emiByCard = await cardEmiOutstandingByAccount();
+  return Promise.all(rows.map((row) => mapAccountWithBalance(row, emiByCard)));
 }
 
 export async function createAccount(input: CreateAccountInput) {
@@ -1332,8 +1367,9 @@ export async function createAccount(input: CreateAccountInput) {
 
   (await db.prepare(
     `INSERT INTO accounts
-      (id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day, user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+      (id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day,
+       minimum_balance_paise, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     parsed.name,
@@ -1341,6 +1377,8 @@ export async function createAccount(input: CreateAccountInput) {
     parsed.startingBalancePaise,
     parsed.type === "credit_card" ? parsed.creditLimitPaise ?? 0 : null,
     parsed.type === "credit_card" ? parsed.paymentDueDay ?? null : null,
+    // A card has an outstanding rather than a balance, so a minimum means nothing on one.
+    parsed.type === "credit_card" ? 0 : parsed.minimumBalancePaise ?? 0,
     currentUserId()
   ));
 
@@ -1368,6 +1406,10 @@ export async function updateAccount(id: string, input: UpdateAccountInput) {
         : parsed.paymentDueDay ?? null
       : null;
 
+  const minimumBalance =existing.type === "credit_card"
+      ? 0
+      : parsed.minimumBalancePaise ??existing.minimum_balance_paise ?? 0;
+
   if (isArchived === 0) {
     const activeDuplicate = await getActiveAccountByName(name, id);
     if (activeDuplicate) {
@@ -1378,9 +1420,9 @@ export async function updateAccount(id: string, input: UpdateAccountInput) {
   (await db.prepare(
     `UPDATE accounts
      SET name = ?, starting_balance_paise = ?, credit_limit_paise = ?, payment_due_day = ?,
-         is_archived = ?, updated_at = CURRENT_TIMESTAMP
+         minimum_balance_paise = ?, is_archived = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ? AND user_id = ?`
-  ).run(name, startingBalance, creditLimit, paymentDueDay, isArchived, id, currentUserId()));
+  ).run(name, startingBalance, creditLimit, paymentDueDay, minimumBalance, isArchived, id, currentUserId()));
 
   return getAccount(id);
 }
@@ -1502,15 +1544,21 @@ function buildTransactionFilters(query: TransactionQuery) {
     const term = query.search.trim();
     const like = `%${term}%`;
     // Match the shop/note, the SubType or Type name ("groceries"), including split lines…
+    //
+    // ILIKE, not LIKE. SQLite's LIKE ignores case for ASCII and Postgres's does not, so the move
+    // between them quietly made this half case-sensitive: SubType names are CITEXT and kept
+    // matching either way, while a merchant stopped matching unless the case was typed exactly.
+    // Measured on the live data before this changed -- "%Zomato%" found 8 rows and "%zomato%"
+    // found none.
     const clauses = [
-      "t.merchant LIKE ?",
-      "t.note LIKE ?",
-      "EXISTS (SELECT 1 FROM subcategories sx WHERE sx.id = t.subcategory_id AND sx.name LIKE ?)",
-      "EXISTS (SELECT 1 FROM category_types tx WHERE tx.id = t.type_id AND tx.name LIKE ?)",
+      "t.merchant ILIKE ?",
+      "t.note ILIKE ?",
+      "EXISTS (SELECT 1 FROM subcategories sx WHERE sx.id = t.subcategory_id AND sx.name ILIKE ?)",
+      "EXISTS (SELECT 1 FROM category_types tx WHERE tx.id = t.type_id AND tx.name ILIKE ?)",
       `EXISTS (
         SELECT 1 FROM transaction_splits sp
         JOIN subcategories spx ON spx.id = sp.subcategory_id
-        WHERE sp.transaction_id = t.id AND spx.name LIKE ?
+        WHERE sp.transaction_id = t.id AND spx.name ILIKE ?
       )`
     ];
     params.push(like, like, like, like, like);
@@ -3701,7 +3749,7 @@ async function requireLoanRow(id: string) {
       .prepare(
         `SELECT id, name, subcategory_id, principal_amount_paise, starting_outstanding_paise,
                 start_month, annual_interest_rate_bps, tenure_months, monthly_emi_paise, emi_due_day,
-                is_archived, created_at, updated_at
+                account_id, is_archived, created_at, updated_at
          FROM loans
          WHERE id = ? AND user_id = ?`
       )
@@ -3740,6 +3788,14 @@ async function requireLoanSubcategory(id: string) {
 
 async function mapLoan(row: LoanRow): Promise<LoanSummary> {
   const subcategory = await getSubcategoryRow(row.subcategory_id);
+  // The card's name, so a list of EMIs can say which card each is on without fetching accounts
+  // again. Scoped to the person, like every other read here.
+  const card = row.account_id
+    ? ((await db
+        .prepare("SELECT name FROM accounts WHERE id = ? AND user_id = ?")
+        .get(row.account_id, currentUserId())) as { name: string } | undefined)
+    : undefined;
+  const cardName = card?.name ?? null;
   const paymentTotals = asRecord<{
     principal_paise: number;
     interest_paise: number;
@@ -3832,6 +3888,8 @@ async function mapLoan(row: LoanRow): Promise<LoanSummary> {
     subcategoryName: subcategory?.name ?? "Loan",
     subcategoryIcon: subcategory?.icon ?? "calendar-clock",
     subcategoryColor: subcategory?.color ?? "#be123c",
+    accountId: row.account_id ?? null,
+    accountName: cardName,
     principalAmountPaise: row.principal_amount_paise,
     startingOutstandingPaise: row.starting_outstanding_paise,
     outstandingPaise,
@@ -4180,7 +4238,7 @@ async function getAccountRow(id: string) {
   return asRecord<AccountRow | undefined>(
     (await db
       .prepare(
-        `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day,
+        `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day, minimum_balance_paise,
                 is_archived, created_at, updated_at
          FROM accounts
          WHERE id = ? AND user_id = ?`
@@ -4617,7 +4675,7 @@ async function buildImportContext(): Promise<ImportContext> {
   const accounts = asRecords<AccountRow>(
     (await db
       .prepare(
-        `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day,
+        `SELECT id, name, type, starting_balance_paise, credit_limit_paise, payment_due_day, minimum_balance_paise,
                 is_archived, created_at, updated_at
          FROM accounts
          WHERE is_archived = 0 AND user_id = ?`
@@ -4692,6 +4750,7 @@ async function ensureImportAccount(
     name,
     type,
     starting_balance_paise: 0,
+    minimum_balance_paise: 0,
     credit_limit_paise: type === "credit_card" ? 0 : null,
     payment_due_day: null,
     is_archived: 0,
@@ -5016,7 +5075,22 @@ WHERE t.id != ?
   return rows.map(mapTransaction);
 }
 
-async function mapAccountWithBalance(account: AccountRow): Promise<AccountSummary> {
+/**
+ * The unpaid principal of each card's EMIs, keyed by card.
+ *
+ * Read through listLoans so there is exactly one definition of what an EMI still owes -- the EMI
+ * page and the card's outstanding cannot disagree, because they are the same number.
+ */
+async function cardEmiOutstandingByAccount(): Promise<Map<string, number>> {
+  const totals = new Map<string, number>();
+  for (const emi of await listLoans(false, "card-emi")) {
+    if (!emi.accountId) continue;
+    totals.set(emi.accountId, (totals.get(emi.accountId) ?? 0) + emi.outstandingPaise);
+  }
+  return totals;
+}
+
+async function mapAccountWithBalance(account: AccountRow, emiByCard?: Map<string, number>): Promise<AccountSummary> {
   if (account.type === "credit_card") {
     const cardActivity = asRecord<{ total: number | null }>(
       (await db
@@ -5034,7 +5108,11 @@ async function mapAccountWithBalance(account: AccountRow): Promise<AccountSummar
         )
         .get(account.id, account.id, account.id, currentUserId(), account.id, account.id))
     );
-    const outstanding = account.starting_balance_paise + (cardActivity.total ?? 0);
+    const spendOutstanding = account.starting_balance_paise + (cardActivity.total ?? 0);
+    // An EMI carries its own balance and is added on top: the purchase behind it is deliberately
+    // not entered as a card transaction, so there is nothing here to double count.
+    const emiOutstanding = (emiByCard ?? (await cardEmiOutstandingByAccount())).get(account.id) ?? 0;
+    const outstanding = spendOutstanding + emiOutstanding;
     const creditLimit = account.credit_limit_paise ?? 0;
 
     return {
@@ -5045,6 +5123,10 @@ async function mapAccountWithBalance(account: AccountRow): Promise<AccountSummar
       creditLimitPaise: creditLimit,
       balancePaise: 0,
       outstandingPaise: outstanding,
+      spendOutstandingPaise: spendOutstanding,
+      emiOutstandingPaise: emiOutstanding,
+      // A card has an outstanding rather than a balance; the minimum does not apply.
+      minimumBalancePaise: 0,
       availableLimitPaise: Math.max(creditLimit - outstanding, 0),
       paymentDueDay: account.payment_due_day ?? null,
       isArchived: Boolean(account.is_archived)
@@ -5078,6 +5160,10 @@ async function mapAccountWithBalance(account: AccountRow): Promise<AccountSummar
     creditLimitPaise: null,
     balancePaise: balance,
     outstandingPaise: 0,
+    // Not a card: there is no spend-versus-EMI split to make.
+    spendOutstandingPaise: 0,
+    emiOutstandingPaise: 0,
+    minimumBalancePaise: account.minimum_balance_paise ?? 0,
     availableLimitPaise: null,
     paymentDueDay: account.payment_due_day ?? null,
     isArchived: Boolean(account.is_archived)
