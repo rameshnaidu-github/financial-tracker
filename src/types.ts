@@ -29,6 +29,9 @@ export type Account = {
   creditLimitPaise: number | null;
   balancePaise: number;
   outstandingPaise: number;
+  minimumBalancePaise: number;
+  spendOutstandingPaise: number;
+  emiOutstandingPaise: number;
   availableLimitPaise: number | null;
   paymentDueDay: number | null;
   isArchived: boolean;
@@ -98,6 +101,8 @@ export type Transaction = {
   linkedTransactionId: string | null;
   /** How much of this purchase has already come back as linked refunds. */
   refundedPaise: number;
+  /** For a card payment: how much of it settled EMI installments running on that card. */
+  cardEmiPaise: number;
   loanId: string | null;
   loanName: string | null;
   loanPaymentType: LoanPaymentType | null;
@@ -156,6 +161,8 @@ export type Loan = {
   subcategoryName: string;
   subcategoryIcon: string;
   subcategoryColor: string;
+  accountId: string | null;
+  accountName: string | null;
   principalAmountPaise: number;
   startingOutstandingPaise: number;
   outstandingPaise: number;
@@ -185,6 +192,7 @@ export type Bootstrap = {
   accounts: Account[];
   categoryTypes: CategoryType[];
   loans: Loan[];
+  cardEmis: Loan[];
   subscriptions: AutopaySubscription[];
   investments: Investment[];
   vacations: Vacation[];
@@ -314,7 +322,8 @@ export type WealthSummary = {
   runwayMonths: number | null;
 };
 
-export type InvestmentType = "stocks" | "mutual_funds" | "gold" | "land" | "property" | "pf" | "fd" | "bonds" | "other";
+export type InvestmentType = "stocks" | "mutual_funds" | "gold" | "land" | "property" | "pf" | "fd" | "bonds" | "post_office" | "other";
+export type PayoutFrequency = "monthly" | "quarterly" | "half_yearly" | "yearly";
 
 export type Investment = {
   id: string;
@@ -337,6 +346,17 @@ export type Investment = {
   shares: number | null;
   purchaseDate: string | null;
   note: string | null;
+  /** A holding that pays money back: how often, how much, on which day, and into which bank. */
+  payoutFrequency: PayoutFrequency | null;
+  payoutAmountPaise: number | null;
+  payoutDay: number | null;
+  payoutAccountId: string | null;
+  payoutAccountName: string | null;
+  payoutCreditedPaise: number;
+  payoutCreditCount: number;
+  nextPayoutDate: string | null;
+  /** What it adds to net worth: its principal, for a holding whose credits are already banked. */
+  netWorthValuePaise: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -448,6 +468,11 @@ export type CreateTransactionPayload = {
   subscriptionId?: string;
   investmentId?: string;
   vacationId?: string;
+  /** For a card payment: the EMIs on that card this payment settled, and for how much each. */
+  cardEmiPayments?: Array<{
+    loanId: string;
+    amountPaise: number;
+  }>;
   splits?: Array<{
     amountPaise: number;
   }>;

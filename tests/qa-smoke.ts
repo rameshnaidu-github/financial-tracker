@@ -2766,6 +2766,11 @@ test("report outflow covers every non-inflow type and matches the overview", asy
 
 test("budget totals keep budgeted equal to used plus remaining", async () => {
   const suffix = Date.now().toString().slice(-5);
+  // The figures below are exact, so this test needs a month nothing else in the suite spends in --
+  // and one that can never be today's month, because another test budgets Groceries for whatever
+  // month that is. Ten years out clears every month pinned elsewhere, and keeps doing so as the
+  // clock moves: pinning a fixed month here is what broke this test the day the clock reached it.
+  const month = `${new Date().getFullYear() + 10}-09`;
   const bank = await services.createAccount({
     name: `QA Budget Remaining Bank ${suffix}`,
     type: "bank",
@@ -2774,7 +2779,7 @@ test("budget totals keep budgeted equal to used plus remaining", async () => {
 
   // Deliberately overspend one line so its remaining goes negative.
   await services.createTransaction({
-    date: "2026-11-05",
+    date: `${month}-05`,
     accountId: bank.id,
     method: "upi",
     typeId: await typeId("Expense"),
@@ -2784,7 +2789,7 @@ test("budget totals keep budgeted equal to used plus remaining", async () => {
     kind: "expense"
   });
   await services.createTransaction({
-    date: "2026-11-06",
+    date: `${month}-06`,
     accountId: bank.id,
     method: "upi",
     typeId: await typeId("Expense"),
@@ -2795,19 +2800,19 @@ test("budget totals keep budgeted equal to used plus remaining", async () => {
   });
 
   await services.createBudgetLine({
-    month: "2026-11",
+    month,
     scopeType: "subcategory",
     scopeId: await subcategoryId("Expense", "Groceries"),
     amountPaise: 5_000_00
   });
   await services.createBudgetLine({
-    month: "2026-11",
+    month,
     scopeType: "subcategory",
     scopeId: await subcategoryId("Expense", "Transport"),
     amountPaise: 4_000_00
   });
 
-  const plan = await services.getBudgetPlan("2026-11", "2026-11-30");
+  const plan = await services.getBudgetPlan(month, `${month}-30`);
   assert(plan.totals.amountPaise === 9_000_00, "Budgeted should be the sum of the budget lines.");
   assert(plan.totals.actualPaise === 10_000_00, "Used should be the sum of the actuals.");
   assert(
@@ -3754,6 +3759,288 @@ test("the database itself refuses a row that points across to another person", a
     (await db.prepare("DELETE FROM transactions WHERE date = '2029-02-01'").run());
     await removeSecondPerson(other);
   }
+});
+
+// A card EMI is not paid on its own: the bank charges the month's installment to the card and the
+// bill settles it along with the spending. So a card payment can say which of the card's EMIs it
+// covered, and recording it must move all three things at once -- the card, the EMIs, and the bank.
+async function cardWithTwoEmis(label: string) {
+  const bank = await services.createAccount({
+    name: `QA ${label} Bank`, type: "bank", startingBalancePaise: 1_00_000_00
+  });
+  const card = await services.createAccount({
+    name: `QA ${label} Card`, type: "credit_card", startingBalancePaise: 0, creditLimitPaise: 2_00_000_00
+  });
+  await services.createTransaction({
+    date: "2033-05-02", accountId: card.id, method: "credit_card", merchant: `QA ${label} shopping`,
+    typeId: await typeId("Expense"), subcategoryId: await subcategoryId("Expense", "Groceries"),
+    amountPaise: 20_000_00, direction: "outflow", kind: "expense"
+  });
+  const emi = async (name: string, outstandingPaise: number) =>
+    await services.createLoan({
+      name: `QA ${label} ${name}`, subcategoryId: await subcategoryId("Loan", "Vehicle"),
+      accountId: card.id, principalAmountPaise: outstandingPaise,
+      startingOutstandingPaise: outstandingPaise, startMonth: "2033-04",
+      annualInterestRateBps: 1200, tenureMonths: 10, monthlyEmiPaise: Math.round(outstandingPaise / 10)
+    });
+  return { bank, card, first: await emi("EMI one", 10_000_00), second: await emi("EMI two", 20_000_00) };
+}
+
+const cardOf = async (id: string) => (await services.listAccounts(true)).find((account) => account.id === id);
+const emiOf = async (id: string) => (await services.listLoans(true, "card-emi")).find((loan) => loan.id === id);
+
+test("a card payment settles the EMIs on that card, and the money leaves the bank once", async () => {
+  const { bank, card, first, second } = await cardWithTwoEmis("Settle");
+  const before = await cardOf(card.id);
+  assert(before?.spendOutstandingPaise === 20_000_00, "The card should start owing its 20,000 of spending.");
+  assert(before?.emiOutstandingPaise === 30_000_00, "The card should start carrying 30,000 of EMIs.");
+
+  // 20,000 of spending plus the two monthly installments of 1,000 and 2,000.
+  const payment = await services.createTransaction({
+    date: "2033-05-10", accountId: bank.id, method: "bank_transfer", merchant: "QA card bill",
+    typeId: await typeId("Credit Card Payment"), amountPaise: 23_000_00, direction: "outflow",
+    kind: "card_payment", transferAccountId: card.id,
+    cardEmiPayments: [
+      { loanId: first.id, amountPaise: 1_000_00 },
+      { loanId: second.id, amountPaise: 2_000_00 }
+    ]
+  });
+
+  // 1% a month is interest on each balance; the rest comes off the principal.
+  const settled = await cardOf(card.id);
+  assert(settled?.spendOutstandingPaise === 0, `The card's own spending should be settled, left ${settled?.spendOutstandingPaise}.`);
+  assert((await emiOf(first.id))?.outstandingPaise === 10_000_00 - (1_000_00 - 100_00), "The first EMI should come down by its principal.");
+  assert((await emiOf(second.id))?.outstandingPaise === 20_000_00 - (2_000_00 - 200_00), "The second EMI should come down by its principal.");
+  assert(settled?.outstandingPaise === settled?.emiOutstandingPaise, "A settled card should owe its running EMIs and nothing else.");
+  assert(
+    (await cardOf(bank.id))?.balancePaise === 1_00_000_00 - 23_000_00,
+    "The payment should leave the bank once: the installments are charges on the card, not second withdrawals."
+  );
+  assert((await services.getTransaction(payment.transaction.id))?.cardEmiPaise === 3_000_00, "The payment should say it carried 3,000 of EMIs.");
+
+  // The installments are spending in their own right, which is the point of charging them to the
+  // card rather than folding them into the payment: a payment is left out of every report.
+  const report = await services.getMonthlyReport(undefined, "2033-05");
+  const loanLine = report.types.find((type) => type.behavior === "loan");
+  assert(loanLine?.amountPaise === 3_000_00, `May's Loan total should be the two installments, got ${loanLine?.amountPaise}.`);
+});
+
+test("an installment settled by a card payment moves and vanishes with that payment", async () => {
+  const { bank, card, first, second } = await cardWithTwoEmis("Undo");
+  const bill = async (amountPaise: number, cardEmiPayments: Array<{ loanId: string; amountPaise: number }>) =>
+    await services.createTransaction({
+      date: "2033-05-10", accountId: bank.id, method: "bank_transfer", merchant: "QA card bill",
+      typeId: await typeId("Credit Card Payment"), amountPaise, direction: "outflow",
+      kind: "card_payment", transferAccountId: card.id, cardEmiPayments
+    });
+
+  await assertRejectsWithMessage(
+    "An EMI part larger than the payment",
+    async () => await bill(2_000_00, [{ loanId: first.id, amountPaise: 2_500_00 }]),
+    "can't be more than the payment itself"
+  );
+  await assertRejects("The same EMI twice in one payment", async () =>
+    await bill(23_000_00, [
+      { loanId: first.id, amountPaise: 1_000_00 },
+      { loanId: first.id, amountPaise: 1_000_00 }
+    ])
+  );
+  const elsewhere = await services.createLoan({
+    name: "QA Undo Home Loan", subcategoryId: await subcategoryId("Loan", "Vehicle"),
+    principalAmountPaise: 5_00_000_00, startingOutstandingPaise: 5_00_000_00, startMonth: "2033-04",
+    annualInterestRateBps: 900, tenureMonths: 120, monthlyEmiPaise: 7_000_00
+  });
+  await assertRejectsWithMessage(
+    "An ordinary loan, which no card bill covers",
+    async () => await bill(23_000_00, [{ loanId: elsewhere.id, amountPaise: 7_000_00 }]),
+    "not an EMI on this card"
+  );
+
+  const payment = await bill(23_000_00, [
+    { loanId: first.id, amountPaise: 1_000_00 },
+    { loanId: second.id, amountPaise: 2_000_00 }
+  ]);
+  const installments = async () =>
+    (await services.listTransactions({ from: "2033-05-01", to: "2033-05-31", accountId: card.id }))
+      .filter((row) => row.kind === "emi");
+  assert((await installments()).length === 2, "The payment should have charged both installments to the card.");
+
+  // An installment is not an event of its own -- it exists because the payment covered it.
+  await assertRejectsWithMessage(
+    "Deleting an installment alone",
+    async () => await services.deleteTransaction((await installments())[0].id),
+    "Change that payment instead"
+  );
+
+  await services.deleteTransaction(payment.transaction.id);
+  assert((await installments()).length === 0, "Deleting the payment should take its installments with it.");
+  assert((await cardOf(card.id))?.spendOutstandingPaise === 20_000_00, "The card should owe its spending again.");
+  assert((await cardOf(card.id))?.emiOutstandingPaise === 30_000_00, "Both EMI balances should be restored.");
+  assert((await cardOf(bank.id))?.balancePaise === 1_00_000_00, "The bank should be whole again.");
+});
+
+// A post office scheme keeps the money invested and pays the interest into a bank on a set day.
+// So the holding is described by a schedule, the credits are written out as they fall due, and
+// what it is worth is the principal plus everything it has paid back.
+function firstOfMonthsAgoForTests(back: number) {
+  const now = new Date();
+  const date = new Date(now.getFullYear(), now.getMonth() - back, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+test("a post office holding credits its bank on schedule and is worth principal plus credits", async () => {
+  const axis = await services.createAccount({
+    name: `QA Post Office Bank ${Date.now().toString().slice(-5)}`, type: "bank", startingBalancePaise: 0
+  });
+  const made = await services.createInvestment({
+    type: "post_office", name: "QA Post Office XYZ", investedPaise: 1_00_000_00,
+    purchaseDate: firstOfMonthsAgoForTests(2), payoutFrequency: "monthly",
+    payoutAmountPaise: 2_000_00, payoutDay: 1, payoutAccountId: axis.id
+  });
+
+  // Two months in: the owner's own example, 1,00,000 + 2,000 + 2,000.
+  const holding = (await services.listInvestments()).find((item) => item.id === made.id);
+  assert(holding?.investedPaise === 1_00_000_00, "The principal should stay as it was entered.");
+  assert(holding?.currentValuePaise === 1_04_000_00, `Two credits should make it 1,04,000, got ${holding?.currentValuePaise}.`);
+  assert(holding?.gainPaise === 4_000_00, "The gain should be the interest actually received.");
+  assert(holding?.payoutCreditCount === 2, `Two credits should have been written, got ${holding?.payoutCreditCount}.`);
+
+  const credits = (await services.listTransactions({ accountId: axis.id })).filter((row) => row.direction === "inflow");
+  assert(credits.length === 2, `The bank should hold two credits, got ${credits.length}.`);
+  assert(credits.every((row) => row.amountPaise === 2_000_00), "Each credit should be the amount the scheme pays.");
+  assert(credits.every((row) => row.subcategoryId === "sub_income_interest"), "A credit is interest earned, and should be filed as such.");
+  assert(credits.every((row) => row.date <= currentIsoDateForTests()), "Nothing may be credited before it has been paid.");
+
+  // The catch-up runs on every page load, so writing twice would add a month's interest each time.
+  const again = await services.catchUpPayoutCredits();
+  assert(again.created === 0, `Running the catch-up again wrote ${again.created} more credit(s).`);
+});
+
+test("a post office credit is counted once in net worth, and the holding takes its credits with it", async () => {
+  const axis = await services.createAccount({
+    name: `QA Post Office Net Worth Bank ${Date.now().toString().slice(-5)}`, type: "bank", startingBalancePaise: 0
+  });
+  const before = (await services.getWealthSummary()).netWorth;
+  const made = await services.createInvestment({
+    type: "post_office", name: "QA Post Office Net Worth", investedPaise: 1_00_000_00,
+    purchaseDate: firstOfMonthsAgoForTests(2), payoutFrequency: "monthly",
+    payoutAmountPaise: 2_000_00, payoutDay: 1, payoutAccountId: axis.id
+  });
+  const after = (await services.getWealthSummary()).netWorth;
+
+  // The credits are already sitting in the bank. Counting them in the holding as well would add
+  // the same 4,000 twice, every month, for as long as the scheme runs.
+  assert(after.liquidPaise - before.liquidPaise === 4_000_00, "The bank should hold the two credits.");
+  assert(
+    after.investmentsPaise - before.investmentsPaise === 1_00_000_00,
+    "Only the principal still with the scheme belongs in the investments figure."
+  );
+  assert(
+    after.netWorthPaise - before.netWorthPaise === 1_04_000_00,
+    `Net worth should rise by 1,04,000; 1,08,000 would mean each credit was counted twice. Got ${after.netWorthPaise - before.netWorthPaise}.`
+  );
+
+  await services.deleteInvestment(made.id);
+  const left = (await services.listTransactions({ accountId: axis.id })).filter((row) => row.direction === "inflow");
+  assert(left.length === 0, "Removing the holding should take the credits it wrote with it.");
+  const finally_ = (await services.getWealthSummary()).netWorth;
+  assert(finally_.netWorthPaise === before.netWorthPaise, "Net worth should come back to where it started.");
+});
+
+// These two go last on purpose: both work in a month of their own on an account of their own, so
+// nothing earlier in the suite can be disturbed by the balances they leave behind.
+test("deletes a purchase a refund links to, keeping the refund and clearing its link", async () => {
+  const db = dbModule.db;
+  const owner = dbModule.currentUserId();
+  const account = await services.createAccount({
+    name: "QA Unlink Bank",
+    type: "bank",
+    startingBalancePaise: 1_000_00
+  });
+  const purchase = (await services.createTransaction({
+    date: "2033-07-04",
+    accountId: account.id,
+    method: "upi",
+    merchant: "QA unlink headphones",
+    typeId: await typeId("Expense"),
+    subcategoryId: await subcategoryId("Expense", "Shopping"),
+    amountPaise: 500_00,
+    direction: "outflow",
+    kind: "expense"
+  })).transaction;
+  assert(purchase, "The purchase should be created.");
+  const refund = (await services.createTransaction({
+    date: "2033-07-09",
+    accountId: account.id,
+    method: "upi",
+    merchant: "QA unlink refund",
+    typeId: "type_refund",
+    amountPaise: 200_00,
+    direction: "inflow",
+    kind: "refund",
+    linkedTransactionId: purchase.id
+  })).transaction;
+  assert(refund?.linkedTransactionId === purchase.id, "The refund should be linked to its purchase.");
+
+  // The reported failure: a composite ON DELETE SET NULL key that also nulled user_id, so this
+  // threw "null value in column user_id ... violates not-null constraint" instead of deleting.
+  await services.deleteTransaction(purchase.id);
+
+  assert(!(await services.getTransaction(purchase.id)), "The purchase should be gone.");
+  // The refund is money that genuinely arrived, so it survives; only its link goes.
+  const row = (await db
+    .prepare("SELECT user_id, linked_transaction_id, amount_paise FROM transactions WHERE id = ?")
+    .get(refund.id)) as { user_id?: string; linked_transaction_id?: string | null; amount_paise?: number } | undefined;
+  assert(row, "The refund should outlive the purchase it pointed at.");
+  assert(row.linked_transaction_id === null, "The refund's link should be cleared, not left dangling.");
+  assert(row.user_id === owner, "The refund must keep its owner; nulling user_id is the bug this covers.");
+  assert(row.amount_paise === 200_00, "The refund's amount should be untouched.");
+  assert(
+    !(await db.prepare("SELECT id FROM transaction_links WHERE target_transaction_id = ?").get(purchase.id)),
+    "The link record belongs to the purchase and should go with it."
+  );
+  // 1,000 starting, 500 spent and refunded 200; with the purchase gone the refund still counts.
+  const balance = (await services.listAccounts()).find((item) => item.id === account.id)?.balancePaise;
+  assert(balance === 1_200_00, `The refund should still move the balance, got ${balance}.`);
+  const report = await services.getMonthlyReport(undefined, "2033-07");
+  assert(report.totalInflowPaise === 200_00, `An unlinked refund is money in, got ${report.totalInflowPaise}.`);
+  assert(
+    !(await services.listTransactions({ status: "uncategorized" })).some((item) => item.id === refund.id),
+    "An unlinked refund is still described, so it should not land in the uncategorized tray."
+  );
+});
+
+test("deletes an entry batch, keeping its transactions and clearing their batch", async () => {
+  const db = dbModule.db;
+  const owner = dbModule.currentUserId();
+  const account = await services.createAccount({ name: "QA Unbatch Bank", type: "bank", startingBalancePaise: 0 });
+  const spend = (await services.createTransaction({
+    date: "2033-08-01",
+    accountId: account.id,
+    method: "upi",
+    merchant: "QA unbatch spend",
+    typeId: await typeId("Expense"),
+    subcategoryId: await subcategoryId("Expense", "Shopping"),
+    amountPaise: 100_00,
+    direction: "outflow",
+    kind: "expense"
+  })).transaction;
+  assert(spend, "The spend should be created.");
+  const batch = randomUUID();
+  (await db
+    .prepare("INSERT INTO entry_batches (id, user_id, week_start, week_end, status) VALUES (?, ?, '2033-08-01', '2033-08-07', 'draft')")
+    .run(batch, owner));
+  (await db.prepare("UPDATE transactions SET batch_id = ? WHERE id = ? AND user_id = ?").run(batch, spend.id, owner));
+
+  // The same composite-key fault as the refund link, on the other key that nulls a column.
+  (await db.prepare("DELETE FROM entry_batches WHERE id = ? AND user_id = ?").run(batch, owner));
+
+  const row = (await db
+    .prepare("SELECT user_id, batch_id FROM transactions WHERE id = ?")
+    .get(spend.id)) as { user_id?: string; batch_id?: string | null } | undefined;
+  assert(row, "Deleting a batch should not delete the transactions in it.");
+  assert(row.batch_id === null, "The transaction's batch should be cleared.");
+  assert(row.user_id === owner, "The transaction must keep its owner.");
 });
 
 let failed = 0;

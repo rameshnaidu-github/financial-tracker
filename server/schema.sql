@@ -1,7 +1,11 @@
 -- The application's schema, in Postgres.
 --
--- Derived from the schema the application actually has, by .unlazy/ship-7/derive-schema.mjs.
--- Hand edits belong in that script, not here, or the next derivation will discard them.
+-- First derived from the schema the application actually has, by .unlazy/ship-7/derive-schema.mjs.
+-- That derivation is finished: this file has since gained the composite primary keys that make a
+-- row belong to one person, the row-level-security block, schema_state, and the foreign-key
+-- comments below, none of which that script produces -- re-running it would discard all of them.
+-- This file is the authored schema now, so edit it here, then run
+-- `node scripts/generate-schema-module.mjs` to carry the change into server/schema.ts.
 --
 -- Order matters only in that every table exists before any foreign key is added, which is why
 -- the keys are ALTERs at the end rather than clauses inside the CREATEs.
@@ -33,6 +37,9 @@ CREATE TABLE IF NOT EXISTS accounts (
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   payment_due_day BIGINT,
+  -- The balance this account should not fall below. Zero means no alert, which is the default so
+  -- nobody is warned against a figure they never chose.
+  minimum_balance_paise BIGINT NOT NULL DEFAULT 0 CHECK (minimum_balance_paise >= 0),
   user_id TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (id, user_id)
 );
@@ -120,7 +127,7 @@ CREATE TABLE IF NOT EXISTS investment_payments (
 
 CREATE TABLE IF NOT EXISTS investments (
   id TEXT NOT NULL,
-  type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'other')),
+  type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'post_office', 'other')),
   name TEXT NOT NULL,
   invested_paise BIGINT NOT NULL CHECK (invested_paise >= 0),
   current_value_paise BIGINT NOT NULL CHECK (current_value_paise >= 0),
@@ -131,6 +138,14 @@ CREATE TABLE IF NOT EXISTS investments (
   updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   invested_as_of TEXT,
   value_as_of TEXT,
+  -- A holding that pays money back at a fixed interval -- a post office scheme and nothing else
+  -- so far. How often, how much, on which day of the month, and into which bank. payout_through
+  -- is the last due date already written out, so a credit the owner deletes is not written again.
+  payout_frequency TEXT CHECK (payout_frequency IN ('monthly', 'quarterly', 'half_yearly', 'yearly')),
+  payout_amount_paise BIGINT CHECK (payout_amount_paise > 0),
+  payout_day BIGINT CHECK (payout_day BETWEEN 1 AND 31),
+  payout_account_id TEXT,
+  payout_through TEXT,
   user_id TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (id, user_id)
 );
@@ -164,6 +179,9 @@ CREATE TABLE IF NOT EXISTS loans (
   tenure_months BIGINT NOT NULL CHECK (tenure_months > 0),
   monthly_emi_paise BIGINT NOT NULL CHECK (monthly_emi_paise > 0),
   emi_due_day BIGINT,
+  -- The credit card this sits on. Null is an ordinary loan; set makes it a card EMI, whose unpaid
+  -- principal counts towards that card's outstanding.
+  account_id TEXT,
   is_archived BIGINT NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
@@ -464,14 +482,22 @@ ALTER TABLE transactions DROP CONSTRAINT IF EXISTS fk_transactions_30;
 ALTER TABLE transactions ADD CONSTRAINT fk_transactions_30 FOREIGN KEY (account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT;
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS fk_transactions_31;
 ALTER TABLE transactions ADD CONSTRAINT fk_transactions_31 FOREIGN KEY (transfer_account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT;
+-- The two keys below name the column they null, and must keep naming it.
+--
+-- Both are composite because a row's id is only unique per person, so a key has to carry user_id
+-- to point at one. A bare ON DELETE SET NULL nulls *every* column of the referencing side, which
+-- here means user_id as well -- and user_id is NOT NULL, so deleting a purchase that had a linked
+-- refund failed outright with "null value in column user_id ... violates not-null constraint",
+-- and deleting an entry batch would have failed the same way. Naming the one column to null is
+-- the fix; Postgres has accepted the column list since 15, and the hosted database is 17.
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS fk_transactions_32;
-ALTER TABLE transactions ADD CONSTRAINT fk_transactions_32 FOREIGN KEY (batch_id, user_id) REFERENCES entry_batches(id, user_id) ON DELETE SET NULL;
+ALTER TABLE transactions ADD CONSTRAINT fk_transactions_32 FOREIGN KEY (batch_id, user_id) REFERENCES entry_batches(id, user_id) ON DELETE SET NULL (batch_id);
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS fk_transactions_33;
 ALTER TABLE transactions ADD CONSTRAINT fk_transactions_33 FOREIGN KEY (type_id, user_id) REFERENCES category_types(id, user_id) ON DELETE RESTRICT;
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS fk_transactions_34;
 ALTER TABLE transactions ADD CONSTRAINT fk_transactions_34 FOREIGN KEY (subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE RESTRICT;
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS fk_transactions_35;
-ALTER TABLE transactions ADD CONSTRAINT fk_transactions_35 FOREIGN KEY (linked_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE SET NULL;
+ALTER TABLE transactions ADD CONSTRAINT fk_transactions_35 FOREIGN KEY (linked_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE SET NULL (linked_transaction_id);
 ALTER TABLE user_settings DROP CONSTRAINT IF EXISTS fk_user_settings_36;
 ALTER TABLE user_settings ADD CONSTRAINT fk_user_settings_36 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
 ALTER TABLE vacation_expenses DROP CONSTRAINT IF EXISTS fk_vacation_expenses_37;
@@ -482,6 +508,38 @@ ALTER TABLE vacation_expenses DROP CONSTRAINT IF EXISTS fk_vacation_expenses_39;
 ALTER TABLE vacation_expenses ADD CONSTRAINT fk_vacation_expenses_39 FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE;
 ALTER TABLE vacations DROP CONSTRAINT IF EXISTS fk_vacations_40;
 ALTER TABLE vacations ADD CONSTRAINT fk_vacations_40 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+
+-- The card a loan sits on, on a database that predates card EMIs.
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS account_id TEXT;
+ALTER TABLE loans DROP CONSTRAINT IF EXISTS fk_loans_account;
+ALTER TABLE loans ADD CONSTRAINT fk_loans_account
+  FOREIGN KEY (account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT;
+CREATE INDEX IF NOT EXISTS idx_loans_account ON loans(account_id);
+
+-- The per-account minimum, on a database that kept one figure for the whole person instead.
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS minimum_balance_paise BIGINT NOT NULL DEFAULT 0;
+
+-- A holding that pays money back at an interval, on a database that predates post office schemes.
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_frequency TEXT;
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_amount_paise BIGINT;
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_day BIGINT;
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_account_id TEXT;
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_through TEXT;
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS investments_payout_frequency_check;
+ALTER TABLE investments ADD CONSTRAINT investments_payout_frequency_check
+  CHECK (payout_frequency IN ('monthly', 'quarterly', 'half_yearly', 'yearly'));
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS investments_payout_amount_paise_check;
+ALTER TABLE investments ADD CONSTRAINT investments_payout_amount_paise_check CHECK (payout_amount_paise > 0);
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS investments_payout_day_check;
+ALTER TABLE investments ADD CONSTRAINT investments_payout_day_check CHECK (payout_day BETWEEN 1 AND 31);
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS fk_investments_payout_account;
+ALTER TABLE investments ADD CONSTRAINT fk_investments_payout_account
+  FOREIGN KEY (payout_account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT;
+CREATE INDEX IF NOT EXISTS idx_investments_payout_account ON investments(payout_account_id);
+-- The type list, on a database that predates post office schemes.
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS investments_type_check;
+ALTER TABLE investments ADD CONSTRAINT investments_type_check
+  CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'post_office', 'other'));
 
 -- Deny by default to anyone who does not bypass row level security.
 --

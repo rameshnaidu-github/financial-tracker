@@ -2015,6 +2015,50 @@ a {
   background: var(--danger);
 }
 
+/* The outstanding, split between this cycle's spending and the EMIs running on the card. The same
+   bar as utilisation above it -- same height, same track, same rounded ends, which is the whole
+   point of drawing it this way -- but laid out as two segments that always total the full width.
+   The ends are rounded by the track's own overflow, so the segments square off where they meet. */
+.card-limit-meter.split {
+  display: flex;
+}
+
+.card-limit-meter.split span {
+  border-radius: 0;
+  background: var(--accent);
+}
+
+.card-limit-meter.split span.emi {
+  background: var(--warning);
+}
+
+.outstanding-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.outstanding-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.outstanding-legend i {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.outstanding-legend .emi i {
+  background: var(--warning);
+}
+
 .card-limit-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2351,6 +2395,89 @@ a {
   cursor: pointer;
 }
 
+/* The EMIs a card's bill is settling, revealed by the tick above them. One row each -- the EMI,
+   what it costs a month and what is left of it, and how much of this payment goes to it -- so a
+   bill can be split the way the statement splits it. */
+.card-emi-settle {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--panel-soft);
+}
+
+.card-emi-settle-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+
+.card-emi-settle-pick {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 180px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+/* A checkbox is an input, and inputs here are full-width form fields by default. */
+.card-emi-settle-pick input[type="checkbox"] {
+  width: 16px;
+  min-height: 0;
+  height: 16px;
+  flex: 0 0 auto;
+  padding: 0;
+  accent-color: #0ea5e9;
+  cursor: pointer;
+}
+
+.card-emi-settle-pick span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.card-emi-settle-pick strong {
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+.card-emi-settle-pick small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.card-emi-settle-amount {
+  flex: 0 0 128px;
+  width: 128px;
+}
+
+.card-emi-settle-total {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 850;
+}
+
+/* On an edit the installments are stated, not offered: changing which EMIs a payment covered
+   means recording the payment again. */
+.card-emi-settle-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 .add-button {
   align-self: end;
 }
@@ -2557,6 +2684,23 @@ a {
   min-width: 0;
 }
 
+/* On a narrow screen the name comes first and the chips drop beneath it. Keeping them on one line
+   left the EMI's own name as an ellipsis, which is the one thing the row exists to say. */
+@media (max-width: 480px) {
+  .loan-card-header {
+    flex-wrap: wrap;
+  }
+
+  .loan-title {
+    flex: 1 1 100%;
+  }
+
+  .loan-header-actions {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
+}
+
 .loan-title > div strong,
 .loan-title > div span,
 .loan-detail-grid span,
@@ -2592,6 +2736,19 @@ a {
   border-radius: 999px;
   background: rgba(15, 118, 110, 0.1);
   color: var(--accent);
+  padding: 5px 9px;
+  font-size: 0.72rem;
+  font-weight: 950;
+}
+
+/* The card an EMI runs on. The status chip's shape exactly -- same pill, same padding, same
+   weight -- in a neutral tint, so the pair reads as one row of facts and the status still stands
+   out as the one that changes. */
+.loan-bank {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--muted);
   padding: 5px 9px;
   font-size: 0.72rem;
   font-weight: 950;
@@ -5103,3 +5260,4 @@ a {
     margin: 12mm;
   }
 }
+

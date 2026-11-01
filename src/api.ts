@@ -10,6 +10,7 @@ import type {
   CreateTransactionPayload,
   Investment,
   InvestmentType,
+  PayoutFrequency,
   Vacation,
   Loan,
   MonthlyReport,
@@ -23,6 +24,21 @@ import type {
   WealthSummary,
   UpcomingPayments
 } from "./types";
+
+/** A holding. A Post Office one brings its payout schedule and derives its own current value. */
+type InvestmentPayload = {
+  type: InvestmentType;
+  name: string;
+  investedPaise: number;
+  currentValuePaise?: number;
+  shares?: number;
+  purchaseDate?: string;
+  note?: string;
+  payoutFrequency?: PayoutFrequency;
+  payoutAmountPaise?: number;
+  payoutDay?: number;
+  payoutAccountId?: string;
+};
 
 type ApiOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
@@ -77,7 +93,7 @@ export const Api = {
   profile: () => api<UserProfile>("/api/profile"),
   updateProfile: (body: Partial<UserProfile>) =>
     api<UserProfile>("/api/profile", { method: "PATCH", body }),
-  updateSettings: (body: { cardUtilizationAlertPercent?: number; minimumBankBalancePaise?: number }) =>
+  updateSettings: (body: { cardUtilizationAlertPercent?: number }) =>
     api<Record<string, string>>("/api/settings", { method: "PATCH", body }),
   wealth: () => api<WealthSummary>("/api/wealth"),
   upcoming: (windowDays = 7) =>
@@ -95,6 +111,7 @@ export const Api = {
     startingBalancePaise: number;
     creditLimitPaise?: number;
     paymentDueDay?: number | null;
+    minimumBalancePaise?: number;
   }) => api<Account>("/api/accounts", { method: "POST", body }),
   updateAccount: (
     id: string,
@@ -118,6 +135,10 @@ export const Api = {
   deleteSubcategory: (id: string) => api<{ ok: true }>(`/api/subcategories/${id}`, { method: "DELETE" }),
   loans: (includeArchived = true) =>
     api<Loan[]>(`/api/loans?${new URLSearchParams({ includeArchived: String(includeArchived) })}`),
+  cardEmis: (includeArchived = true) =>
+    api<Loan[]>(
+      `/api/loans?${new URLSearchParams({ includeArchived: String(includeArchived), kind: "card-emi" })}`,
+    ),
   createLoan: (body: {
     name: string;
     subcategoryId: string;
@@ -128,6 +149,7 @@ export const Api = {
     tenureMonths: number;
     monthlyEmiPaise: number;
     emiDueDay?: number | null;
+    accountId?: string | null;
   }) => api<Loan>("/api/loans", { method: "POST", body }),
   updateLoan: (id: string, body: Partial<{
     name: string;
@@ -166,27 +188,10 @@ export const Api = {
   archiveSubscription: (id: string) =>
     api<{ ok: true; mode: "archived" }>(`/api/subscriptions/${id}`, { method: "DELETE" }),
   investments: () => api<Investment[]>("/api/investments"),
-  createInvestment: (body: {
-    type: InvestmentType;
-    name: string;
-    investedPaise: number;
-    currentValuePaise: number;
-    shares?: number;
-    purchaseDate?: string;
-    note?: string;
-  }) => api<Investment>("/api/investments", { method: "POST", body }),
-  updateInvestment: (
-    id: string,
-    body: Partial<{
-      type: InvestmentType;
-      name: string;
-      investedPaise: number;
-      currentValuePaise: number;
-      shares: number;
-      purchaseDate: string;
-      note: string;
-    }>
-  ) => api<Investment>(`/api/investments/${id}`, { method: "PATCH", body }),
+  createInvestment: (body: InvestmentPayload) =>
+    api<Investment>("/api/investments", { method: "POST", body }),
+  updateInvestment: (id: string, body: Partial<InvestmentPayload>) =>
+    api<Investment>(`/api/investments/${id}`, { method: "PATCH", body }),
   deleteInvestment: (id: string) => api<{ ok: true }>(`/api/investments/${id}`, { method: "DELETE" }),
   vacations: () => api<Vacation[]>("/api/vacations"),
   createVacation: (body: {
