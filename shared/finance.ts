@@ -40,8 +40,24 @@ export const PAYOUT_FREQUENCIES = [
 
 export const PAYOUT_FREQUENCY_IDS = PAYOUT_FREQUENCIES.map((item) => item.id) as [string, ...string[]];
 
-/** The type whose holdings pay out; everything else keeps the plain invested/current pair. */
-export const PAYOUT_INVESTMENT_TYPE = "post_office";
+/**
+ * The types whose holdings pay money back on a schedule; everything else keeps the plain
+ * invested/current pair.
+ *
+ * A post office scheme, a non-cumulative fixed deposit and a coupon-paying bond all work the same
+ * way: the money stays where it is and the interest arrives in a bank account on a set day. So
+ * all three are described by a schedule rather than by a current value anyone has to maintain.
+ */
+export const PAYOUT_INVESTMENT_TYPES = ["post_office", "fd", "bonds"] as const;
+
+export function isPayoutInvestmentType(type: string | undefined) {
+  return PAYOUT_INVESTMENT_TYPES.includes(type as (typeof PAYOUT_INVESTMENT_TYPES)[number]);
+}
+
+/** What such a type is called, for a message that has to name it. */
+export function investmentTypeLabel(type: string | undefined) {
+  return INVESTMENT_TYPES.find((item) => item.id === type)?.label ?? "This holding";
+}
 
 export function payoutMonths(frequency: string) {
   return PAYOUT_FREQUENCIES.find((item) => item.id === frequency)?.months ?? 0;
@@ -462,11 +478,15 @@ function checkPayoutFields(
     ["payoutAccountId", value.payoutAccountId, "the bank it is credited to"]
   ] as const;
 
-  if (value.type === PAYOUT_INVESTMENT_TYPE) {
+  if (isPayoutInvestmentType(value.type)) {
     if (!required) return;
     for (const [path, given, what] of parts) {
       if (given === undefined || given === null || given === "") {
-        ctx.addIssue({ code: "custom", path: [path], message: `A Post Office holding needs ${what}.` });
+        ctx.addIssue({
+          code: "custom",
+          path: [path],
+          message: `A ${investmentTypeLabel(value.type)} holding needs ${what}.`
+        });
       }
     }
     return;
@@ -477,7 +497,7 @@ function checkPayoutFields(
       ctx.addIssue({
         code: "custom",
         path: [path],
-        message: "Only a Post Office holding is credited on a schedule."
+        message: `A ${investmentTypeLabel(value.type)} holding is not credited on a schedule.`
       });
     }
   }
@@ -485,7 +505,7 @@ function checkPayoutFields(
 
 export const createInvestmentSchema = investmentObjectSchema.superRefine((value, ctx) => {
   checkPayoutFields(value, ctx, true);
-  if (value.type !== PAYOUT_INVESTMENT_TYPE && value.currentValuePaise === undefined) {
+  if (!isPayoutInvestmentType(value.type) && value.currentValuePaise === undefined) {
     ctx.addIssue({
       code: "custom",
       path: ["currentValuePaise"],

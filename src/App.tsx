@@ -105,6 +105,7 @@ import {
   SELF_TRANSFER_SUBCATEGORY_ID,
   INVESTMENT_TYPES,
   PAYOUT_FREQUENCIES,
+  isPayoutInvestmentType,
   calculateEmiPaise
 } from "../shared/finance";
 
@@ -5383,9 +5384,10 @@ function InvestmentForm({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  // A Post Office holding keeps its money where it is and pays the interest into a bank, so it is
-  // described by a schedule rather than by a current value anyone has to keep up to date.
-  const pays = type === "post_office";
+  // A post office scheme, a fixed deposit and a bond all keep the money where it is and pay the
+  // interest into a bank, so each is described by a schedule rather than by a current value
+  // anyone has to keep up to date.
+  const pays = isPayoutInvestmentType(type);
 
   async function submit(event: FormEvent) {
     event.preventDefault();

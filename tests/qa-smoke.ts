@@ -1556,15 +1556,22 @@ test("tracks investment holdings with computed gain and validation", async () =>
   assert(mf.shares === null, "Shares should be optional for non-stock holdings.");
   assert(mf.purchaseDate === "2026-01-05", "Purchase date should round-trip for non-stocks.");
 
+  // A fixed deposit pays its interest into a bank on a schedule, so it is described by one and
+  // its gain is what it has actually credited rather than a figure anyone maintains.
+  assert(state.bankId, "Bank should exist.");
   const fd = await services.createInvestment({
     type: "fd",
     name: "QA HDFC Fixed Deposit",
     investedPaise: 5_00_000_00,
-    currentValuePaise: 5_35_000_00,
-    purchaseDate: "2026-02-01"
+    purchaseDate: firstOfMonthsAgoForTests(2),
+    payoutFrequency: "monthly",
+    payoutAmountPaise: 5_000_00,
+    payoutDay: 1,
+    payoutAccountId: state.bankId
   });
   assert(fd.type === "fd" && fd.typeLabel === "Fixed Deposit", "FD should be a valid investment type.");
-  assert(fd.gainPaise === 35_000_00 && fd.gainPercent === 7, "FD gain should compute like any holding.");
+  assert(fd.currentValuePaise === 5_10_000_00, `Two credits should make the FD 5,10,000, got ${fd.currentValuePaise}.`);
+  assert(fd.gainPaise === 10_000_00 && fd.gainPercent === 2, "FD gain should be the interest it has credited.");
 
   const updated = await services.updateInvestment(stock.id, { currentValuePaise: 90_000_00 });
   assert(updated.gainPaise === -10_000_00, "Updating current value should recompute the gain.");
@@ -1889,7 +1896,11 @@ test("computes net worth, asset allocation, cashflow and runway", async () => {
     type: "fd",
     name: `QA Wealth FD ${suffix}`,
     investedPaise: 2_00_000_00,
-    currentValuePaise: 2_00_000_00
+    purchaseDate: currentIsoDateForTests(),
+    payoutFrequency: "monthly",
+    payoutAmountPaise: 1_000_00,
+    payoutDay: 1,
+    payoutAccountId: bank.id
   });
 
   const before = await services.getWealthSummary();
@@ -3396,10 +3407,19 @@ test("archived loans with a balance still count as owed", async () => {
 });
 
 test("bonds are an investment type with their own allocation slice", async () => {
-  const bond = await services.createInvestment({ type: "bonds", name: "QA RBI Floating Rate Bond", investedPaise: 1_00_000_00, currentValuePaise: 1_03_150_00 });
+  const bondBank = await services.createAccount({
+    name: `QA Bond Bank ${Date.now().toString().slice(-5)}`, type: "bank", startingBalancePaise: 0
+  });
+  const bond = await services.createInvestment({
+    type: "bonds", name: "QA RBI Floating Rate Bond", investedPaise: 1_00_000_00,
+    purchaseDate: firstOfMonthsAgoForTests(1), payoutFrequency: "monthly",
+    payoutAmountPaise: 3_150_00, payoutDay: 1, payoutAccountId: bondBank.id
+  });
   assert(bond.type === "bonds" && bond.typeLabel === "Bonds", "A bond holding should be stored with its label.");
+  assert(bond.currentValuePaise === 1_03_150_00, `One coupon should make the bond 1,03,150, got ${bond.currentValuePaise}.`);
   const slice = (await services.getWealthSummary()).allocation.find((segment) => segment.key === "bonds");
-  assert(slice?.label === "Bonds" && slice.valuePaise >= 1_03_150_00, "Bonds should get their own allocation slice.");
+  // The principal, not the value: the coupon it has paid is already sitting in the Cash slice.
+  assert(slice?.label === "Bonds" && slice.valuePaise >= 1_00_000_00, "Bonds should get their own allocation slice.");
   const constraint = (await dbModule.db
     .prepare(
       `SELECT pg_get_constraintdef(c.oid) AS definition
@@ -3945,6 +3965,60 @@ test("a post office credit is counted once in net worth, and the holding takes i
   assert(left.length === 0, "Removing the holding should take the credits it wrote with it.");
   const finally_ = (await services.getWealthSummary()).netWorth;
   assert(finally_.netWorthPaise === before.netWorthPaise, "Net worth should come back to where it started.");
+});
+
+test("a fixed deposit and a bond credit their bank on schedule, like a post office scheme", async () => {
+  const bank = await services.createAccount({
+    name: `QA Payout Bank ${Date.now().toString().slice(-5)}`, type: "bank", startingBalancePaise: 0
+  });
+  for (const type of ["fd", "bonds"] as const) {
+    const made = await services.createInvestment({
+      type, name: `QA Paying ${type}`, investedPaise: 1_00_000_00,
+      purchaseDate: firstOfMonthsAgoForTests(2), payoutFrequency: "monthly",
+      payoutAmountPaise: 2_000_00, payoutDay: 1, payoutAccountId: bank.id
+    });
+    const holding = (await services.listInvestments()).find((item) => item.id === made.id);
+    assert(holding?.currentValuePaise === 1_04_000_00, `A ${type} two months in should read 1,04,000, got ${holding?.currentValuePaise}.`);
+    assert(holding?.gainPaise === 4_000_00, `A ${type}'s gain should be the interest received.`);
+    assert(holding?.netWorthValuePaise === 1_00_000_00, `Only a ${type}'s principal belongs in net worth; its credits are already in the bank.`);
+    assert(holding?.payoutCreditCount === 2, `A ${type} should have credited twice, got ${holding?.payoutCreditCount}.`);
+
+    // The schedule is compulsory for these types now, exactly as it is for a post office scheme.
+    await assertRejects(`A ${type} with no schedule`, async () =>
+      await services.createInvestment({ type, name: `QA Bare ${type}`, investedPaise: 1_000_00, currentValuePaise: 1_000_00 })
+    );
+  }
+  const credits = (await services.listTransactions({ accountId: bank.id })).filter((row) => row.direction === "inflow");
+  assert(credits.length === 4, `Two holdings crediting twice should leave four credits, got ${credits.length}.`);
+  assert(credits.every((row) => row.subcategoryId === "sub_income_interest"), "Each credit is interest earned.");
+});
+
+test("a fixed deposit recorded before payouts existed keeps the value its owner entered", async () => {
+  // Written straight to the table, because the service now refuses to make one without a
+  // schedule -- which is exactly why this has to be checked.
+  const id = `qa-legacy-fd-${Date.now().toString().slice(-5)}`;
+  const owner = dbModule.currentUserId();
+  await dbModule.db.prepare(
+    `INSERT INTO investments (id, user_id, type, name, invested_paise, current_value_paise,
+       purchase_date, created_at, updated_at, invested_as_of, value_as_of)
+     VALUES (?, ?, 'fd', 'QA Older FD', ?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, owner, 50_000_00, 56_000_00, firstOfMonthsAgoForTests(6),
+        "2026-01-01 00:00:00", "2026-01-01 00:00:00", firstOfMonthsAgoForTests(6), firstOfMonthsAgoForTests(6));
+
+  const holding = (await services.listInvestments()).find((item) => item.id === id);
+  assert(holding?.currentValuePaise === 56_000_00, `An older fixed deposit should keep its 56,000, got ${holding?.currentValuePaise}.`);
+  assert(holding?.gainPaise === 6_000_00, "An older fixed deposit should keep the gain that goes with it.");
+  assert(holding?.netWorthValuePaise === 56_000_00, "An older fixed deposit counts its whole value in net worth; nothing of it sits in a bank.");
+  assert(holding?.nextPayoutDate === null, "A holding with no schedule has no credit falling due.");
+
+  // The catch-up must pass it by rather than inventing credits from nothing.
+  const before = (await services.listTransactions({})).length;
+  await services.catchUpPayoutCredits();
+  assert((await services.listTransactions({})).length === before, "The catch-up invented credits for a holding with no schedule.");
+
+  // And it can still be edited, which is the first thing an owner would try.
+  const edited = await services.updateInvestment(id, { currentValuePaise: 58_000_00 });
+  assert(edited.currentValuePaise === 58_000_00, "An older fixed deposit should still be editable.");
 });
 
 let failed = 0;

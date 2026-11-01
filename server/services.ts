@@ -8,7 +8,8 @@ import {
   INFLOW_BEHAVIORS,
   INTEREST_SUBCATEGORY_ID,
   MUTUAL_FUNDS_SUBCATEGORY_ID,
-  PAYOUT_INVESTMENT_TYPE,
+  PAYOUT_INVESTMENT_TYPES,
+  isPayoutInvestmentType,
   payoutMonths,
   monthlyInterestPaise,
   SELF_TRANSFER_SUBCATEGORY_ID,
@@ -800,7 +801,7 @@ export async function createInvestment(input: CreateInvestmentInput): Promise<In
     parsed.investedPaise,
     // A paying holding's value is its principal plus what it has paid back, so the stored figure
     // is the principal and the rest is read from the credits themselves.
-    parsed.type === PAYOUT_INVESTMENT_TYPE ? parsed.investedPaise : parsed.currentValuePaise ?? 0,
+    isPayoutInvestmentType(parsed.type) ? parsed.investedPaise : parsed.currentValuePaise ?? 0,
     parsed.shares ?? null,
     parsed.purchaseDate ?? null,
     parsed.note ?? null,
@@ -811,10 +812,10 @@ export async function createInvestment(input: CreateInvestmentInput): Promise<In
     parsed.payoutDay ?? null,
     parsed.payoutAccountId ?? null,
     // Counted from the day the money went in: a holding added months late catches up at once.
-    parsed.type === PAYOUT_INVESTMENT_TYPE ? startDate : null,
+    isPayoutInvestmentType(parsed.type) ? startDate : null,
     currentUserId()
   ));
-  if (parsed.type === PAYOUT_INVESTMENT_TYPE) {
+  if (isPayoutInvestmentType(parsed.type)) {
     await catchUpPayoutCredits();
   }
   return requireInvestmentSummary(id);
@@ -894,9 +895,10 @@ export async function deleteInvestment(id: string) {
          FROM investment_payments ip
          JOIN transactions t ON t.id = ip.transaction_id AND t.user_id = ip.user_id
          JOIN investments iv ON iv.id = ip.investment_id AND iv.user_id = ip.user_id
-         WHERE ip.investment_id = ? AND ip.user_id = ? AND t.direction = 'inflow' AND iv.type = ?`
+         WHERE ip.investment_id = ? AND ip.user_id = ? AND t.direction = 'inflow'
+           AND iv.type IN (${PAYOUT_INVESTMENT_TYPES.map(() => "?").join(", ")})`
       )
-      .all(id, currentUserId(), PAYOUT_INVESTMENT_TYPE))
+      .all(id, currentUserId(), ...PAYOUT_INVESTMENT_TYPES))
   );
 
   let changed = 0;
@@ -948,8 +950,16 @@ async function linkedSipsAfter(investmentId: string, afterDate: string) {
   );
 }
 
+/**
+ * Whether this holding is one that pays money back, and so derives its own value.
+ *
+ * The schedule has to be there, not just the type. Fixed deposits and bonds existed in this
+ * application before they could pay out, and those holdings carry a current value their owner
+ * typed in: reading them as paying holdings would quietly replace that figure with the principal
+ * and wipe the gain along with it. A holding with no schedule keeps what it was given.
+ */
 function isPayoutInvestment(row: InvestmentRow) {
-  return row.type === PAYOUT_INVESTMENT_TYPE;
+  return isPayoutInvestmentType(row.type) && row.payout_frequency !== null;
 }
 
 /** The day the money went in, which is where a payout schedule counts from. */
@@ -1028,8 +1038,12 @@ async function payoutCreditsFor(row: InvestmentRow) {
 export async function catchUpPayoutCredits(today = currentIsoDate()) {
   const rows = asRecords<InvestmentRow>(
     (await db
-      .prepare(`SELECT ${INVESTMENT_COLUMNS} FROM investments WHERE user_id = ? AND type = ? ORDER BY created_at, id`)
-      .all(currentUserId(), PAYOUT_INVESTMENT_TYPE))
+      .prepare(
+        `SELECT ${INVESTMENT_COLUMNS} FROM investments
+         WHERE user_id = ? AND type IN (${PAYOUT_INVESTMENT_TYPES.map(() => "?").join(", ")})
+         ORDER BY created_at, id`
+      )
+      .all(currentUserId(), ...PAYOUT_INVESTMENT_TYPES))
   );
 
   let created = 0;
@@ -2326,8 +2340,11 @@ export async function getWealthSummary(): Promise<WealthSummary> {
 
   // Asset allocation — where the wealth currently sits (positive holdings only).
   const investments = await listInvestments();
+  // On the same basis as the investments figure above, not on what each holding is worth: a
+  // paying holding's credits are already in the Cash slice, and counting them here as well would
+  // make the slices add up to more than the wealth they are slicing.
   const byType = (types: string[]) =>
-    investments.filter((item) => types.includes(item.type)).reduce((sum, item) => sum + item.currentValuePaise, 0);
+    investments.filter((item) => types.includes(item.type)).reduce((sum, item) => sum + item.netWorthValuePaise, 0);
   const allocation: WealthAllocationSegment[] = [
     { key: "cash", label: "Cash", color: "#0284c7", valuePaise:netWorth.liquidPaise },
     { key: "equity", label: "Equity (stocks + MF)", color: "#4f46e5", valuePaise: byType(["stocks", "mutual_funds"]) },
@@ -2336,6 +2353,7 @@ export async function getWealthSummary(): Promise<WealthSummary> {
     { key: "pf", label: "PF", color: "#059669", valuePaise: byType(["pf"]) },
     { key: "fd", label: "Fixed deposit", color: "#0891b2", valuePaise: byType(["fd"]) },
     { key: "bonds", label: "Bonds", color: "#6d5bd0", valuePaise: byType(["bonds"]) },
+    { key: "post_office", label: "Post office", color: "#b45309", valuePaise: byType(["post_office"]) },
     { key: "other", label: "Other", color: "#64748b", valuePaise: byType(["other"]) }
   ].filter((segment) => segment.valuePaise > 0);
 
