@@ -4,8 +4,12 @@ import { randomUUID } from "node:crypto";
 import ExcelJS from "exceljs";
 import {
   AUTOPAY_SUBCATEGORY_ID,
+  INCOME_TYPE_ID,
   INFLOW_BEHAVIORS,
+  INTEREST_SUBCATEGORY_ID,
   MUTUAL_FUNDS_SUBCATEGORY_ID,
+  PAYOUT_INVESTMENT_TYPE,
+  payoutMonths,
   monthlyInterestPaise,
   SELF_TRANSFER_SUBCATEGORY_ID,
   createAccountSchema,
@@ -29,6 +33,7 @@ import {
   updateVacationSchema,
   INVESTMENT_TYPES,
   type AccountType,
+  type PayoutFrequency,
   type BudgetScopeType,
   type CreateAccountInput,
   type CreateAutopaySubscriptionInput,
@@ -707,6 +712,11 @@ type InvestmentRow = {
   updated_at: string;
   invested_as_of: string | null;
   value_as_of: string | null;
+  payout_frequency: PayoutFrequency | null;
+  payout_amount_paise: number | null;
+  payout_day: number | null;
+  payout_account_id: string | null;
+  payout_through: string | null;
 };
 
 export type InvestmentSummary = {
@@ -731,12 +741,31 @@ export type InvestmentSummary = {
   shares: number | null;
   purchaseDate: string | null;
   note: string | null;
+  /** A holding that pays money back: how often, how much, on which day, and into which bank. */
+  payoutFrequency: PayoutFrequency | null;
+  payoutAmountPaise: number | null;
+  payoutDay: number | null;
+  payoutAccountId: string | null;
+  payoutAccountName: string | null;
+  /** What it has credited so far, and when the next credit falls due. */
+  payoutCreditedPaise: number;
+  payoutCreditCount: number;
+  nextPayoutDate: string | null;
+  /**
+   * What this holding adds to net worth, which is not always what it is worth.
+   *
+   * A paying holding's value includes credits that are already sitting in a bank account, and
+   * net worth counts that bank. Counting the credits again here would add the same money twice,
+   * so only the principal still with the scheme is counted.
+   */
+  netWorthValuePaise: number;
   createdAt: string;
   updatedAt: string;
 };
 
 const INVESTMENT_COLUMNS =
-  "id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at, invested_as_of, value_as_of";
+  "id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at, " +
+  "invested_as_of, value_as_of, payout_frequency, payout_amount_paise, payout_day, payout_account_id, payout_through";
 
 export async function listInvestments(): Promise<InvestmentSummary[]> {
   const rows = asRecords<InvestmentRow>(
@@ -754,26 +783,50 @@ export async function listInvestments(): Promise<InvestmentSummary[]> {
 
 export async function createInvestment(input: CreateInvestmentInput): Promise<InvestmentSummary> {
   const parsed = createInvestmentSchema.parse(input);
+  if (parsed.payoutAccountId) {
+    await requirePayoutAccount(parsed.payoutAccountId);
+  }
   const id = randomUUID();
+  const startDate = parsed.purchaseDate ?? currentIsoDate();
   (await db.prepare(
     `INSERT INTO investments
        (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, invested_as_of,
-        value_as_of, user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        value_as_of, payout_frequency, payout_amount_paise, payout_day, payout_account_id, payout_through, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     parsed.type,
     parsed.name,
     parsed.investedPaise,
-    parsed.currentValuePaise,
+    // A paying holding's value is its principal plus what it has paid back, so the stored figure
+    // is the principal and the rest is read from the credits themselves.
+    parsed.type === PAYOUT_INVESTMENT_TYPE ? parsed.investedPaise : parsed.currentValuePaise ?? 0,
     parsed.shares ?? null,
     parsed.purchaseDate ?? null,
     parsed.note ?? null,
     currentIsoDate(),
     currentIsoDate(),
+    parsed.payoutFrequency ?? null,
+    parsed.payoutAmountPaise ?? null,
+    parsed.payoutDay ?? null,
+    parsed.payoutAccountId ?? null,
+    // Counted from the day the money went in: a holding added months late catches up at once.
+    parsed.type === PAYOUT_INVESTMENT_TYPE ? startDate : null,
     currentUserId()
   ));
+  if (parsed.type === PAYOUT_INVESTMENT_TYPE) {
+    await catchUpPayoutCredits();
+  }
   return requireInvestmentSummary(id);
+}
+
+/** A credit lands in a real bank account; a card has an outstanding and cannot receive one. */
+async function requirePayoutAccount(id: string) {
+  const account = await requireAccount(id);
+  if (account.type !== "bank") {
+    throw badRequest("Money credited by a holding has to land in a bank account.");
+  }
+  return account;
 }
 
 export async function updateInvestment(id: string, input: UpdateInvestmentInput): Promise<InvestmentSummary> {
@@ -796,12 +849,20 @@ export async function updateInvestment(id: string, input: UpdateInvestmentInput)
     purchaseDate: Object.prototype.hasOwnProperty.call(patch, "purchaseDate")
       ? patch.purchaseDate ?? null
       :(await existing).purchase_date,
-    note: Object.prototype.hasOwnProperty.call(patch, "note") ? patch.note ?? null :(await existing).note
+    note: Object.prototype.hasOwnProperty.call(patch, "note") ? patch.note ?? null :(await existing).note,
+    payoutFrequency: patch.payoutFrequency ??(await existing).payout_frequency,
+    payoutAmountPaise: patch.payoutAmountPaise ??(await existing).payout_amount_paise,
+    payoutDay: patch.payoutDay ??(await existing).payout_day,
+    payoutAccountId: patch.payoutAccountId ??(await existing).payout_account_id
   };
+  if (patch.payoutAccountId) {
+    await requirePayoutAccount(patch.payoutAccountId);
+  }
   (await db.prepare(
     `UPDATE investments
      SET type = ?, name = ?, invested_paise = ?, current_value_paise = ?, shares = ?, purchase_date = ?, note = ?,
-         invested_as_of = ?, value_as_of = ?, updated_at = CURRENT_TIMESTAMP
+         invested_as_of = ?, value_as_of = ?, payout_frequency = ?, payout_amount_paise = ?, payout_day = ?,
+         payout_account_id = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ? AND user_id = ?`
   ).run(
     merged.type,
@@ -813,6 +874,10 @@ export async function updateInvestment(id: string, input: UpdateInvestmentInput)
     merged.note,
     merged.investedAsOf,
     merged.valueAsOf,
+    merged.payoutFrequency,
+    merged.payoutAmountPaise,
+    merged.payoutDay,
+    merged.payoutAccountId,
     id,
     currentUserId()
   ));
@@ -820,8 +885,32 @@ export async function updateInvestment(id: string, input: UpdateInvestmentInput)
 }
 
 export async function deleteInvestment(id: string) {
-  const result = (await db.prepare("DELETE FROM investments WHERE id = ? AND user_id = ?").run(id, currentUserId()));
-  if (result.changes === 0) {
+  // The credits a paying holding wrote into the bank were never entered by hand, so they go with
+  // it. A SIP is the opposite -- the owner recorded it, and it stays whatever happens here.
+  const credits = asRecords<{ transaction_id: string }>(
+    (await db
+      .prepare(
+        `SELECT ip.transaction_id
+         FROM investment_payments ip
+         JOIN transactions t ON t.id = ip.transaction_id AND t.user_id = ip.user_id
+         JOIN investments iv ON iv.id = ip.investment_id AND iv.user_id = ip.user_id
+         WHERE ip.investment_id = ? AND ip.user_id = ? AND t.direction = 'inflow' AND iv.type = ?`
+      )
+      .all(id, currentUserId(), PAYOUT_INVESTMENT_TYPE))
+  );
+
+  let changed = 0;
+  await transaction(async () => {
+    for (const credit of credits) {
+      (await db
+        .prepare("DELETE FROM transactions WHERE id = ? AND user_id = ?")
+        .run(credit.transaction_id, currentUserId()));
+    }
+    changed = Number(
+      (await db.prepare("DELETE FROM investments WHERE id = ? AND user_id = ?").run(id, currentUserId())).changes
+    );
+  });
+  if (changed === 0) {
     throw notFound("Investment not found.");
   }
   return { ok: true };
@@ -859,6 +948,128 @@ async function linkedSipsAfter(investmentId: string, afterDate: string) {
   );
 }
 
+function isPayoutInvestment(row: InvestmentRow) {
+  return row.type === PAYOUT_INVESTMENT_TYPE;
+}
+
+/** The day the money went in, which is where a payout schedule counts from. */
+function payoutStartDate(row: InvestmentRow) {
+  return row.purchase_date ?? localIsoDateFromSqliteTimestamp(row.created_at);
+}
+
+/**
+ * The dates this holding credits money on, after `afterDate` and up to and including `through`.
+ *
+ * The schedule is anchored to the chosen day in the month the money went in, and the first credit
+ * falls one whole period after that anchor -- a scheme does not pay interest for a month it has
+ * not held the money. February gets the 28th where the 30th was asked for, and so does any other
+ * short month, because the day is clamped to the month it lands in rather than rolling over.
+ */
+function payoutDueDates(row: InvestmentRow, afterDate: string, through: string) {
+  const months = payoutMonths(row.payout_frequency ?? "");
+  if (!months || !row.payout_day) {
+    return [];
+  }
+  const start = payoutStartDate(row);
+  const anchor = addMonthsToIsoDate(`${start.slice(0, 7)}-${String(row.payout_day).padStart(2, "0")}`, 0);
+  const dates: string[] = [];
+  // A bound rather than a while: a corrupt date could otherwise spin here forever. 1,200 periods
+  // is a hundred years of monthly credits, which no scheme outlives.
+  for (let period = 1; period <= 1200; period += 1) {
+    const due = addMonthsToIsoDate(anchor, period * months);
+    if (due > through) break;
+    if (due > afterDate) dates.push(due);
+  }
+  return dates;
+}
+
+/** The next credit still to come, for the holding to show. */
+function nextPayoutDueDate(row: InvestmentRow) {
+  const months = payoutMonths(row.payout_frequency ?? "");
+  if (!months || !row.payout_day) {
+    return null;
+  }
+  const start = payoutStartDate(row);
+  const anchor = addMonthsToIsoDate(`${start.slice(0, 7)}-${String(row.payout_day).padStart(2, "0")}`, 0);
+  const today = currentIsoDate();
+  for (let period = 1; period <= 1200; period += 1) {
+    const due = addMonthsToIsoDate(anchor, period * months);
+    if (due > today) return due;
+  }
+  return null;
+}
+
+/** What this holding has actually paid back: its linked credits, which are inflows. */
+async function payoutCreditsFor(row: InvestmentRow) {
+  if (!isPayoutInvestment(row)) {
+    return { count: 0, total: 0 };
+  }
+  return asRecord<{ count: number; total: number }>(
+    (await db
+      .prepare(
+        `SELECT COUNT(*) AS count, COALESCE(SUM(t.amount_paise), 0) AS total
+         FROM investment_payments ip JOIN transactions t ON t.id = ip.transaction_id AND t.user_id = ip.user_id
+         WHERE ip.investment_id = ? AND ip.user_id = ? AND t.direction = 'inflow'`
+      )
+      .get(row.id, currentUserId()))
+  );
+}
+
+/**
+ * Write out every credit that has fallen due since this was last done.
+ *
+ * This is the one place in the application that records a transaction nobody asked it to, which
+ * is the point: the money arrives in the bank whether or not anyone opens the app. Two things
+ * keep that honest. Nothing is ever dated in the future, so the figures only ever describe money
+ * that has really been paid. And the holding remembers how far it has been written out, rather
+ * than looking for gaps -- so a credit the owner deletes stays deleted instead of reappearing the
+ * next time the app is opened.
+ */
+export async function catchUpPayoutCredits(today = currentIsoDate()) {
+  const rows = asRecords<InvestmentRow>(
+    (await db
+      .prepare(`SELECT ${INVESTMENT_COLUMNS} FROM investments WHERE user_id = ? AND type = ? ORDER BY created_at, id`)
+      .all(currentUserId(), PAYOUT_INVESTMENT_TYPE))
+  );
+
+  let created = 0;
+  for (const row of rows) {
+    if (!row.payout_account_id || !row.payout_amount_paise) continue;
+    const from = row.payout_through ?? payoutStartDate(row);
+    const due = payoutDueDates(row, from, today);
+    if (!due.length) continue;
+
+    // The SubType these are filed under is a shipped default, and a default can be deleted. The
+    // credit is still worth recording without it; it simply arrives needing a category.
+    const interest = await getSubcategoryRow(INTEREST_SUBCATEGORY_ID);
+    await transaction(async () => {
+      for (const date of due) {
+        const transactionId = await insertValidatedTransaction(
+          createTransactionSchema.parse({
+            date,
+            accountId: row.payout_account_id,
+            method: "bank_transfer",
+            merchant: row.name,
+            typeId: INCOME_TYPE_ID,
+            subcategoryId: interest?.id,
+            amountPaise: row.payout_amount_paise,
+            direction: "inflow",
+            kind: "income"
+          })
+        );
+        (await db.prepare(
+          `INSERT INTO investment_payments (id, investment_id, transaction_id, user_id) VALUES (?, ?, ?, ?)`
+        ).run(randomUUID(), row.id, transactionId, currentUserId()));
+        created += 1;
+      }
+      (await db
+        .prepare("UPDATE investments SET payout_through = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?")
+        .run(due[due.length - 1], row.id, currentUserId()));
+    });
+  }
+  return { created };
+}
+
 /**
  * Invested and Current value as the user entered them, plus every linked SIP dated after the
  * day each figure was entered. A SIP on or before that day is assumed to be in the entered
@@ -872,8 +1083,14 @@ async function mapInvestment(row: InvestmentRow): Promise<InvestmentSummary> {
   const valueAsOf = row.value_as_of ?? addedOn;
   const sipsForInvested = await linkedSipsAfter(row.id, investedAsOf);
   const sipsForValue =await  await valueAsOf === investedAsOf ? sipsForInvested : await linkedSipsAfter(row.id, valueAsOf);
+  const credits = await payoutCreditsFor(row);
+  const payoutAccount = row.payout_account_id ? await getAccountRow(row.payout_account_id) : undefined;
   const investedPaise = row.invested_paise +sipsForInvested.total;
-  const currentValuePaise = row.current_value_paise +(await sipsForValue).total;
+  // A paying holding is worth the money still with the scheme plus everything it has paid back,
+  // so its gain is the interest actually received rather than a figure anyone has to maintain.
+  const currentValuePaise = isPayoutInvestment(row)
+    ? investedPaise + credits.total
+    : row.current_value_paise +(await sipsForValue).total;
   const gainPaise = currentValuePaise - investedPaise;
   const gainPercent = investedPaise > 0 ? Math.round((gainPaise / investedPaise) * 100) : 0;
   return {
@@ -896,6 +1113,15 @@ async function mapInvestment(row: InvestmentRow): Promise<InvestmentSummary> {
     shares: row.shares,
     purchaseDate: row.purchase_date,
     note: row.note,
+    payoutFrequency: row.payout_frequency,
+    payoutAmountPaise: row.payout_amount_paise,
+    payoutDay: row.payout_day,
+    payoutAccountId: row.payout_account_id,
+    payoutAccountName: payoutAccount?.name ?? null,
+    payoutCreditedPaise: credits.total,
+    payoutCreditCount: credits.count,
+    nextPayoutDate: isPayoutInvestment(row) ? nextPayoutDueDate(row) : null,
+    netWorthValuePaise: isPayoutInvestment(row) ? investedPaise : currentValuePaise,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -2058,7 +2284,9 @@ async function computeNetWorthNow() {
   const creditPaise = accounts
     .filter((account) => account.type === "credit_card")
     .reduce((sum, account) => sum + account.outstandingPaise, 0);
-  const investmentsPaise = (await listInvestments()).reduce((sum, item) => sum + item.currentValuePaise, 0);
+  // Not currentValuePaise: a paying holding's value includes credits already counted in the bank
+  // balance below, and the same money must not be added twice.
+  const investmentsPaise = (await listInvestments()).reduce((sum, item) => sum + item.netWorthValuePaise, 0);
   // Archiving hides a loan from the tracker; money still owed on it is still owed.
   const loanPaise = (await listLoans(true)).reduce((sum, loan) => sum + loan.outstandingPaise, 0);
   const liabilitiesPaise = creditPaise + loanPaise;

@@ -3879,6 +3879,74 @@ test("an installment settled by a card payment moves and vanishes with that paym
   assert((await cardOf(bank.id))?.balancePaise === 1_00_000_00, "The bank should be whole again.");
 });
 
+// A post office scheme keeps the money invested and pays the interest into a bank on a set day.
+// So the holding is described by a schedule, the credits are written out as they fall due, and
+// what it is worth is the principal plus everything it has paid back.
+function firstOfMonthsAgoForTests(back: number) {
+  const now = new Date();
+  const date = new Date(now.getFullYear(), now.getMonth() - back, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+test("a post office holding credits its bank on schedule and is worth principal plus credits", async () => {
+  const axis = await services.createAccount({
+    name: `QA Post Office Bank ${Date.now().toString().slice(-5)}`, type: "bank", startingBalancePaise: 0
+  });
+  const made = await services.createInvestment({
+    type: "post_office", name: "QA Post Office XYZ", investedPaise: 1_00_000_00,
+    purchaseDate: firstOfMonthsAgoForTests(2), payoutFrequency: "monthly",
+    payoutAmountPaise: 2_000_00, payoutDay: 1, payoutAccountId: axis.id
+  });
+
+  // Two months in: the owner's own example, 1,00,000 + 2,000 + 2,000.
+  const holding = (await services.listInvestments()).find((item) => item.id === made.id);
+  assert(holding?.investedPaise === 1_00_000_00, "The principal should stay as it was entered.");
+  assert(holding?.currentValuePaise === 1_04_000_00, `Two credits should make it 1,04,000, got ${holding?.currentValuePaise}.`);
+  assert(holding?.gainPaise === 4_000_00, "The gain should be the interest actually received.");
+  assert(holding?.payoutCreditCount === 2, `Two credits should have been written, got ${holding?.payoutCreditCount}.`);
+
+  const credits = (await services.listTransactions({ accountId: axis.id })).filter((row) => row.direction === "inflow");
+  assert(credits.length === 2, `The bank should hold two credits, got ${credits.length}.`);
+  assert(credits.every((row) => row.amountPaise === 2_000_00), "Each credit should be the amount the scheme pays.");
+  assert(credits.every((row) => row.subcategoryId === "sub_income_interest"), "A credit is interest earned, and should be filed as such.");
+  assert(credits.every((row) => row.date <= currentIsoDateForTests()), "Nothing may be credited before it has been paid.");
+
+  // The catch-up runs on every page load, so writing twice would add a month's interest each time.
+  const again = await services.catchUpPayoutCredits();
+  assert(again.created === 0, `Running the catch-up again wrote ${again.created} more credit(s).`);
+});
+
+test("a post office credit is counted once in net worth, and the holding takes its credits with it", async () => {
+  const axis = await services.createAccount({
+    name: `QA Post Office Net Worth Bank ${Date.now().toString().slice(-5)}`, type: "bank", startingBalancePaise: 0
+  });
+  const before = (await services.getWealthSummary()).netWorth;
+  const made = await services.createInvestment({
+    type: "post_office", name: "QA Post Office Net Worth", investedPaise: 1_00_000_00,
+    purchaseDate: firstOfMonthsAgoForTests(2), payoutFrequency: "monthly",
+    payoutAmountPaise: 2_000_00, payoutDay: 1, payoutAccountId: axis.id
+  });
+  const after = (await services.getWealthSummary()).netWorth;
+
+  // The credits are already sitting in the bank. Counting them in the holding as well would add
+  // the same 4,000 twice, every month, for as long as the scheme runs.
+  assert(after.liquidPaise - before.liquidPaise === 4_000_00, "The bank should hold the two credits.");
+  assert(
+    after.investmentsPaise - before.investmentsPaise === 1_00_000_00,
+    "Only the principal still with the scheme belongs in the investments figure."
+  );
+  assert(
+    after.netWorthPaise - before.netWorthPaise === 1_04_000_00,
+    `Net worth should rise by 1,04,000; 1,08,000 would mean each credit was counted twice. Got ${after.netWorthPaise - before.netWorthPaise}.`
+  );
+
+  await services.deleteInvestment(made.id);
+  const left = (await services.listTransactions({ accountId: axis.id })).filter((row) => row.direction === "inflow");
+  assert(left.length === 0, "Removing the holding should take the credits it wrote with it.");
+  const finally_ = (await services.getWealthSummary()).netWorth;
+  assert(finally_.netWorthPaise === before.netWorthPaise, "Net worth should come back to where it started.");
+});
+
 let failed = 0;
 
 // The suite exercises the services directly rather than over HTTP, so there is no request to

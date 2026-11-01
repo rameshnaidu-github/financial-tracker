@@ -49,6 +49,7 @@ import {
   formatINRWhole,
   formatMonth,
   formatShortDate,
+  ordinalDay,
   mondayWeekRange,
   monthValue,
   outstandingSplit,
@@ -76,6 +77,7 @@ import type {
   CreateTransactionPayload,
   Investment,
   InvestmentType,
+  PayoutFrequency,
   Vacation,
   Loan,
   LoanPaymentType,
@@ -102,6 +104,7 @@ import {
   MUTUAL_FUNDS_SUBCATEGORY_ID,
   SELF_TRANSFER_SUBCATEGORY_ID,
   INVESTMENT_TYPES,
+  PAYOUT_FREQUENCIES,
   calculateEmiPaise
 } from "../shared/finance";
 
@@ -150,7 +153,7 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home; group?: Na
   { page: "accounts", label: "Accounts", icon: WalletCards, group: "Own & owe" },
   { page: "loans", label: "Loans", icon: Landmark, group: "Own & owe" },
   { page: "investments", label: "Investments", icon: TrendingUp, group: "Own & owe" },
-  { page: "cardEmis", label: "Card EMIs", icon: CreditCard, group: "Own & owe" },
+  { page: "cardEmis", label: "EMI", icon: CreditCard, group: "Own & owe" },
   { page: "categories", label: "Categories", icon: Tags, group: "Setup" },
   { page: "faq", label: "FAQ", icon: CircleHelp, group: "Setup" },
   { page: "profile", label: "Profile", icon: UserCircle }
@@ -224,7 +227,7 @@ const mobileLabels: Record<Page, string> = {
   accounts: "Accts",
   loans: "Loan",
   investments: "Invest",
-  cardEmis: "EMIs",
+  cardEmis: "EMI",
   vacations: "Trips",
   subscriptions: "Auto",
   categories: "Cats",
@@ -241,7 +244,7 @@ const pagePaths: Record<Page, string> = {
   accounts: "/accounts",
   loans: "/loans",
   investments: "/investments",
-  cardEmis: "/card-emis",
+  cardEmis: "/emi",
   vacations: "/vacations",
   subscriptions: "/subscriptions",
   categories: "/categories",
@@ -249,9 +252,12 @@ const pagePaths: Record<Page, string> = {
   profile: "/profile"
 };
 
+// The EMI page was called Card EMIs and lived at /card-emis. A bookmark from then still opens it.
+const legacyPagePaths: Record<string, Page> = { "/card-emis": "cardEmis" };
+
 function pageFromPath(pathname: string): Page {
   const match = (Object.entries(pagePaths) as Array<[Page, string]>).find(([, path]) => path === pathname);
-  return match?.[0] ?? "overview";
+  return match?.[0] ?? legacyPagePaths[pathname] ?? "overview";
 }
 
 const iconOptions = [
@@ -803,6 +809,7 @@ export default function App() {
         return (
         <InvestmentsPage
                       investments={investments}
+                      accounts={activeAccounts}
                       refresh={refresh}
                       showNotice={showNotice}
                       requestConfirm={requestConfirm}
@@ -4936,13 +4943,14 @@ function LoanCard({
           </span>
           <div>
             <strong>{loan.name}</strong>
-            {/* An EMI says which card it runs on here, in the row as it stands: that is the one
-                thing telling two EMIs of the same kind apart, and opening each to find out was
-                the question this answers. Ordinary loans have no card and show only their type. */}
-            <span>{loan.accountName ? `${loan.subcategoryName} · ${loan.accountName}` : loan.subcategoryName}</span>
+            <span>{loan.subcategoryName}</span>
           </div>
         </div>
         <div className="loan-header-actions">
+          {/* The card an EMI runs on, as a chip beside the status and in its shape: that is the
+              one thing telling two EMIs of the same kind apart, and it reads as a fact about the
+              EMI rather than as part of its type. An ordinary loan has no card and shows none. */}
+          {loan.accountName && <span className="loan-bank">{loan.accountName}</span>}
           <span className={`loan-status ${closed ? "closed" : loan.isArchived ? "archived" : ""}`}>
             {loan.isArchived ? "Archived" : closed ? "Paid off" : "Active"}
           </span>
@@ -5037,15 +5045,18 @@ function LoanCard({
 
 function InvestmentsPage({
   investments,
+  accounts,
   refresh,
   showNotice,
   requestConfirm
 }: {
   investments: Investment[];
+  accounts: Account[];
   refresh: () => Promise<void>;
   showNotice: (message: string) => void;
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
+  const bankAccounts = accounts.filter((account) => account.type === "bank");
   const [editing, setEditing] = useState<Investment | null>(null);
   const [chartTypeId, setChartTypeId] = useState<string>("all");
   const totalInvested = investments.reduce((sum, item) => sum + item.investedPaise, 0);
@@ -5166,6 +5177,7 @@ function InvestmentsPage({
           <InvestmentForm
             key={editing?.id ?? "new-investment"}
             investment={editing}
+            bankAccounts={bankAccounts}
             onCancel={editing ? () => setEditing(null) : undefined}
             onSaved={async (message) => {
               setEditing(null);
@@ -5229,6 +5241,22 @@ function InvestmentCard({
           <strong className={tone}>{signedImpact(investment.gainPaise)}</strong>
         </div>
       </div>
+
+      {investment.payoutCreditCount > 0 && (
+        /* What this holding has actually paid back, and where it went. The gain above is exactly
+           this figure, so the two read as one statement rather than two. */
+        <p className="investment-sip-note">
+          Credited {formatINR(investment.payoutCreditedPaise)} to {investment.payoutAccountName ?? "your bank"} over{" "}
+          {investment.payoutCreditCount} payment{investment.payoutCreditCount === 1 ? "" : "s"}.
+        </p>
+      )}
+
+      {investment.payoutAmountPaise != null && investment.nextPayoutDate && (
+        <p className="investment-note">
+          Next {formatINR(investment.payoutAmountPaise)} on {formatDateWithYear(investment.nextPayoutDate)}
+          {investment.payoutDay ? ` · ${ordinalDay(investment.payoutDay)} of the month` : ""}
+        </p>
+      )}
 
       {investment.sipsSinceCount > 0 && (
         <p className="investment-sip-note">
@@ -5324,10 +5352,12 @@ function InvestmentGroup({
 
 function InvestmentForm({
   investment,
+  bankAccounts,
   onSaved,
   onCancel
 }: {
   investment: Investment | null;
+  bankAccounts: Account[];
   onSaved: (message: string) => Promise<void>;
   onCancel?: () => void;
 }) {
@@ -5341,8 +5371,21 @@ function InvestmentForm({
     investment?.shares != null ? String(investment.shares) : ""
   );
   const [purchaseDate, setPurchaseDate] = useState(investment?.purchaseDate ?? todayISO());
+  const [payoutFrequency, setPayoutFrequency] = useState<PayoutFrequency>(
+    investment?.payoutFrequency ?? "monthly"
+  );
+  const [payoutAmount, setPayoutAmount] = useState(
+    investment?.payoutAmountPaise != null ? amountInputFromPaise(investment.payoutAmountPaise) : ""
+  );
+  const [payoutDay, setPayoutDay] = useState(String(investment?.payoutDay ?? 1));
+  const [payoutAccountId, setPayoutAccountId] = useState(
+    investment?.payoutAccountId ?? bankAccounts[0]?.id ?? ""
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // A Post Office holding keeps its money where it is and pays the interest into a bank, so it is
+  // described by a schedule rather than by a current value anyone has to keep up to date.
+  const pays = type === "post_office";
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -5355,13 +5398,24 @@ function InvestmentForm({
     try {
       const shares =
         type === "stocks" && sharesInput.trim() !== "" ? Number(sharesInput) : undefined;
+      if (pays && !payoutAccountId) {
+        setError("Choose the bank this is credited to.");
+        setSaving(false);
+        return;
+      }
       const payload = {
         type,
         name: name.trim(),
         investedPaise: parseAmountToPaise(invested),
-        currentValuePaise: parseAmountToPaise(currentValue),
+        // A paying holding's current value is its principal plus what it has credited, which the
+        // server works out from the credits themselves; sending a figure would only fight it.
+        currentValuePaise: pays ? undefined : parseAmountToPaise(currentValue),
         shares,
         purchaseDate: purchaseDate || undefined,
+        payoutFrequency: pays ? payoutFrequency : undefined,
+        payoutAmountPaise: pays ? parseAmountToPaise(payoutAmount) : undefined,
+        payoutDay: pays ? Number(payoutDay) : undefined,
+        payoutAccountId: pays ? payoutAccountId : undefined
       };
       if (investment) {
         // A note saved before this field was removed is left as it is.
@@ -5374,6 +5428,7 @@ function InvestmentForm({
         setCurrentValue("");
         setSharesInput("");
         setPurchaseDate(todayISO());
+        setPayoutAmount("");
         await onSaved("Investment added.");
       }
     } catch (err) {
@@ -5403,10 +5458,64 @@ function InvestmentForm({
         Amount invested
         <input value={invested} onChange={(event) => setInvested(event.target.value)} placeholder="₹0" inputMode="decimal" required />
       </label>
-      <label>
-        Current value
-        <input value={currentValue} onChange={(event) => setCurrentValue(event.target.value)} placeholder="₹0" inputMode="decimal" required />
-      </label>
+      {!pays && (
+        <label>
+          Current value
+          <input value={currentValue} onChange={(event) => setCurrentValue(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+        </label>
+      )}
+      {pays && (
+        <>
+          <label>
+            Money credited
+            <select
+              value={payoutFrequency}
+              onChange={(event) => setPayoutFrequency(event.target.value as PayoutFrequency)}
+            >
+              {PAYOUT_FREQUENCIES.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Amount credited
+            <input
+              value={payoutAmount}
+              onChange={(event) => setPayoutAmount(event.target.value)}
+              placeholder="₹0"
+              inputMode="decimal"
+              required
+            />
+          </label>
+          <label>
+            Day it is credited
+            <select value={payoutDay} onChange={(event) => setPayoutDay(event.target.value)}>
+              {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
+                <option key={day} value={String(day)}>
+                  {ordinalDay(day)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Credited to
+            <select value={payoutAccountId} onChange={(event) => setPayoutAccountId(event.target.value)} required>
+              <option value="">Choose bank</option>
+              {bankAccounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="field-hint investment-form-hint">
+            Each credit is added to that bank on its day, from the date invested onwards, and this
+            holding is worth the amount invested plus everything it has credited so far.
+          </p>
+        </>
+      )}
       {type === "mutual_funds" && (
         <p className="field-hint investment-form-hint">
           {investment

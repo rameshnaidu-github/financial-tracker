@@ -322,7 +322,8 @@ export type WealthSummary = {
   runwayMonths: number | null;
 };
 
-export type InvestmentType = "stocks" | "mutual_funds" | "gold" | "land" | "property" | "pf" | "fd" | "bonds" | "other";
+export type InvestmentType = "stocks" | "mutual_funds" | "gold" | "land" | "property" | "pf" | "fd" | "bonds" | "post_office" | "other";
+export type PayoutFrequency = "monthly" | "quarterly" | "half_yearly" | "yearly";
 
 export type Investment = {
   id: string;
@@ -345,6 +346,17 @@ export type Investment = {
   shares: number | null;
   purchaseDate: string | null;
   note: string | null;
+  /** A holding that pays money back: how often, how much, on which day, and into which bank. */
+  payoutFrequency: PayoutFrequency | null;
+  payoutAmountPaise: number | null;
+  payoutDay: number | null;
+  payoutAccountId: string | null;
+  payoutAccountName: string | null;
+  payoutCreditedPaise: number;
+  payoutCreditCount: number;
+  nextPayoutDate: string | null;
+  /** What it adds to net worth: its principal, for a holding whose credits are already banked. */
+  netWorthValuePaise: number;
   createdAt: string;
   updatedAt: string;
 };

@@ -5,6 +5,9 @@ export const CURRENCY_SYMBOL = "₹";
 export const WEEK_START = "monday";
 export const AUTOPAY_SUBCATEGORY_ID = "sub_autopay";
 export const MUTUAL_FUNDS_SUBCATEGORY_ID = "sub_invest_mutual_funds";
+/** Where money a holding pays back is filed: interest earned, not a sale and not odd income. */
+export const INTEREST_SUBCATEGORY_ID = "sub_income_interest";
+export const INCOME_TYPE_ID = "type_income";
 export const SELF_TRANSFER_SUBCATEGORY_ID = "sub_transfer_self";
 export const AUTOPAY_DURATION_MONTH_OPTIONS = [1, 3, 6, 12, 24, 36] as const;
 
@@ -17,8 +20,32 @@ export const INVESTMENT_TYPES = [
   { id: "pf", label: "PF", icon: "landmark", color: "#059669" },
   { id: "fd", label: "Fixed Deposit", icon: "banknote", color: "#0891b2" },
   { id: "bonds", label: "Bonds", icon: "landmark", color: "#6d5bd0" },
+  { id: "post_office", label: "Post Office", icon: "piggy-bank", color: "#b45309" },
   { id: "other", label: "Other", icon: "wallet", color: "#64748b" }
 ] as const;
+
+/**
+ * A holding that pays money back at a fixed interval, and how often it does so.
+ *
+ * Post office schemes are the reason this exists: the money invested stays put and the interest
+ * arrives in a bank account on a set day. The interval is named rather than kept as a number of
+ * months so that "every six months" reads the same in the database as it does on the screen.
+ */
+export const PAYOUT_FREQUENCIES = [
+  { id: "monthly", label: "Monthly", months: 1 },
+  { id: "quarterly", label: "Quarterly", months: 3 },
+  { id: "half_yearly", label: "Every 6 months", months: 6 },
+  { id: "yearly", label: "Yearly", months: 12 }
+] as const;
+
+export const PAYOUT_FREQUENCY_IDS = PAYOUT_FREQUENCIES.map((item) => item.id) as [string, ...string[]];
+
+/** The type whose holdings pay out; everything else keeps the plain invested/current pair. */
+export const PAYOUT_INVESTMENT_TYPE = "post_office";
+
+export function payoutMonths(frequency: string) {
+  return PAYOUT_FREQUENCIES.find((item) => item.id === frequency)?.months ?? 0;
+}
 
 export const INVESTMENT_TYPE_IDS = INVESTMENT_TYPES.map((type) => type.id) as [string, ...string[]];
 
@@ -120,6 +147,7 @@ export const DEFAULT_CATEGORY_TYPES = [
       { id: "sub_income_loan", name: "Loan", icon: "landmark", color: "#2563eb" },
       { id: "sub_income_mutual_funds", name: "Mutual Funds", icon: "trending-up", color: "#0284c7" },
       { id: "sub_income_stocks", name: "Stocks", icon: "trending-up", color: "#4f46e5" },
+      { id: "sub_income_interest", name: "Interest", icon: "percent", color: "#b45309" },
       { id: "sub_other_income", name: "Other income", icon: "wallet", color: "#0f766e" }
     ]
   },
@@ -395,27 +423,79 @@ export const updateBudgetLineSchema = z
   .refine((value) => Object.keys(value).length > 0, "No budget changes provided.");
 
 export const investmentTypeSchema = z.enum(INVESTMENT_TYPE_IDS);
+export const payoutFrequencySchema = z.enum(PAYOUT_FREQUENCY_IDS);
 
-export const createInvestmentSchema = z.object({
+const investmentObjectSchema = z.object({
   type: investmentTypeSchema,
   name: z.string().trim().min(1).max(90),
   investedPaise: paiseSchema,
-  currentValuePaise: paiseSchema,
+  // A paying holding derives this from its credits, so the form never asks for it.
+  currentValuePaise: paiseSchema.optional(),
   shares: z.number().nonnegative().optional(),
   purchaseDate: dateSchema.optional(),
-  note: optionalTextSchema
+  note: optionalTextSchema,
+  payoutFrequency: payoutFrequencySchema.optional(),
+  payoutAmountPaise: positivePaiseSchema.optional(),
+  payoutDay: z.number().int().min(1).max(31).optional(),
+  payoutAccountId: idSchema.optional()
 });
 
-export const updateInvestmentSchema = z
-  .object({
-    type: investmentTypeSchema.optional(),
-    name: z.string().trim().min(1).max(90).optional(),
-    investedPaise: paiseSchema.optional(),
-    currentValuePaise: paiseSchema.optional(),
-    shares: z.number().nonnegative().optional(),
-    purchaseDate: dateSchema.optional(),
-    note: optionalTextSchema
-  })
+/**
+ * A paying holding needs every part of its schedule or it cannot pay anything out, and a holding
+ * that does not pay must not carry half a schedule it will never use.
+ */
+function checkPayoutFields(
+  value: {
+    type?: string;
+    payoutFrequency?: string;
+    payoutAmountPaise?: number;
+    payoutDay?: number;
+    payoutAccountId?: string;
+  },
+  ctx: z.RefinementCtx,
+  required: boolean
+) {
+  const parts = [
+    ["payoutFrequency", value.payoutFrequency, "how often the money is credited"],
+    ["payoutAmountPaise", value.payoutAmountPaise, "the amount credited"],
+    ["payoutDay", value.payoutDay, "the day it is credited"],
+    ["payoutAccountId", value.payoutAccountId, "the bank it is credited to"]
+  ] as const;
+
+  if (value.type === PAYOUT_INVESTMENT_TYPE) {
+    if (!required) return;
+    for (const [path, given, what] of parts) {
+      if (given === undefined || given === null || given === "") {
+        ctx.addIssue({ code: "custom", path: [path], message: `A Post Office holding needs ${what}.` });
+      }
+    }
+    return;
+  }
+
+  for (const [path, given] of parts) {
+    if (given !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: [path],
+        message: "Only a Post Office holding is credited on a schedule."
+      });
+    }
+  }
+}
+
+export const createInvestmentSchema = investmentObjectSchema.superRefine((value, ctx) => {
+  checkPayoutFields(value, ctx, true);
+  if (value.type !== PAYOUT_INVESTMENT_TYPE && value.currentValuePaise === undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["currentValuePaise"],
+      message: "Enter what this holding is worth now."
+    });
+  }
+});
+
+export const updateInvestmentSchema = investmentObjectSchema
+  .partial()
   .refine((value) => Object.keys(value).length > 0, "No investment changes provided.");
 
 export const createVacationSchema = z.object({
@@ -684,6 +764,7 @@ export type UpdateBudgetLineInput = z.infer<typeof updateBudgetLineSchema>;
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
 export type InvestmentType = z.infer<typeof investmentTypeSchema>;
+export type PayoutFrequency = z.infer<typeof payoutFrequencySchema>;
 export type CreateInvestmentInput = z.infer<typeof createInvestmentSchema>;
 export type UpdateInvestmentInput = z.infer<typeof updateInvestmentSchema>;
 export type CreateVacationInput = z.infer<typeof createVacationSchema>;
