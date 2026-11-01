@@ -2766,22 +2766,20 @@ test("report outflow covers every non-inflow type and matches the overview", asy
 
 test("budget totals keep budgeted equal to used plus remaining", async () => {
   const suffix = Date.now().toString().slice(-5);
+  // The figures below are exact, so this test needs a month nothing else in the suite spends in --
+  // and one that can never be today's month, because another test budgets Groceries for whatever
+  // month that is. Ten years out clears every month pinned elsewhere, and keeps doing so as the
+  // clock moves: pinning a fixed month here is what broke this test the day the clock reached it.
+  const month = `${new Date().getFullYear() + 10}-09`;
   const bank = await services.createAccount({
     name: `QA Budget Remaining Bank ${suffix}`,
     type: "bank",
     startingBalancePaise: 1_00_000_00
   });
 
-  // A month of its own, and a far-future one. These assertions are totals for the whole month
-  // across every account, and a budget line is unique per SubType per month -- so this test fails
-  // the moment another test budgets Groceries in the same month. That is what happened when the
-  // month it used to name, 2026-11, became the current one: "builds a budget-vs-actual trend for
-  // a SubType" budgets Groceries in whatever month today is, and the two collided with
-  // "Expense / Groceries already has a budget for 2026-11". Keep this month ahead of the clock.
-  //
   // Deliberately overspend one line so its remaining goes negative.
   await services.createTransaction({
-    date: "2034-02-05",
+    date: `${month}-05`,
     accountId: bank.id,
     method: "upi",
     typeId: await typeId("Expense"),
@@ -2791,7 +2789,7 @@ test("budget totals keep budgeted equal to used plus remaining", async () => {
     kind: "expense"
   });
   await services.createTransaction({
-    date: "2034-02-06",
+    date: `${month}-06`,
     accountId: bank.id,
     method: "upi",
     typeId: await typeId("Expense"),
@@ -2802,19 +2800,19 @@ test("budget totals keep budgeted equal to used plus remaining", async () => {
   });
 
   await services.createBudgetLine({
-    month: "2034-02",
+    month,
     scopeType: "subcategory",
     scopeId: await subcategoryId("Expense", "Groceries"),
     amountPaise: 5_000_00
   });
   await services.createBudgetLine({
-    month: "2034-02",
+    month,
     scopeType: "subcategory",
     scopeId: await subcategoryId("Expense", "Transport"),
     amountPaise: 4_000_00
   });
 
-  const plan = await services.getBudgetPlan("2034-02", "2034-02-28");
+  const plan = await services.getBudgetPlan(month, `${month}-30`);
   assert(plan.totals.amountPaise === 9_000_00, "Budgeted should be the sum of the budget lines.");
   assert(plan.totals.actualPaise === 10_000_00, "Used should be the sum of the actuals.");
   assert(
