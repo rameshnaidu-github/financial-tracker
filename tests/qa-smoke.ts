@@ -1567,11 +1567,15 @@ test("tracks investment holdings with computed gain and validation", async () =>
     payoutFrequency: "monthly",
     payoutAmountPaise: 5_000_00,
     payoutDay: 1,
-    payoutAccountId: state.bankId
+    payoutAccountId: state.bankId,
+    payoutEndDate: fiveYearsOutForTests()
   });
   assert(fd.type === "fd" && fd.typeLabel === "Fixed Deposit", "FD should be a valid investment type.");
-  assert(fd.currentValuePaise === 5_10_000_00, `Two credits should make the FD 5,10,000, got ${fd.currentValuePaise}.`);
-  assert(fd.gainPaise === 10_000_00 && fd.gainPercent === 2, "FD gain should be the interest it has credited.");
+  // The money is still with the bank and the interest is in an account, so what it is worth is
+  // what went in. What it has paid is reported on its own, as interest earned.
+  assert(fd.currentValuePaise === fd.investedPaise, `An FD should be worth what went into it, got ${fd.currentValuePaise}.`);
+  assert(fd.gainPaise === 0, "An FD that pays its interest out has no gain in its value.");
+  assert(fd.payoutCreditedPaise === 10_000_00, `Two credits of 5,000 should read as 10,000 earned, got ${fd.payoutCreditedPaise}.`);
 
   const updated = await services.updateInvestment(stock.id, { currentValuePaise: 90_000_00 });
   assert(updated.gainPaise === -10_000_00, "Updating current value should recompute the gain.");
@@ -1900,7 +1904,8 @@ test("computes net worth, asset allocation, cashflow and runway", async () => {
     payoutFrequency: "monthly",
     payoutAmountPaise: 1_000_00,
     payoutDay: 1,
-    payoutAccountId: bank.id
+    payoutAccountId: bank.id,
+    payoutEndDate: fiveYearsOutForTests()
   });
 
   const before = await services.getWealthSummary();
@@ -3413,10 +3418,12 @@ test("bonds are an investment type with their own allocation slice", async () =>
   const bond = await services.createInvestment({
     type: "bonds", name: "QA RBI Floating Rate Bond", investedPaise: 1_00_000_00,
     purchaseDate: firstOfMonthsAgoForTests(1), payoutFrequency: "monthly",
-    payoutAmountPaise: 3_150_00, payoutDay: 1, payoutAccountId: bondBank.id
+    payoutAmountPaise: 3_150_00, payoutDay: 1, payoutAccountId: bondBank.id,
+    payoutEndDate: fiveYearsOutForTests()
   });
   assert(bond.type === "bonds" && bond.typeLabel === "Bonds", "A bond holding should be stored with its label.");
-  assert(bond.currentValuePaise === 1_03_150_00, `One coupon should make the bond 1,03,150, got ${bond.currentValuePaise}.`);
+  assert(bond.currentValuePaise === bond.investedPaise, "A bond is worth what went into it; its coupon is interest, not growth.");
+  assert(bond.payoutCreditedPaise === 3_150_00, `One coupon should read as 3,150 earned, got ${bond.payoutCreditedPaise}.`);
   const slice = (await services.getWealthSummary()).allocation.find((segment) => segment.key === "bonds");
   // The principal, not the value: the coupon it has paid is already sitting in the Cash slice.
   assert(slice?.label === "Bonds" && slice.valuePaise >= 1_00_000_00, "Bonds should get their own allocation slice.");
@@ -3902,6 +3909,12 @@ test("an installment settled by a card payment moves and vanishes with that paym
 // A post office scheme keeps the money invested and pays the interest into a bank on a set day.
 // So the holding is described by a schedule, the credits are written out as they fall due, and
 // what it is worth is the principal plus everything it has paid back.
+/** A term far enough out that no assertion here ever reaches the day the scheme stops paying. */
+function fiveYearsOutForTests() {
+  const now = new Date();
+  return `${now.getFullYear() + 5}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
 function firstOfMonthsAgoForTests(back: number) {
   const now = new Date();
   const date = new Date(now.getFullYear(), now.getMonth() - back, 1);
@@ -3915,14 +3928,16 @@ test("a post office holding credits its bank on schedule and is worth principal 
   const made = await services.createInvestment({
     type: "post_office", name: "QA Post Office XYZ", investedPaise: 1_00_000_00,
     purchaseDate: firstOfMonthsAgoForTests(2), payoutFrequency: "monthly",
-    payoutAmountPaise: 2_000_00, payoutDay: 1, payoutAccountId: axis.id
+    payoutAmountPaise: 2_000_00, payoutDay: 1, payoutAccountId: axis.id,
+    payoutEndDate: fiveYearsOutForTests()
   });
 
   // Two months in: the owner's own example, 1,00,000 + 2,000 + 2,000.
   const holding = (await services.listInvestments()).find((item) => item.id === made.id);
   assert(holding?.investedPaise === 1_00_000_00, "The principal should stay as it was entered.");
-  assert(holding?.currentValuePaise === 1_04_000_00, `Two credits should make it 1,04,000, got ${holding?.currentValuePaise}.`);
-  assert(holding?.gainPaise === 4_000_00, "The gain should be the interest actually received.");
+  assert(holding?.currentValuePaise === 1_00_000_00, `A post office holding is worth what went into it, got ${holding?.currentValuePaise}.`);
+  assert(holding?.gainPaise === 0, "A holding that pays its interest out has no gain in its value.");
+  assert(holding?.payoutCreditedPaise === 4_000_00, "Two credits should read as 4,000 of interest earned.");
   assert(holding?.payoutCreditCount === 2, `Two credits should have been written, got ${holding?.payoutCreditCount}.`);
 
   const credits = (await services.listTransactions({ accountId: axis.id })).filter((row) => row.direction === "inflow");
@@ -3944,7 +3959,8 @@ test("a post office credit is counted once in net worth, and the holding takes i
   const made = await services.createInvestment({
     type: "post_office", name: "QA Post Office Net Worth", investedPaise: 1_00_000_00,
     purchaseDate: firstOfMonthsAgoForTests(2), payoutFrequency: "monthly",
-    payoutAmountPaise: 2_000_00, payoutDay: 1, payoutAccountId: axis.id
+    payoutAmountPaise: 2_000_00, payoutDay: 1, payoutAccountId: axis.id,
+    payoutEndDate: fiveYearsOutForTests()
   });
   const after = (await services.getWealthSummary()).netWorth;
 
@@ -3975,11 +3991,13 @@ test("a fixed deposit and a bond credit their bank on schedule, like a post offi
     const made = await services.createInvestment({
       type, name: `QA Paying ${type}`, investedPaise: 1_00_000_00,
       purchaseDate: firstOfMonthsAgoForTests(2), payoutFrequency: "monthly",
-      payoutAmountPaise: 2_000_00, payoutDay: 1, payoutAccountId: bank.id
+      payoutAmountPaise: 2_000_00, payoutDay: 1, payoutAccountId: bank.id,
+    payoutEndDate: fiveYearsOutForTests()
     });
     const holding = (await services.listInvestments()).find((item) => item.id === made.id);
-    assert(holding?.currentValuePaise === 1_04_000_00, `A ${type} two months in should read 1,04,000, got ${holding?.currentValuePaise}.`);
-    assert(holding?.gainPaise === 4_000_00, `A ${type}'s gain should be the interest received.`);
+    assert(holding?.currentValuePaise === 1_00_000_00, `A ${type} is worth what went into it, got ${holding?.currentValuePaise}.`);
+    assert(holding?.gainPaise === 0, `A ${type} that pays its interest out has no gain in its value.`);
+    assert(holding?.payoutCreditedPaise === 4_000_00, `A ${type} two months in should read 4,000 of interest earned.`);
     assert(holding?.netWorthValuePaise === 1_00_000_00, `Only a ${type}'s principal belongs in net worth; its credits are already in the bank.`);
     assert(holding?.payoutCreditCount === 2, `A ${type} should have credited twice, got ${holding?.payoutCreditCount}.`);
 
@@ -4115,6 +4133,94 @@ test("deletes an entry batch, keeping its transactions and clearing their batch"
   assert(row, "Deleting a batch should not delete the transactions in it.");
   assert(row.batch_id === null, "The transaction's batch should be cleared.");
   assert(row.user_id === owner, "The transaction must keep its owner.");
+});
+
+test("an AutoPay with a bank takes its own payment, and waits when the balance is short", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const rich = await services.createAccount({
+    name: `QA AutoPay Rich ${suffix}`, type: "bank", startingBalancePaise: 1_000_00
+  });
+  const poor = await services.createAccount({
+    name: `QA AutoPay Poor ${suffix}`, type: "bank", startingBalancePaise: 100_00
+  });
+  const firstOfThisMonth = `${currentIsoDateForTests().slice(0, 7)}-01`;
+
+  // 200 against 1,000: taken, leaving 800.
+  const paid = await services.createAutopaySubscription({
+    name: `QA Netflix ${suffix}`, amountPaise: 200_00, startDate: firstOfThisMonth,
+    durationMonths: 12, accountId: rich.id
+  });
+  const balance = async (id: string) => (await services.listAccounts(true)).find((item) => item.id === id)?.balancePaise;
+  assert(await balance(rich.id) === 800_00, `A covered AutoPay should leave 800, got ${await balance(rich.id)}.`);
+  assert(
+    (await services.listAutopaySubscriptions(true)).find((item) => item.id === paid.id)?.paymentCount === 1,
+    "The payment should be tied to the subscription that made it."
+  );
+
+  // The catch-up runs on every page load, so a second run must take nothing more.
+  assert((await services.catchUpAutopayDebits()).paid === 0, "A second run took the same month again.");
+  assert(await balance(rich.id) === 800_00, "A second run moved the balance.");
+
+  // 200 against 100: nothing happens at all.
+  const held = await services.createAutopaySubscription({
+    name: `QA Spotify ${suffix}`, amountPaise: 200_00, startDate: firstOfThisMonth,
+    durationMonths: 12, accountId: poor.id
+  });
+  assert(await balance(poor.id) === 100_00, "A payment the bank cannot cover must not be taken.");
+  assert(
+    (await services.listTransactions({ accountId: poor.id })).length === 0,
+    "A payment the bank cannot cover must not be written either."
+  );
+
+  // But it is not silent: it stays listed, against the bank that could not cover it.
+  const listed = (await services.getUpcomingPayments(14)).items.find((item) => item.id === held.id);
+  assert(listed, "A held-back AutoPay should still be listed in Upcoming payments.");
+  assert(
+    listed.notCoveredBy === `QA AutoPay Poor ${suffix}`,
+    `A held-back AutoPay should name the bank that fell short, got ${listed.notCoveredBy}.`
+  );
+});
+
+test("a holding stops paying on its end date, and one recorded without an end date carries on", async () => {
+  const suffix = Date.now().toString().slice(-5);
+  const bank = await services.createAccount({
+    name: `QA Maturity Bank ${suffix}`, type: "bank", startingBalancePaise: 0
+  });
+  // Started four months ago, last paid two months ago: two credits, not four.
+  const matured = await services.createInvestment({
+    type: "fd", name: `QA Matured FD ${suffix}`, investedPaise: 1_00_000_00,
+    purchaseDate: firstOfMonthsAgoForTests(4), payoutFrequency: "monthly",
+    payoutAmountPaise: 2_000_00, payoutDay: 1, payoutAccountId: bank.id,
+    payoutEndDate: firstOfMonthsAgoForTests(2)
+  });
+  const holding = (await services.listInvestments()).find((item) => item.id === matured.id);
+  assert(holding?.payoutCreditCount === 2, `A holding that stopped two months ago should have credited twice, got ${holding?.payoutCreditCount}.`);
+  assert(holding?.nextPayoutDate === null, "A holding that has stopped paying has no next credit.");
+  assert(
+    (await services.listTransactions({ accountId: bank.id })).every((row) => row.date <= firstOfMonthsAgoForTests(2)),
+    "Nothing may be credited after the final day it pays."
+  );
+  assert((await services.catchUpPayoutCredits()).created === 0, "A later run credited past the end date.");
+
+  // An end date is compulsory on a new one, and cannot fall before the money went in.
+  await assertRejects("A paying holding with no end date", async () =>
+    await services.createInvestment({
+      type: "bonds", name: `QA No End ${suffix}`, investedPaise: 1_000_00,
+      purchaseDate: firstOfMonthsAgoForTests(1), payoutFrequency: "monthly",
+      payoutAmountPaise: 100_00, payoutDay: 1, payoutAccountId: bank.id
+    })
+  );
+  await assertRejectsWithMessage(
+    "A holding that stops before it starts",
+    async () =>
+      await services.createInvestment({
+        type: "bonds", name: `QA Backwards ${suffix}`, investedPaise: 1_000_00,
+        purchaseDate: firstOfMonthsAgoForTests(1), payoutFrequency: "monthly",
+        payoutAmountPaise: 100_00, payoutDay: 1, payoutAccountId: bank.id,
+        payoutEndDate: firstOfMonthsAgoForTests(3)
+      }),
+    "after the day the money went in"
+  );
 });
 
 let failed = 0;

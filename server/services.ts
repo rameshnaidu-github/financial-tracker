@@ -608,6 +608,8 @@ export type AutopaySubscriptionRow = {
   amount_paise: number;
   start_date: string;
   duration_months: number;
+  account_id: string | null;
+  debited_through: string | null;
   is_archived: number;
   created_at: string;
   updated_at: string;
@@ -622,6 +624,9 @@ export type AutopaySubscriptionSummary = {
   expiryDate: string;
   paymentCount: number;
   status: "active" | "expired";
+  /** The bank it is taken from. Without one it only reminds; with one it pays itself. */
+  accountId: string | null;
+  accountName: string | null;
   isArchived: boolean;
 };
 
@@ -629,7 +634,8 @@ export async function listAutopaySubscriptions(includeArchived = false): Promise
   const rows = asRecords<AutopaySubscriptionRow>(
     (await db
       .prepare(
-        `SELECT id, name, amount_paise, start_date, duration_months, is_archived, created_at, updated_at
+        `SELECT id, name, amount_paise, start_date, duration_months, account_id, debited_through,
+                is_archived, created_at, updated_at
          FROM autopay_subscriptions
          WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
          ORDER BY is_archived ASC, name ASC`
@@ -644,11 +650,25 @@ export async function createAutopaySubscription(input: CreateAutopaySubscription
   const parsed = createAutopaySubscriptionSchema.parse(input);
   const id = randomUUID();
 
+  if (parsed.accountId) {
+    await requireDebitAccount(parsed.accountId);
+  }
   (await db.prepare(
     `INSERT INTO autopay_subscriptions
-      (id, name, amount_paise, start_date, duration_months, user_id)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, parsed.name, parsed.amountPaise, parsed.startDate, parsed.durationMonths, currentUserId()));
+      (id, name, amount_paise, start_date, duration_months, account_id, debited_through, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id, parsed.name, parsed.amountPaise, parsed.startDate, parsed.durationMonths,
+    parsed.accountId ?? null,
+    // Counted from the later of the subscription's start and today: attaching a bank to a
+    // subscription that began two years ago must not drain the account with two years of
+    // back-dated debits.
+    parsed.accountId ? previousDay(laterOf(parsed.startDate, currentIsoDate())) : null,
+    currentUserId()
+  ));
+  if (parsed.accountId) {
+    await catchUpAutopayDebits();
+  }
 
   return requireAutopaySummary(id);
 }
@@ -664,8 +684,18 @@ export async function updateAutopaySubscription(
     amountPaise: patch.amountPaise ??(await existing).amount_paise,
     startDate: patch.startDate ??(await existing).start_date,
     durationMonths: patch.durationMonths ??(await existing).duration_months,
+    accountId: patch.accountId ??(await existing).account_id,
     isArchived: patch.isArchived ?? Boolean((await existing).is_archived)
   };
+  if (patch.accountId) {
+    await requireDebitAccount(patch.accountId);
+  }
+  // A bank attached today starts paying today, not from the subscription's first month.
+  const debitedThrough =(await existing).account_id
+    ?(await existing).debited_through
+    : merged.accountId
+      ? previousDay(laterOf(merged.startDate, currentIsoDate()))
+      : null;
 
   createAutopaySubscriptionSchema.parse({
     name: merged.name,
@@ -676,20 +706,146 @@ export async function updateAutopaySubscription(
 
   (await db.prepare(
     `UPDATE autopay_subscriptions
-     SET name = ?, amount_paise = ?, start_date = ?, duration_months = ?,
-         is_archived = ?, updated_at = CURRENT_TIMESTAMP
+     SET name = ?, amount_paise = ?, start_date = ?, duration_months = ?, account_id = ?,
+         debited_through = ?, is_archived = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ? AND user_id = ?`
   ).run(
     merged.name,
     merged.amountPaise,
     merged.startDate,
     merged.durationMonths,
+    merged.accountId ?? null,
+    debitedThrough,
     merged.isArchived ? 1 : 0,
     id,
     currentUserId()
   ));
+  if (merged.accountId && !merged.isArchived) {
+    await catchUpAutopayDebits();
+  }
 
   return requireAutopaySummary(id);
+}
+
+function laterOf(a: string, b: string) {
+  return a > b ? a : b;
+}
+
+function previousDay(isoDate: string) {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const date = new Date(year, month - 1, day - 1);
+  return localIsoDate(date);
+}
+
+/**
+ * The day a subscription has been taken up to, which is what the next run counts from.
+ *
+ * A subscription that has never been taken starts the day before its first payable date -- the
+ * later of its own start and today. Today's payment is therefore taken today, while a bank
+ * attached to a subscription that began last year starts from now and not from its first month.
+ */
+function autopayDebitedThrough(row: AutopaySubscriptionRow, today: string) {
+  return row.debited_through ?? previousDay(laterOf(row.start_date, today));
+}
+
+/** An AutoPay is taken from a real bank account; a card has an outstanding, not a balance. */
+async function requireDebitAccount(id: string) {
+  const account = await requireAccount(id);
+  if (account.type !== "bank") {
+    throw badRequest("An AutoPay has to be taken from a bank account.");
+  }
+  return account;
+}
+
+/**
+ * Take every AutoPay that has fallen due, from the bank it is set to come out of.
+ *
+ * This is the only thing in the application that spends money by itself, so it is deliberately
+ * timid. It pays only what the balance covers at the moment it runs, leaving a payment it cannot
+ * afford entirely unwritten rather than overdrawing the account on paper. It never back-dates:
+ * a subscription remembers how far it has been taken, set to the day its bank was attached, so
+ * giving a bank to a two-year-old subscription pays this month and not twenty-four. And a month
+ * already recorded by hand is left alone, so the two ways of entering it cannot double up.
+ */
+export async function catchUpAutopayDebits(today = currentIsoDate()) {
+  const subscriptions = (await listAutopaySubscriptions(false)).filter(
+    (subscription) => subscription.accountId && subscription.status === "active"
+  );
+
+  let paid = 0;
+  const skipped: Array<{ id: string; dueDate: string }> = [];
+  for (const subscription of subscriptions) {
+    const row = await requireAutopayRow(subscription.id);
+    const due = autopayDueDates(row, autopayDebitedThrough(row, today), today);
+    if (!due.length) continue;
+
+    const paidMonths = new Set(
+      asRecords<{ month: string }>(
+        (await db
+          .prepare(
+            `SELECT DISTINCT substr(t.date, 1, 7) AS month
+             FROM autopay_payments ap JOIN transactions t ON t.id = ap.transaction_id AND t.user_id = ap.user_id
+             WHERE ap.subscription_id = ? AND ap.user_id = ?`
+          )
+          .all(row.id, currentUserId()))
+      ).map((item) => item.month)
+    );
+
+    let through = row.debited_through;
+    for (const date of due) {
+      if (paidMonths.has(date.slice(0, 7))) {
+        through = date;
+        continue;
+      }
+      // Measured now, not as of the due date: the question this answers is whether the money is
+      // there to take, and a balance that has since been spent cannot be taken from.
+      const balance = (await mapAccountWithBalance(await requireAccount(row.account_id as string))).balancePaise;
+      if (balance < row.amount_paise) {
+        skipped.push({ id: row.id, dueDate: date });
+        break;
+      }
+      await transaction(async () => {
+        const transactionId = await insertValidatedTransaction(
+          createTransactionSchema.parse({
+            date,
+            accountId: row.account_id,
+            method: "bank_transfer",
+            merchant: row.name,
+            subcategoryId: AUTOPAY_SUBCATEGORY_ID,
+            amountPaise: row.amount_paise,
+            direction: "outflow",
+            kind: "expense",
+            subscriptionId: row.id
+          })
+        );
+        if (!transactionId) throw badRequest("The AutoPay payment could not be recorded.");
+        (await db
+          .prepare("UPDATE autopay_subscriptions SET debited_through = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?")
+          .run(date, row.id, currentUserId()));
+      });
+      through = date;
+      paid += 1;
+    }
+    if (through && through !== row.debited_through) {
+      (await db
+        .prepare("UPDATE autopay_subscriptions SET debited_through = ? WHERE id = ? AND user_id = ?")
+        .run(through, row.id, currentUserId()));
+    }
+  }
+  return { paid, skipped };
+}
+
+/** The days this subscription comes out on, after `afterDate` and up to `through`. */
+function autopayDueDates(row: AutopaySubscriptionRow, afterDate: string, through: string) {
+  const expiry = addMonthsToIsoDate(row.start_date, row.duration_months);
+  const dates: string[] = [];
+  for (let month = 0; month <= 1200; month += 1) {
+    const due = addMonthsToIsoDate(row.start_date, month);
+    if (due > through) break;
+    if (due >= expiry) break;
+    if (due > afterDate) dates.push(due);
+  }
+  return dates;
 }
 
 export async function archiveAutopaySubscription(id: string) {
@@ -718,6 +874,7 @@ type InvestmentRow = {
   payout_day: number | null;
   payout_account_id: string | null;
   payout_through: string | null;
+  payout_end_date: string | null;
 };
 
 export type InvestmentSummary = {
@@ -748,6 +905,8 @@ export type InvestmentSummary = {
   payoutDay: number | null;
   payoutAccountId: string | null;
   payoutAccountName: string | null;
+  /** The final day this pays interest. A credit falling on it is paid; none after it. */
+  payoutEndDate: string | null;
   /** What it has credited so far, and when the next credit falls due. */
   payoutCreditedPaise: number;
   payoutCreditCount: number;
@@ -766,7 +925,8 @@ export type InvestmentSummary = {
 
 const INVESTMENT_COLUMNS =
   "id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at, " +
-  "invested_as_of, value_as_of, payout_frequency, payout_amount_paise, payout_day, payout_account_id, payout_through";
+  "invested_as_of, value_as_of, payout_frequency, payout_amount_paise, payout_day, payout_account_id, " +
+  "payout_through, payout_end_date";
 
 export async function listInvestments(): Promise<InvestmentSummary[]> {
   const rows = asRecords<InvestmentRow>(
@@ -792,8 +952,9 @@ export async function createInvestment(input: CreateInvestmentInput): Promise<In
   (await db.prepare(
     `INSERT INTO investments
        (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, invested_as_of,
-        value_as_of, payout_frequency, payout_amount_paise, payout_day, payout_account_id, payout_through, user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        value_as_of, payout_frequency, payout_amount_paise, payout_day, payout_account_id, payout_through,
+        payout_end_date, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     parsed.type,
@@ -813,6 +974,7 @@ export async function createInvestment(input: CreateInvestmentInput): Promise<In
     parsed.payoutAccountId ?? null,
     // Counted from the day the money went in: a holding added months late catches up at once.
     isPayoutInvestmentType(parsed.type) ? startDate : null,
+    parsed.payoutEndDate ?? null,
     currentUserId()
   ));
   if (isPayoutInvestmentType(parsed.type)) {
@@ -854,7 +1016,8 @@ export async function updateInvestment(id: string, input: UpdateInvestmentInput)
     payoutFrequency: patch.payoutFrequency ??(await existing).payout_frequency,
     payoutAmountPaise: patch.payoutAmountPaise ??(await existing).payout_amount_paise,
     payoutDay: patch.payoutDay ??(await existing).payout_day,
-    payoutAccountId: patch.payoutAccountId ??(await existing).payout_account_id
+    payoutAccountId: patch.payoutAccountId ??(await existing).payout_account_id,
+    payoutEndDate: patch.payoutEndDate ??(await existing).payout_end_date
   };
   if (patch.payoutAccountId) {
     await requirePayoutAccount(patch.payoutAccountId);
@@ -863,7 +1026,7 @@ export async function updateInvestment(id: string, input: UpdateInvestmentInput)
     `UPDATE investments
      SET type = ?, name = ?, invested_paise = ?, current_value_paise = ?, shares = ?, purchase_date = ?, note = ?,
          invested_as_of = ?, value_as_of = ?, payout_frequency = ?, payout_amount_paise = ?, payout_day = ?,
-         payout_account_id = ?, updated_at = CURRENT_TIMESTAMP
+         payout_account_id = ?, payout_end_date = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ? AND user_id = ?`
   ).run(
     merged.type,
@@ -879,6 +1042,7 @@ export async function updateInvestment(id: string, input: UpdateInvestmentInput)
     merged.payoutAmountPaise,
     merged.payoutDay,
     merged.payoutAccountId,
+    merged.payoutEndDate,
     id,
     currentUserId()
   ));
@@ -980,6 +1144,9 @@ function payoutDueDates(row: InvestmentRow, afterDate: string, through: string) 
   if (!months || !row.payout_day) {
     return [];
   }
+  // The end date is the final day it pays, the way a deposit's last interest lands on the day it
+  // matures. A credit falling on it is paid; nothing is credited after it.
+  const last = row.payout_end_date && row.payout_end_date < through ? row.payout_end_date : through;
   const start = payoutStartDate(row);
   const anchor = addMonthsToIsoDate(`${start.slice(0, 7)}-${String(row.payout_day).padStart(2, "0")}`, 0);
   const dates: string[] = [];
@@ -987,7 +1154,7 @@ function payoutDueDates(row: InvestmentRow, afterDate: string, through: string) 
   // is a hundred years of monthly credits, which no scheme outlives.
   for (let period = 1; period <= 1200; period += 1) {
     const due = addMonthsToIsoDate(anchor, period * months);
-    if (due > through) break;
+    if (due > last) break;
     if (due > afterDate) dates.push(due);
   }
   return dates;
@@ -1004,6 +1171,7 @@ function nextPayoutDueDate(row: InvestmentRow) {
   const today = currentIsoDate();
   for (let period = 1; period <= 1200; period += 1) {
     const due = addMonthsToIsoDate(anchor, period * months);
+    if (row.payout_end_date && due > row.payout_end_date) return null;
     if (due > today) return due;
   }
   return null;
@@ -1102,8 +1270,11 @@ async function mapInvestment(row: InvestmentRow): Promise<InvestmentSummary> {
   const investedPaise = row.invested_paise +sipsForInvested.total;
   // A paying holding is worth the money still with the scheme plus everything it has paid back,
   // so its gain is the interest actually received rather than a figure anyone has to maintain.
+  // The money is still with the scheme and the interest is in a bank account, so what this is
+  // worth is what went into it. What it has paid out is reported as interest earned, which is
+  // what the owner is actually looking for, and never as a gain in its value.
   const currentValuePaise = isPayoutInvestment(row)
-    ? investedPaise + credits.total
+    ? investedPaise
     : row.current_value_paise +(await sipsForValue).total;
   const gainPaise = currentValuePaise - investedPaise;
   const gainPercent = investedPaise > 0 ? Math.round((gainPaise / investedPaise) * 100) : 0;
@@ -1132,6 +1303,7 @@ async function mapInvestment(row: InvestmentRow): Promise<InvestmentSummary> {
     payoutDay: row.payout_day,
     payoutAccountId: row.payout_account_id,
     payoutAccountName: payoutAccount?.name ?? null,
+    payoutEndDate: row.payout_end_date,
     payoutCreditedPaise: credits.total,
     payoutCreditCount: credits.count,
     nextPayoutDate: isPayoutInvestment(row) ? nextPayoutDueDate(row) : null,
@@ -2242,6 +2414,7 @@ export async function getOverview(accountId?: string, month = currentMonth()) {
       creditOutstandingPaise: scopedAccounts
         .filter((account) => account.type === "credit_card")
         .reduce((sum, account) => sum + account.outstandingPaise, 0),
+      cardSpendingPaise: await cardSpendingForMonth((await monthly).month, accountId),
       totalSpendingPaise:(await  monthly).totalSpendingPaise,
       totalOutflowPaise:(await  monthly).totalOutflowPaise,
       totalInflowPaise:(await  monthly).totalInflowPaise,
@@ -2263,6 +2436,32 @@ export async function getOverview(accountId?: string, month = currentMonth()) {
       share: spendingPaise > 0 ? Math.round((Math.max(category.amountPaise, 0) / spendingPaise) * 1000) / 10 : 0
     }))
   };
+}
+
+/**
+ * What was spent on credit cards this month, EMIs excluded.
+ *
+ * An EMI installment is charged to the card like any other purchase, but it is a loan being
+ * repaid rather than this month's spending, and it is the one thing the owner asked to keep out.
+ * Refunds come off, because money handed back was not spent. A bill payment never appears here:
+ * it leaves a bank, not the card, and the charges it settles were counted when they were made.
+ */
+async function cardSpendingForMonth(month: string, accountId?: string) {
+  const params: SqlParam[] = [currentUserId(), `${month}-01`, monthEndDate(month)];
+  if (accountId) params.push(accountId);
+  return asRecord<{ total: number | null }>(
+    (await db
+      .prepare(
+        `SELECT COALESCE(SUM(CASE WHEN t.direction = 'outflow' THEN t.amount_paise ELSE -t.amount_paise END), 0) AS total
+         FROM transactions t
+         JOIN accounts a ON a.id = t.account_id AND a.user_id = t.user_id
+         WHERE t.user_id = ? AND t.date >= ? AND t.date <= ?
+           AND a.type = 'credit_card'
+           AND t.kind != 'emi'
+           ${accountId ? "AND t.account_id = ?" : ""}`
+      )
+      .get(...params))
+  ).total ?? 0;
 }
 
 export type WealthAllocationSegment = {
@@ -2390,6 +2589,13 @@ export type UpcomingPayment = {
   dueDate: string;
   daysAway: number;
   amountPaise: number;
+  /**
+   * Set when an AutoPay fell due and its bank did not cover it, naming that bank.
+   *
+   * It stays listed rather than passing by silently: nothing was written, so without this the
+   * month would simply look as though the subscription had never been due.
+   */
+  notCoveredBy?: string;
 };
 
 export type UpcomingPayments = {
@@ -2405,6 +2611,29 @@ function daysBetween(fromIso: string, toIso: string) {
 }
 
 /** The next date on `billingDay` inside [today, today + windowDays] whose month isn't already paid. */
+/**
+ * The oldest payment this subscription owes that its bank cannot cover, if there is one.
+ *
+ * Read-only on purpose: this runs while a page is being drawn, and the money is taken elsewhere.
+ * It asks the same question the debit does -- is the balance there now -- so the two agree.
+ */
+async function heldBackAutopay(
+  subscription: AutopaySubscriptionSummary,
+  paidMonths: Set<string>,
+  today: string
+) {
+  if (!subscription.accountId) return null;
+  const row = await requireAutopayRow(subscription.id);
+  const due = autopayDueDates(row, autopayDebitedThrough(row, today), today)
+    .filter((date) => !paidMonths.has(date.slice(0, 7)));
+  if (!due.length) return null;
+  const account = await getAccountRow(subscription.accountId);
+  if (!account) return null;
+  const balance = (await mapAccountWithBalance(account)).balancePaise;
+  if (balance >= subscription.amountPaise) return null;
+  return { dueDate: due[0], accountName: account.name };
+}
+
 function nextMonthlyDueDate(
   billingDay: number,
   today: string,
@@ -2455,7 +2684,21 @@ export async function getUpcomingPayments(windowDays = 14, today = currentIsoDat
       paidMonths,
       (dueDate) => dueDate >= subscription.startDate && dueDate < subscription.expiryDate
     );
-    if (due) {
+    // A subscription that pays itself may have fallen due and been held back for want of money.
+    // That one is shown ahead of whatever comes next, and named: nothing was written, so this
+    // listing is the only sign it is owed.
+    const held = await heldBackAutopay(subscription, paidMonths, today);
+    if (held) {
+      items.push({
+        id: subscription.id,
+        kind: "autopay",
+        name: subscription.name,
+        amountPaise: subscription.amountPaise,
+        dueDate: held.dueDate,
+        daysAway: daysBetween(today, held.dueDate),
+        notCoveredBy: held.accountName
+      });
+    } else if (due) {
       items.push({ id: subscription.id, kind: "autopay", name: subscription.name, amountPaise: subscription.amountPaise, ...due });
     }
   }
@@ -4364,6 +4607,7 @@ async function mapAutopaySubscription(row: AutopaySubscriptionRow): Promise<Auto
   ).count;
   const expiryDate = addMonthsToIsoDate(row.start_date, row.duration_months);
   const status: "active" | "expired" = currentIsoDate() >= expiryDate ? "expired" : "active";
+  const account = row.account_id ? await getAccountRow(row.account_id) : undefined;
 
   return {
     id: row.id,
@@ -4374,6 +4618,8 @@ async function mapAutopaySubscription(row: AutopaySubscriptionRow): Promise<Auto
     expiryDate,
     paymentCount,
     status,
+    accountId: row.account_id,
+    accountName: account?.name ?? null,
     isArchived: Boolean(row.is_archived)
   };
 }
@@ -4382,7 +4628,8 @@ async function requireAutopayRow(id: string) {
   const row = asRecord<AutopaySubscriptionRow | undefined>(
     (await db
       .prepare(
-        `SELECT id, name, amount_paise, start_date, duration_months, is_archived, created_at, updated_at
+        `SELECT id, name, amount_paise, start_date, duration_months, account_id, debited_through,
+                is_archived, created_at, updated_at
          FROM autopay_subscriptions
          WHERE id = ? AND user_id = ?`
       )

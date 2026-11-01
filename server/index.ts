@@ -60,6 +60,7 @@ import {
   listAccounts,
   listAutopaySubscriptions,
   listCategoryTypes,
+  catchUpAutopayDebits,
   catchUpPayoutCredits,
   listInvestments,
   listLoans,
@@ -310,9 +311,10 @@ app.get("/api/auth/me", async (request) => {
   return person ? { signedIn: true, email: person.email, isOwner: await currentUserIsOwner() } : { signedIn: false };
 });
 
-// Credits a holding has paid out since the app was last opened are written first, so everything
-// below describes money that has really arrived rather than money that was due.
-app.get("/api/bootstrap", async () => (await catchUpPayoutCredits(), {
+// Money that has moved by itself since the app was last opened is written first -- interest a
+// holding has paid in, AutoPay taken out -- so everything below describes what has really
+// happened rather than what was due.
+app.get("/api/bootstrap", async () => (await catchUpPayoutCredits(), await catchUpAutopayDebits(), {
   settings: await getSettings(),
   profile: await getProfile(),
   accounts: (await listAccounts()).filter((account) => !account.isArchived),
