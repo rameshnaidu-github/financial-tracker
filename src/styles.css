@@ -2684,6 +2684,23 @@ a {
   min-width: 0;
 }
 
+/* On a narrow screen the name comes first and the chips drop beneath it. Keeping them on one line
+   left the EMI's own name as an ellipsis, which is the one thing the row exists to say. */
+@media (max-width: 480px) {
+  .loan-card-header {
+    flex-wrap: wrap;
+  }
+
+  .loan-title {
+    flex: 1 1 100%;
+  }
+
+  .loan-header-actions {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
+}
+
 .loan-title > div strong,
 .loan-title > div span,
 .loan-detail-grid span,
@@ -2719,6 +2736,19 @@ a {
   border-radius: 999px;
   background: rgba(15, 118, 110, 0.1);
   color: var(--accent);
+  padding: 5px 9px;
+  font-size: 0.72rem;
+  font-weight: 950;
+}
+
+/* The card an EMI runs on. The status chip's shape exactly -- same pill, same padding, same
+   weight -- in a neutral tint, so the pair reads as one row of facts and the status still stands
+   out as the one that changes. */
+.loan-bank {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--muted);
   padding: 5px 9px;
   font-size: 0.72rem;
   font-weight: 950;

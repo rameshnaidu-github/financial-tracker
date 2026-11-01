@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS investment_payments (
 
 CREATE TABLE IF NOT EXISTS investments (
   id TEXT NOT NULL,
-  type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'other')),
+  type TEXT NOT NULL CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'post_office', 'other')),
   name TEXT NOT NULL,
   invested_paise BIGINT NOT NULL CHECK (invested_paise >= 0),
   current_value_paise BIGINT NOT NULL CHECK (current_value_paise >= 0),
@@ -142,6 +142,14 @@ CREATE TABLE IF NOT EXISTS investments (
   updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   invested_as_of TEXT,
   value_as_of TEXT,
+  -- A holding that pays money back at a fixed interval -- a post office scheme and nothing else
+  -- so far. How often, how much, on which day of the month, and into which bank. payout_through
+  -- is the last due date already written out, so a credit the owner deletes is not written again.
+  payout_frequency TEXT CHECK (payout_frequency IN ('monthly', 'quarterly', 'half_yearly', 'yearly')),
+  payout_amount_paise BIGINT CHECK (payout_amount_paise > 0),
+  payout_day BIGINT CHECK (payout_day BETWEEN 1 AND 31),
+  payout_account_id TEXT,
+  payout_through TEXT,
   user_id TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (id, user_id)
 );
@@ -514,6 +522,28 @@ CREATE INDEX IF NOT EXISTS idx_loans_account ON loans(account_id);
 
 -- The per-account minimum, on a database that kept one figure for the whole person instead.
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS minimum_balance_paise BIGINT NOT NULL DEFAULT 0;
+
+-- A holding that pays money back at an interval, on a database that predates post office schemes.
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_frequency TEXT;
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_amount_paise BIGINT;
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_day BIGINT;
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_account_id TEXT;
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_through TEXT;
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS investments_payout_frequency_check;
+ALTER TABLE investments ADD CONSTRAINT investments_payout_frequency_check
+  CHECK (payout_frequency IN ('monthly', 'quarterly', 'half_yearly', 'yearly'));
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS investments_payout_amount_paise_check;
+ALTER TABLE investments ADD CONSTRAINT investments_payout_amount_paise_check CHECK (payout_amount_paise > 0);
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS investments_payout_day_check;
+ALTER TABLE investments ADD CONSTRAINT investments_payout_day_check CHECK (payout_day BETWEEN 1 AND 31);
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS fk_investments_payout_account;
+ALTER TABLE investments ADD CONSTRAINT fk_investments_payout_account
+  FOREIGN KEY (payout_account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT;
+CREATE INDEX IF NOT EXISTS idx_investments_payout_account ON investments(payout_account_id);
+-- The type list, on a database that predates post office schemes.
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS investments_type_check;
+ALTER TABLE investments ADD CONSTRAINT investments_type_check
+  CHECK (type IN ('stocks', 'mutual_funds', 'gold', 'land', 'property', 'pf', 'fd', 'bonds', 'post_office', 'other'));
 
 -- Deny by default to anyone who does not bypass row level security.
 --

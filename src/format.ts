@@ -122,6 +122,13 @@ function localISODate(date: Date) {
   ].join("-");
 }
 
+/** A day of the month as it is spoken: 1st, 2nd, 3rd, 11th, 21st. */
+export function ordinalDay(day: number) {
+  const tens = day % 100;
+  const suffix = tens >= 11 && tens <= 13 ? "th" : ["th", "st", "nd", "rd"][day % 10] ?? "th";
+  return `${day}${suffix}`;
+}
+
 export function formatShortDate(dateLike: string | Date) {
   const date = typeof dateLike === "string" ? new Date(`${dateLike}T00:00:00`) : dateLike;
   return date.toLocaleDateString("en-IN", {

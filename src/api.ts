@@ -10,6 +10,7 @@ import type {
   CreateTransactionPayload,
   Investment,
   InvestmentType,
+  PayoutFrequency,
   Vacation,
   Loan,
   MonthlyReport,
@@ -23,6 +24,21 @@ import type {
   WealthSummary,
   UpcomingPayments
 } from "./types";
+
+/** A holding. A Post Office one brings its payout schedule and derives its own current value. */
+type InvestmentPayload = {
+  type: InvestmentType;
+  name: string;
+  investedPaise: number;
+  currentValuePaise?: number;
+  shares?: number;
+  purchaseDate?: string;
+  note?: string;
+  payoutFrequency?: PayoutFrequency;
+  payoutAmountPaise?: number;
+  payoutDay?: number;
+  payoutAccountId?: string;
+};
 
 type ApiOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
@@ -172,27 +188,10 @@ export const Api = {
   archiveSubscription: (id: string) =>
     api<{ ok: true; mode: "archived" }>(`/api/subscriptions/${id}`, { method: "DELETE" }),
   investments: () => api<Investment[]>("/api/investments"),
-  createInvestment: (body: {
-    type: InvestmentType;
-    name: string;
-    investedPaise: number;
-    currentValuePaise: number;
-    shares?: number;
-    purchaseDate?: string;
-    note?: string;
-  }) => api<Investment>("/api/investments", { method: "POST", body }),
-  updateInvestment: (
-    id: string,
-    body: Partial<{
-      type: InvestmentType;
-      name: string;
-      investedPaise: number;
-      currentValuePaise: number;
-      shares: number;
-      purchaseDate: string;
-      note: string;
-    }>
-  ) => api<Investment>(`/api/investments/${id}`, { method: "PATCH", body }),
+  createInvestment: (body: InvestmentPayload) =>
+    api<Investment>("/api/investments", { method: "POST", body }),
+  updateInvestment: (id: string, body: Partial<InvestmentPayload>) =>
+    api<Investment>(`/api/investments/${id}`, { method: "PATCH", body }),
   deleteInvestment: (id: string) => api<{ ok: true }>(`/api/investments/${id}`, { method: "DELETE" }),
   vacations: () => api<Vacation[]>("/api/vacations"),
   createVacation: (body: {
