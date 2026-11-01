@@ -48,6 +48,9 @@ import {
   formatINRCompact,
   formatINRWhole,
   formatMonth,
+  EARLIEST_DATE,
+  LATEST_DATE,
+  groupHoldingsByPeriod,
   formatShortDate,
   ordinalDay,
   mondayWeekRange,
@@ -103,9 +106,13 @@ import {
   AUTOPAY_SUBCATEGORY_ID,
   MUTUAL_FUNDS_SUBCATEGORY_ID,
   SELF_TRANSFER_SUBCATEGORY_ID,
+  DEFAULT_HOLDING_GROUPING,
+  HOLDING_GROUPINGS,
+  HOLDING_GROUPING_IDS,
   INVESTMENT_TYPES,
   PAYOUT_FREQUENCIES,
   isPayoutInvestmentType,
+  type HoldingGrouping,
   calculateEmiPaise
 } from "../shared/finance";
 
@@ -616,6 +623,23 @@ export default function App() {
   const categoryTypes = bootstrap?.categoryTypes ?? [];
   const categories = flattenSubcategories(categoryTypes);
   const profile = bootstrap?.profile ?? emptyProfile;
+  const holdingGrouping = (HOLDING_GROUPING_IDS.includes(bootstrap?.settings?.holding_grouping ?? "")
+    ? bootstrap?.settings?.holding_grouping
+    : DEFAULT_HOLDING_GROUPING) as HoldingGrouping;
+
+  const saveHoldingGrouping = useCallback(
+    async (next: HoldingGrouping) => {
+      try {
+        const settings = await Api.updateSettings({ holdingGrouping: next });
+        setBootstrap((current) => (current ? { ...current, settings } : current));
+        showNotice("Holdings grouping saved.");
+      } catch (err) {
+        showNotice(err instanceof Error ? err.message : "Could not save the setting.");
+      }
+    },
+    [showNotice]
+  );
+
   const cardAlertPercent = (() => {
     const parsed = Number(bootstrap?.settings?.card_utilization_alert_percent ?? "30");
     return Number.isFinite(parsed) && parsed >= 1 && parsed <= 100 ? Math.round(parsed) : 30;
@@ -811,6 +835,7 @@ export default function App() {
         <InvestmentsPage
                       investments={investments}
                       accounts={activeAccounts}
+                      grouping={holdingGrouping}
                       refresh={refresh}
                       showNotice={showNotice}
                       requestConfirm={requestConfirm}
@@ -884,6 +909,8 @@ export default function App() {
                       onProfileChange={setProfileDraft}
                       onSaveProfile={saveProfile}
                       onSaveCardAlert={saveCardAlert}
+                      holdingGrouping={holdingGrouping}
+                      onSaveHoldingGrouping={saveHoldingGrouping}
               onDownloadReport={() => setPrinting(true)}
               preparingReport={printing}
                       onThemeToggle={() =>
@@ -1791,6 +1818,8 @@ function WeeklyEntryPage({
                   type="date"
                   value={form.date}
                   onChange={(event) => setForm({ ...form, date: event.target.value })}
+                  min={EARLIEST_DATE}
+                  max={LATEST_DATE}
                   required
                 />
               </label>
@@ -2266,6 +2295,10 @@ function TransactionsPage({
   const [subcategoryId, setSubcategoryId] = useState(() => initialFilters.get("subcategoryId") ?? "");
   const [from, setFrom] = useState(() => initialFilters.get("from") ?? "");
   const [to, setTo] = useState(() => initialFilters.get("to") ?? "");
+  // Which rows are ticked for deleting together. Ids rather than indexes, so a reload or a filter
+  // change cannot turn a tick into a different transaction.
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [deletingSelection, setDeletingSelection] = useState(false);
   const [statusFilter, setStatusFilter] = useState(() =>
     initialFilters.get("status") === "uncategorized" ? "uncategorized" : ""
   );
@@ -2388,6 +2421,47 @@ function TransactionsPage({
     pendingDeletes.current.delete(id);
     setPendingDeleteIds((ids) => ids.filter((pendingId) => pendingId !== id));
     showNotice("Transaction restored.");
+  }
+
+  const visibleSelectedIds = () =>
+    selectedIds.filter((id) => visibleTransactions.some((transaction) => transaction.id === id));
+
+  function toggleSelected(id: string) {
+    setSelectedIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+    );
+  }
+
+  function deleteSelected() {
+    const ids = visibleSelectedIds();
+    if (!ids.length) return;
+    requestConfirm({
+      message: `Delete ${ids.length} transaction${ids.length === 1 ? "" : "s"}?`,
+      detail:
+        "They are removed for good, and the balances they moved go back to what they would have been. This one cannot be undone.",
+      confirmLabel: `Delete ${ids.length}`,
+      tone: "danger",
+      onConfirm: async () => {
+        setDeletingSelection(true);
+        try {
+          const result = await Api.deleteTransactions(ids);
+          setSelectedIds([]);
+          await loadPage();
+          await refresh();
+          // A transaction that refused says why -- an installment settled by a card payment is
+          // the usual one -- rather than disappearing from the count without explanation.
+          showNotice(
+            result.kept.length
+              ? `Deleted ${result.deleted}. ${result.kept.length} left: ${result.kept[0].reason}`
+              : `Deleted ${result.deleted} transaction${result.deleted === 1 ? "" : "s"}.`
+          );
+        } catch (err) {
+          showNotice(err instanceof Error ? err.message : "Could not delete those transactions.");
+        } finally {
+          setDeletingSelection(false);
+        }
+      }
+    });
   }
 
   function remove(transaction: Transaction) {
@@ -2638,11 +2712,11 @@ function TransactionsPage({
           </label>
           <label className="control-field toolbar-control">
             <span className="control-label">From</span>
-            <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+            <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={from} onChange={(event) => setFrom(event.target.value)} />
           </label>
           <label className="control-field toolbar-control">
             <span className="control-label">To</span>
-            <input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+            <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={to} onChange={(event) => setTo(event.target.value)} />
           </label>
           <button
             onClick={() => {
@@ -2731,6 +2805,38 @@ function TransactionsPage({
         </div>
       )}
 
+      {/* Only once something is ticked: an empty bar would be a permanent invitation to delete. */}
+      {visibleSelectedIds().length > 0 && (
+        <div className="selection-bar" role="region" aria-label="Selected transactions">
+          <label className="transaction-select">
+            <input
+              type="checkbox"
+              checked={visibleSelectedIds().length === visibleTransactions.length}
+              onChange={(event) =>
+                setSelectedIds(event.target.checked ? visibleTransactions.map((item) => item.id) : [])
+              }
+              aria-label="Select every transaction shown"
+            />
+          </label>
+          <strong>
+            {visibleSelectedIds().length} selected
+            {visibleSelectedIds().length === visibleTransactions.length ? " (all shown)" : ""}
+          </strong>
+          <button type="button" className="secondary-action" onClick={() => setSelectedIds([])}>
+            Clear
+          </button>
+          <button
+            type="button"
+            className="secondary-action danger-action"
+            onClick={deleteSelected}
+            disabled={deletingSelection}
+          >
+            <Trash2 size={16} />
+            {deletingSelection ? "Deleting…" : "Delete selected"}
+          </button>
+        </div>
+      )}
+
       <div className="ledger-list">
         {loadingTransactions && visibleTransactions.length === 0 ? (
           <PanelLoader label="Loading transactions" />
@@ -2759,7 +2865,17 @@ function TransactionsPage({
                     onDelete={() => remove(transaction)}
                   />
                 ) : (
-                  <div className="ledger-row transaction-row-card">
+                  <div
+                    className={`ledger-row transaction-row-card${selectedIds.includes(transaction.id) ? " selected" : ""}`}
+                  >
+                    <label className="transaction-select">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(transaction.id)}
+                        onChange={() => toggleSelected(transaction.id)}
+                        aria-label={`Select ${transaction.merchant || transaction.note || "transaction"} of ${formatINR(transaction.amountPaise)} on ${formatShortDate(transaction.date)}`}
+                      />
+                    </label>
                     <div className="transaction-primary-cell">
                       <strong>{transaction.merchant || transaction.note || "Untitled transaction"}</strong>
                       <span>
@@ -2847,6 +2963,8 @@ function TransactionsPage({
                         type="date"
                         value={refundDraft.date}
                         onChange={(event) => setRefundDraft({ ...refundDraft, date: event.target.value })}
+                        min={EARLIEST_DATE}
+                        max={LATEST_DATE}
                       />
                     </label>
                     <div className="refund-form-actions">
@@ -2933,7 +3051,7 @@ function TransactionEditRow({
         <label>
           Date
           <input
-            type="date"
+            type="date" min={EARLIEST_DATE} max={LATEST_DATE}
             value={draft.date}
             onChange={(event) => onChange({ ...draft, date: event.target.value })}
           />
@@ -3462,11 +3580,11 @@ function ReportsPage({
           <div className="report-filters">
             <label>
               From
-              <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+              <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={from} onChange={(event) => setFrom(event.target.value)} />
             </label>
             <label>
               To
-              <input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+              <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={to} onChange={(event) => setTo(event.target.value)} />
             </label>
           </div>
         }
@@ -5056,12 +5174,14 @@ function LoanCard({
 function InvestmentsPage({
   investments,
   accounts,
+  grouping,
   refresh,
   showNotice,
   requestConfirm
 }: {
   investments: Investment[];
   accounts: Account[];
+  grouping: HoldingGrouping;
   refresh: () => Promise<void>;
   showNotice: (message: string) => void;
   requestConfirm: (request: ConfirmRequest) => void;
@@ -5077,10 +5197,6 @@ function InvestmentsPage({
     type,
     items: investments.filter((item) => item.type === type.id)
   })).filter((group) => group.items.length > 0);
-  const lastUpdated = investments.reduce(
-    (latest, item) => (item.updatedAt > latest ? item.updatedAt : latest),
-    ""
-  );
 
   // Grouped by type by default; picking one type opens up its own holdings.
   const chartType = INVESTMENT_TYPES.find((type) => type.id === chartTypeId) ?? null;
@@ -5125,15 +5241,6 @@ function InvestmentsPage({
         />
       </section>
 
-      {lastUpdated && (
-        <p className="helper-text investments-asof">
-          <Info size={14} />
-          Values are entered manually. Figures reflect what you last saved on{" "}
-          {formatDateWithYear(lastUpdated.slice(0, 10))}. SIPs you log against a mutual fund are added to it
-          automatically.
-        </p>
-      )}
-
       <div className="two-column loans-layout">
         <div className="section-column">
         <Panel title="Portfolio">
@@ -5146,6 +5253,7 @@ function InvestmentsPage({
                   key={group.type.id}
                   type={group.type}
                   items={group.items}
+                  grouping={grouping}
                   onEdit={setEditing}
                   onDelete={remove}
                 />
@@ -5275,6 +5383,14 @@ function InvestmentCard({
         </p>
       )}
 
+      {investment.sipAmountPaise != null && (
+        <p className="investment-note">
+          SIP of {formatINR(investment.sipAmountPaise)} from {investment.sipAccountName ?? "your bank"}
+          {investment.sipDay ? ` · ${ordinalDay(investment.sipDay)} of the month` : ""}
+          {investment.nextSipDate ? ` · next ${formatDateWithYear(investment.nextSipDate)}` : ""}
+        </p>
+      )}
+
       {pays && investment.payoutEndDate && (
         <p className="investment-note">
           {investment.nextPayoutDate ? "Pays until" : "Stopped paying on"}{" "}
@@ -5314,11 +5430,13 @@ function InvestmentCard({
 function InvestmentGroup({
   type,
   items,
+  grouping,
   onEdit,
   onDelete
 }: {
   type: { id: string; label: string; icon: string; color: string };
   items: Investment[];
+  grouping: HoldingGrouping;
   onEdit: (investment: Investment) => void;
   onDelete: (investment: Investment) => void;
 }) {
@@ -5365,13 +5483,22 @@ function InvestmentGroup({
         <ChevronDown className={`investment-group-chevron ${expanded ? "expanded" : ""}`} size={20} />
       </button>
 
-      {expanded && (
-        <div className="loan-card-grid">
-          {items.map((investment) => (
-            <InvestmentCard key={investment.id} investment={investment} onEdit={onEdit} onDelete={onDelete} />
-          ))}
-        </div>
-      )}
+      {expanded &&
+        groupHoldingsByPeriod(items, grouping).map((period) => (
+          <div className="investment-period" key={period.key}>
+            {period.label && (
+              <h4 className="investment-period-head">
+                {period.label}
+                <span className="investment-group-count">{period.items.length}</span>
+              </h4>
+            )}
+            <div className="loan-card-grid">
+              {period.items.map((investment) => (
+                <InvestmentCard key={investment.id} investment={investment} onEdit={onEdit} onDelete={onDelete} />
+              ))}
+            </div>
+          </div>
+        ))}
     </div>
   );
 }
@@ -5408,12 +5535,20 @@ function InvestmentForm({
     investment?.payoutAccountId ?? bankAccounts[0]?.id ?? ""
   );
   const [payoutEndDate, setPayoutEndDate] = useState(investment?.payoutEndDate ?? "");
+  const [sipMode, setSipMode] = useState(investment?.sipAmountPaise != null ? "sip" : "lumpsum");
+  const [sipAmount, setSipAmount] = useState(
+    investment?.sipAmountPaise != null ? amountInputFromPaise(investment.sipAmountPaise) : ""
+  );
+  const [sipDay, setSipDay] = useState(String(investment?.sipDay ?? 1));
+  const [sipAccountId, setSipAccountId] = useState(investment?.sipAccountId ?? bankAccounts[0]?.id ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   // A post office scheme, a fixed deposit and a bond all keep the money where it is and pay the
   // interest into a bank, so each is described by a schedule rather than by a current value
   // anyone has to keep up to date.
   const pays = isPayoutInvestmentType(type);
+  // A fund can be bought in one go or a little each month. Only the second needs a schedule.
+  const isSip = type === "mutual_funds" && sipMode === "sip";
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -5436,6 +5571,11 @@ function InvestmentForm({
         setSaving(false);
         return;
       }
+      if (isSip && !sipAccountId) {
+        setError("Choose the bank the SIP comes from.");
+        setSaving(false);
+        return;
+      }
       const payload = {
         type,
         name: name.trim(),
@@ -5449,7 +5589,10 @@ function InvestmentForm({
         payoutAmountPaise: pays ? parseAmountToPaise(payoutAmount) : undefined,
         payoutDay: pays ? Number(payoutDay) : undefined,
         payoutAccountId: pays ? payoutAccountId : undefined,
-        payoutEndDate: pays ? payoutEndDate : undefined
+        payoutEndDate: pays ? payoutEndDate : undefined,
+        sipAmountPaise: isSip ? parseAmountToPaise(sipAmount) : undefined,
+        sipDay: isSip ? Number(sipDay) : undefined,
+        sipAccountId: isSip ? sipAccountId : undefined
       };
       if (investment) {
         // A note saved before this field was removed is left as it is.
@@ -5514,7 +5657,7 @@ function InvestmentForm({
             </select>
           </label>
           <label>
-            Amount credited
+            Interest amount
             <input
               value={payoutAmount}
               onChange={(event) => setPayoutAmount(event.target.value)}
@@ -5544,12 +5687,25 @@ function InvestmentForm({
               ))}
             </select>
           </label>
+          {/* The two ends of the holding's life, in the order they happen. */}
+          <label>
+            Date invested
+            <input
+              type="date"
+              value={purchaseDate}
+              onChange={(event) => setPurchaseDate(event.target.value)}
+              min={EARLIEST_DATE}
+              max={LATEST_DATE}
+            />
+          </label>
           <label>
             Last day it pays
             <input
               type="date"
               value={payoutEndDate}
               onChange={(event) => setPayoutEndDate(event.target.value)}
+              min={EARLIEST_DATE}
+              max={LATEST_DATE}
               required
             />
           </label>
@@ -5560,11 +5716,57 @@ function InvestmentForm({
         </>
       )}
       {type === "mutual_funds" && (
-        <p className="field-hint investment-form-hint">
-          {investment
-            ? "These include SIPs you've logged. Change a figure only to match your statement; SIPs logged after today are added on top."
-            : "SIPs you log against this fund after today are added to both figures automatically."}
-        </p>
+        <>
+          <label>
+            How do you invest?
+            <select value={sipMode} onChange={(event) => setSipMode(event.target.value)}>
+              <option value="lumpsum">Lump sum</option>
+              <option value="sip">SIP</option>
+            </select>
+          </label>
+          {isSip && (
+            <>
+              <label>
+                Monthly investment
+                <input
+                  value={sipAmount}
+                  onChange={(event) => setSipAmount(event.target.value)}
+                  placeholder="₹0"
+                  inputMode="decimal"
+                  required
+                />
+              </label>
+              <label>
+                SIP date
+                <select value={sipDay} onChange={(event) => setSipDay(event.target.value)}>
+                  {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
+                    <option key={day} value={String(day)}>
+                      {ordinalDay(day)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Paid from
+                <select value={sipAccountId} onChange={(event) => setSipAccountId(event.target.value)} required>
+                  <option value="">Choose bank</option>
+                  {bankAccounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
+          <p className="field-hint investment-form-hint">
+            {isSip
+              ? "Each instalment is taken from that account on its day, from today onwards, but only when the balance covers it — and it raises what this fund has invested."
+              : investment
+                ? "These include SIPs you've logged. Change a figure only to match your statement; SIPs logged after today are added on top."
+                : "SIPs you log against this fund after today are added to both figures automatically."}
+          </p>
+        </>
       )}
       {type === "stocks" && (
         <label>
@@ -5580,10 +5782,18 @@ function InvestmentForm({
           />
         </label>
       )}
-      <label>
-        Date invested
-        <input type="date" value={purchaseDate} onChange={(event) => setPurchaseDate(event.target.value)} />
-      </label>
+      {!pays && (
+        <label>
+          Date invested
+          <input
+            type="date"
+            value={purchaseDate}
+            onChange={(event) => setPurchaseDate(event.target.value)}
+            min={EARLIEST_DATE}
+            max={LATEST_DATE}
+          />
+        </label>
+      )}
       {error && <p className="form-error">{error}</p>}
       <div className="loan-form-actions">
         {onCancel && (
@@ -5858,11 +6068,11 @@ function VacationForm({
       <div className="form-pair">
         <label>
           Start date (optional)
-          <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+          <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={startDate} onChange={(event) => setStartDate(event.target.value)} />
         </label>
         <label>
           End date (optional)
-          <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+          <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={endDate} onChange={(event) => setEndDate(event.target.value)} />
         </label>
       </div>
       <label>
@@ -6154,7 +6364,7 @@ function SubscriptionForm({
       </label>
       <label>
         Start date
-        <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} required />
+        <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={startDate} onChange={(event) => setStartDate(event.target.value)} required />
       </label>
       <label>
         Duration
@@ -7465,9 +7675,11 @@ function ProfilePage({
   theme,
   saving,
   cardAlertPercent,
+  holdingGrouping,
   onProfileChange,
   onSaveProfile,
   onSaveCardAlert,
+  onSaveHoldingGrouping,
   onDownloadReport,
   preparingReport,
   onThemeToggle,
@@ -7484,9 +7696,11 @@ function ProfilePage({
   theme: Theme;
   saving: boolean;
   cardAlertPercent: number;
+  holdingGrouping: HoldingGrouping;
   onProfileChange: (profile: UserProfile) => void;
   onSaveProfile: () => Promise<void> | void;
   onSaveCardAlert: (percent: number) => Promise<void> | void;
+  onSaveHoldingGrouping: (grouping: HoldingGrouping) => Promise<void> | void;
   onDownloadReport: () => void;
   preparingReport: boolean;
   onThemeToggle: () => void;
@@ -7622,6 +7836,22 @@ function ProfilePage({
                 Watch intro
               </button>
             </div>
+          </div>
+          <div className="settings-row">
+            <span>Holdings in a type</span>
+            <select
+              className="settings-select"
+              aria-label="How holdings are listed inside an investment type"
+              value={holdingGrouping}
+              onChange={(event) => void onSaveHoldingGrouping(event.target.value as HoldingGrouping)}
+            >
+              {HOLDING_GROUPINGS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <small>How a type's holdings are listed when you open it on the Investments page.</small>
           </div>
           <div className="settings-row card-alert-row">
             <span>Card utilization alert</span>
@@ -7973,6 +8203,7 @@ function UpcomingPaymentsList({
   const groups = [
     { kind: "autopay" as const, title: "AutoPay", icon: <CalendarClock size={16} /> },
     { kind: "loan" as const, title: "Loans", icon: <Landmark size={16} /> },
+    { kind: "sip" as const, title: "Fund instalments", icon: <TrendingUp size={16} /> },
     { kind: "card" as const, title: "Credit card payments", icon: <CreditCard size={16} /> }
   ]
     .map((group) => ({ ...group, items: upcoming.items.filter((item) => item.kind === group.kind) }))

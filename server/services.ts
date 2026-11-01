@@ -408,6 +408,9 @@ export async function updateAppSettings(input: UpdateSettingsInput) {
   if (parsed.cardUtilizationAlertPercent !== undefined) {
     await setSetting("card_utilization_alert_percent", String(parsed.cardUtilizationAlertPercent));
   }
+  if (parsed.holdingGrouping !== undefined) {
+    await setSetting("holding_grouping", parsed.holdingGrouping);
+  }
   return getSettings();
 }
 
@@ -875,6 +878,10 @@ type InvestmentRow = {
   payout_account_id: string | null;
   payout_through: string | null;
   payout_end_date: string | null;
+  sip_amount_paise: number | null;
+  sip_day: number | null;
+  sip_account_id: string | null;
+  sip_through: string | null;
 };
 
 export type InvestmentSummary = {
@@ -907,6 +914,12 @@ export type InvestmentSummary = {
   payoutAccountName: string | null;
   /** The final day this pays interest. A credit falling on it is paid; none after it. */
   payoutEndDate: string | null;
+  /** A fund bought by instalments: how much each month, on which day, and from which bank. */
+  sipAmountPaise: number | null;
+  sipDay: number | null;
+  sipAccountId: string | null;
+  sipAccountName: string | null;
+  nextSipDate: string | null;
   /** What it has credited so far, and when the next credit falls due. */
   payoutCreditedPaise: number;
   payoutCreditCount: number;
@@ -926,7 +939,7 @@ export type InvestmentSummary = {
 const INVESTMENT_COLUMNS =
   "id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, created_at, updated_at, " +
   "invested_as_of, value_as_of, payout_frequency, payout_amount_paise, payout_day, payout_account_id, " +
-  "payout_through, payout_end_date";
+  "payout_through, payout_end_date, sip_amount_paise, sip_day, sip_account_id, sip_through";
 
 export async function listInvestments(): Promise<InvestmentSummary[]> {
   const rows = asRecords<InvestmentRow>(
@@ -953,8 +966,8 @@ export async function createInvestment(input: CreateInvestmentInput): Promise<In
     `INSERT INTO investments
        (id, type, name, invested_paise, current_value_paise, shares, purchase_date, note, invested_as_of,
         value_as_of, payout_frequency, payout_amount_paise, payout_day, payout_account_id, payout_through,
-        payout_end_date, user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        payout_end_date, sip_amount_paise, sip_day, sip_account_id, sip_through, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     parsed.type,
@@ -966,19 +979,39 @@ export async function createInvestment(input: CreateInvestmentInput): Promise<In
     parsed.shares ?? null,
     parsed.purchaseDate ?? null,
     parsed.note ?? null,
-    currentIsoDate(),
-    currentIsoDate(),
+    // The figures are as they stand before any instalment this fund takes. A SIP taken today is
+    // money that left the bank after they were entered, so it has to count on top of them rather
+    // than be assumed to be inside them.
+    parsed.sipAmountPaise ? previousDay(currentIsoDate()) : currentIsoDate(),
+    parsed.sipAmountPaise ? previousDay(currentIsoDate()) : currentIsoDate(),
     parsed.payoutFrequency ?? null,
     parsed.payoutAmountPaise ?? null,
     parsed.payoutDay ?? null,
     parsed.payoutAccountId ?? null,
-    // Counted from the day the money went in: a holding added months late catches up at once.
-    isPayoutInvestmentType(parsed.type) ? startDate : null,
+    // Counted from today, not from the day the money went in. A scheme entered years after it
+    // started would otherwise be credited for every month since, and those are records of money
+    // nobody watched arrive: the app would be inventing a history rather than keeping one. Only
+    // what falls due from here on is written. A holding whose first payment is still ahead counts
+    // from its own start, which is later.
+    isPayoutInvestmentType(parsed.type) ? laterOf(startDate, currentIsoDate()) : null,
     parsed.payoutEndDate ?? null,
+    parsed.sipAmountPaise ?? null,
+    parsed.sipDay ?? null,
+    parsed.sipAccountId ?? null,
+    // From the day before the first instalment it may pay, so today's goes out today while a
+    // fund entered years after its SIP began is not charged for every month since -- out of an
+    // account that never saw that money leave.
+    parsed.sipAmountPaise
+      ? previousDay(laterOf(parsed.purchaseDate ?? currentIsoDate(), currentIsoDate()))
+      : null,
     currentUserId()
   ));
   if (isPayoutInvestmentType(parsed.type)) {
     await catchUpPayoutCredits();
+  }
+  if (parsed.sipAmountPaise) {
+    await requireDebitAccount(parsed.sipAccountId as string);
+    await catchUpSipInstalments();
   }
   return requireInvestmentSummary(id);
 }
@@ -1017,7 +1050,10 @@ export async function updateInvestment(id: string, input: UpdateInvestmentInput)
     payoutAmountPaise: patch.payoutAmountPaise ??(await existing).payout_amount_paise,
     payoutDay: patch.payoutDay ??(await existing).payout_day,
     payoutAccountId: patch.payoutAccountId ??(await existing).payout_account_id,
-    payoutEndDate: patch.payoutEndDate ??(await existing).payout_end_date
+    payoutEndDate: patch.payoutEndDate ??(await existing).payout_end_date,
+    sipAmountPaise: patch.sipAmountPaise ??(await existing).sip_amount_paise,
+    sipDay: patch.sipDay ??(await existing).sip_day,
+    sipAccountId: patch.sipAccountId ??(await existing).sip_account_id
   };
   if (patch.payoutAccountId) {
     await requirePayoutAccount(patch.payoutAccountId);
@@ -1026,7 +1062,8 @@ export async function updateInvestment(id: string, input: UpdateInvestmentInput)
     `UPDATE investments
      SET type = ?, name = ?, invested_paise = ?, current_value_paise = ?, shares = ?, purchase_date = ?, note = ?,
          invested_as_of = ?, value_as_of = ?, payout_frequency = ?, payout_amount_paise = ?, payout_day = ?,
-         payout_account_id = ?, payout_end_date = ?, updated_at = CURRENT_TIMESTAMP
+         payout_account_id = ?, payout_end_date = ?, sip_amount_paise = ?, sip_day = ?,
+         sip_account_id = ?, sip_through = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ? AND user_id = ?`
   ).run(
     merged.type,
@@ -1043,9 +1080,20 @@ export async function updateInvestment(id: string, input: UpdateInvestmentInput)
     merged.payoutDay,
     merged.payoutAccountId,
     merged.payoutEndDate,
+    merged.sipAmountPaise,
+    merged.sipDay,
+    merged.sipAccountId,
+    // A schedule attached today starts today, not at the fund's first month.
+    (await existing).sip_through ??
+      (merged.sipAmountPaise
+        ? previousDay(laterOf(merged.purchaseDate ?? currentIsoDate(), currentIsoDate()))
+        : null),
     id,
     currentUserId()
   ));
+  if (merged.sipAmountPaise && merged.sipAccountId) {
+    await catchUpSipInstalments();
+  }
   return requireInvestmentSummary(id);
 }
 
@@ -1252,6 +1300,123 @@ export async function catchUpPayoutCredits(today = currentIsoDate()) {
   return { created };
 }
 
+/** The days a fund's instalment goes out on, after `afterDate` and up to `through`. */
+function sipDueDates(row: InvestmentRow, afterDate: string, through: string) {
+  if (!row.sip_day || !row.sip_amount_paise) {
+    return [];
+  }
+  const start = row.purchase_date ?? localIsoDateFromSqliteTimestamp(row.created_at);
+  const anchor = addMonthsToIsoDate(`${start.slice(0, 7)}-${String(row.sip_day).padStart(2, "0")}`, 0);
+  const dates: string[] = [];
+  for (let month = 0; month <= 1200; month += 1) {
+    const due = addMonthsToIsoDate(anchor, month);
+    if (due > through) break;
+    if (due > afterDate) dates.push(due);
+  }
+  return dates;
+}
+
+/** The next instalment still to come, for the fund to show. */
+function nextSipDueDate(row: InvestmentRow) {
+  if (!row.sip_day || !row.sip_amount_paise) {
+    return null;
+  }
+  const start = row.purchase_date ?? localIsoDateFromSqliteTimestamp(row.created_at);
+  const anchor = addMonthsToIsoDate(`${start.slice(0, 7)}-${String(row.sip_day).padStart(2, "0")}`, 0);
+  const today = currentIsoDate();
+  for (let month = 0; month <= 1200; month += 1) {
+    const due = addMonthsToIsoDate(anchor, month);
+    if (due > today) return due;
+  }
+  return null;
+}
+
+/** The oldest instalment a fund owes that its bank cannot cover, if there is one. */
+async function heldBackSip(row: InvestmentRow, today: string) {
+  if (!row.sip_amount_paise || !row.sip_account_id) return null;
+  const due = sipDueDates(row, row.sip_through ?? today, today);
+  if (!due.length) return null;
+  const account = await getAccountRow(row.sip_account_id);
+  if (!account) return null;
+  const balance = (await mapAccountWithBalance(account)).balancePaise;
+  if (balance >= row.sip_amount_paise) return null;
+  return { dueDate: due[0], accountName: account.name };
+}
+
+/**
+ * Put through every fund instalment that has fallen due, from the bank it comes out of.
+ *
+ * The same rules as an AutoPay, for the same reason: this spends money without being asked. It
+ * takes only what the balance covers at the moment it runs, writes nothing it cannot afford,
+ * never takes a month twice, and never back-dates -- a fund entered years after its SIP started
+ * is charged from today, not from its first instalment. Each one is linked to the fund, so what
+ * the fund has invested and what it is worth both rise by it, exactly as a SIP logged by hand.
+ */
+export async function catchUpSipInstalments(today = currentIsoDate()) {
+  const rows = asRecords<InvestmentRow>(
+    (await db
+      .prepare(
+        `SELECT ${INVESTMENT_COLUMNS} FROM investments
+         WHERE user_id = ? AND sip_amount_paise IS NOT NULL AND sip_account_id IS NOT NULL
+         ORDER BY created_at, id`
+      )
+      .all(currentUserId()))
+  );
+
+  let paid = 0;
+  for (const row of rows) {
+    const due = sipDueDates(row, row.sip_through ?? today, today);
+    if (!due.length) continue;
+
+    const paidMonths = new Set(
+      asRecords<{ month: string }>(
+        (await db
+          .prepare(
+            `SELECT DISTINCT substr(t.date, 1, 7) AS month
+             FROM investment_payments ip JOIN transactions t ON t.id = ip.transaction_id AND t.user_id = ip.user_id
+             WHERE ip.investment_id = ? AND ip.user_id = ? AND t.direction = 'outflow'`
+          )
+          .all(row.id, currentUserId()))
+      ).map((item) => item.month)
+    );
+
+    let through = row.sip_through;
+    for (const date of due) {
+      if (paidMonths.has(date.slice(0, 7))) {
+        through = date;
+        continue;
+      }
+      const balance = (await mapAccountWithBalance(await requireAccount(row.sip_account_id as string))).balancePaise;
+      if (balance < (row.sip_amount_paise as number)) {
+        break;
+      }
+      await transaction(async () => {
+        await insertValidatedTransaction(
+          createTransactionSchema.parse({
+            date,
+            accountId: row.sip_account_id,
+            method: "bank_transfer",
+            merchant: row.name,
+            subcategoryId: MUTUAL_FUNDS_SUBCATEGORY_ID,
+            amountPaise: row.sip_amount_paise,
+            direction: "outflow",
+            kind: "investment",
+            investmentId: row.id
+          })
+        );
+      });
+      through = date;
+      paid += 1;
+    }
+    if (through && through !== row.sip_through) {
+      (await db
+        .prepare("UPDATE investments SET sip_through = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?")
+        .run(through, row.id, currentUserId()));
+    }
+  }
+  return { paid };
+}
+
 /**
  * Invested and Current value as the user entered them, plus every linked SIP dated after the
  * day each figure was entered. A SIP on or before that day is assumed to be in the entered
@@ -1267,6 +1432,7 @@ async function mapInvestment(row: InvestmentRow): Promise<InvestmentSummary> {
   const sipsForValue =await  await valueAsOf === investedAsOf ? sipsForInvested : await linkedSipsAfter(row.id, valueAsOf);
   const credits = await payoutCreditsFor(row);
   const payoutAccount = row.payout_account_id ? await getAccountRow(row.payout_account_id) : undefined;
+  const sipAccount = row.sip_account_id ? await getAccountRow(row.sip_account_id) : undefined;
   const investedPaise = row.invested_paise +sipsForInvested.total;
   // A paying holding is worth the money still with the scheme plus everything it has paid back,
   // so its gain is the interest actually received rather than a figure anyone has to maintain.
@@ -1304,6 +1470,11 @@ async function mapInvestment(row: InvestmentRow): Promise<InvestmentSummary> {
     payoutAccountId: row.payout_account_id,
     payoutAccountName: payoutAccount?.name ?? null,
     payoutEndDate: row.payout_end_date,
+    sipAmountPaise: row.sip_amount_paise,
+    sipDay: row.sip_day,
+    sipAccountId: row.sip_account_id,
+    sipAccountName: sipAccount?.name ?? null,
+    nextSipDate: row.sip_amount_paise ? nextSipDueDate(row) : null,
     payoutCreditedPaise: credits.total,
     payoutCreditCount: credits.count,
     nextPayoutDate: isPayoutInvestment(row) ? nextPayoutDueDate(row) : null,
@@ -2359,6 +2530,37 @@ export async function deleteTransaction(id: string) {
   return { ok: true };
 }
 
+/**
+ * Delete a set of transactions in one go.
+ *
+ * Each goes through the single deletion, so everything that hangs off a transaction -- a card
+ * payment's installments, a loan's schedule, a holding's figures -- is brought up to date exactly
+ * as it would be one at a time. One that refuses is reported rather than taking the rest down
+ * with it: a selection of thirty should not be lost because the twelfth is an installment that
+ * belongs to a card payment.
+ */
+export async function deleteTransactions(ids: string[]) {
+  const unique = [...new Set(ids)];
+  if (!unique.length) {
+    throw badRequest("Choose at least one transaction to delete.");
+  }
+  if (unique.length > 500) {
+    throw badRequest("That is more than 500 transactions. Delete them in smaller batches.");
+  }
+
+  let deleted = 0;
+  const kept: Array<{ id: string; reason: string }> = [];
+  for (const id of unique) {
+    try {
+      await deleteTransaction(id);
+      deleted += 1;
+    } catch (error) {
+      kept.push({ id, reason: error instanceof Error ? error.message : "Could not be deleted." });
+    }
+  }
+  return { deleted, kept };
+}
+
 export async function getOverview(accountId?: string, month = currentMonth()) {
   const accounts = (await listAccounts()).filter((account) => !account.isArchived);
   const scopedAccounts = accountId
@@ -2584,7 +2786,7 @@ export async function getWealthSummary(): Promise<WealthSummary> {
 
 export type UpcomingPayment = {
   id: string;
-  kind: "autopay" | "loan" | "card";
+  kind: "autopay" | "sip" | "loan" | "card";
   name: string;
   dueDate: string;
   daysAway: number;
@@ -2700,6 +2902,46 @@ export async function getUpcomingPayments(windowDays = 14, today = currentIsoDat
       });
     } else if (due) {
       items.push({ id: subscription.id, kind: "autopay", name: subscription.name, amountPaise: subscription.amountPaise, ...due });
+    }
+  }
+
+  // A fund bought by instalments, listed when its next one is near and marked when its bank did
+  // not cover the one already due.
+  for (const fund of asRecords<InvestmentRow>(
+    (await db
+      .prepare(
+        `SELECT ${INVESTMENT_COLUMNS} FROM investments
+         WHERE user_id = ? AND sip_amount_paise IS NOT NULL AND sip_account_id IS NOT NULL
+         ORDER BY created_at, id`
+      )
+      .all(currentUserId()))
+  )) {
+    const held = await heldBackSip(fund, today);
+    if (held) {
+      items.push({
+        id: fund.id,
+        kind: "sip",
+        name: fund.name,
+        amountPaise: fund.sip_amount_paise as number,
+        dueDate: held.dueDate,
+        daysAway: daysBetween(today, held.dueDate),
+        notCoveredBy: held.accountName
+      });
+      continue;
+    }
+    const next = nextSipDueDate(fund);
+    if (next) {
+      const away = daysBetween(today, next);
+      if (away >= 0 && away <= windowDays) {
+        items.push({
+          id: fund.id,
+          kind: "sip",
+          name: fund.name,
+          amountPaise: fund.sip_amount_paise as number,
+          dueDate: next,
+          daysAway: away
+        });
+      }
     }
   }
 

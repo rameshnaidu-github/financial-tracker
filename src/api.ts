@@ -1,3 +1,4 @@
+import type { HoldingGrouping } from "../shared/finance.ts";
 import type {
   Account,
   AutopaySubscription,
@@ -39,6 +40,9 @@ type InvestmentPayload = {
   payoutDay?: number;
   payoutAccountId?: string;
   payoutEndDate?: string;
+  sipAmountPaise?: number;
+  sipDay?: number;
+  sipAccountId?: string;
 };
 
 type ApiOptions = Omit<RequestInit, "body"> & {
@@ -94,7 +98,7 @@ export const Api = {
   profile: () => api<UserProfile>("/api/profile"),
   updateProfile: (body: Partial<UserProfile>) =>
     api<UserProfile>("/api/profile", { method: "PATCH", body }),
-  updateSettings: (body: { cardUtilizationAlertPercent?: number }) =>
+  updateSettings: (body: { cardUtilizationAlertPercent?: number; holdingGrouping?: HoldingGrouping }) =>
     api<Record<string, string>>("/api/settings", { method: "PATCH", body }),
   wealth: () => api<WealthSummary>("/api/wealth"),
   upcoming: (windowDays = 7) =>
@@ -247,6 +251,11 @@ export const Api = {
     }),
   deleteTransaction: (id: string) =>
     api<{ ok: true }>(`/api/transactions/${id}`, { method: "DELETE" }),
+  deleteTransactions: (ids: string[]) =>
+    api<{ deleted: number; kept: Array<{ id: string; reason: string }> }>("/api/transactions/bulk-delete", {
+      method: "POST",
+      body: { ids }
+    }),
   monthlyReport: (accountId?: string, month?: string, from?: string, to?: string) => {
     const params = new URLSearchParams();
     if (accountId) params.set("accountId", accountId);

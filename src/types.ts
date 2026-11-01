@@ -253,7 +253,7 @@ export type Overview = {
 
 export type UpcomingPayment = {
   id: string;
-  kind: "autopay" | "loan" | "card";
+  kind: "autopay" | "sip" | "loan" | "card";
   name: string;
   dueDate: string;
   daysAway: number;
@@ -359,8 +359,14 @@ export type Investment = {
   payoutDay: number | null;
   payoutAccountId: string | null;
   payoutAccountName: string | null;
-  /** The last day this pays interest. Nothing is credited on or after it. */
+  /** The final day this pays interest. A credit falling on it is paid; none after it. */
   payoutEndDate: string | null;
+  /** A fund bought by instalments: how much each month, on which day, and from which bank. */
+  sipAmountPaise: number | null;
+  sipDay: number | null;
+  sipAccountId: string | null;
+  sipAccountName: string | null;
+  nextSipDate: string | null;
   payoutCreditedPaise: number;
   payoutCreditCount: number;
   nextPayoutDate: string | null;

@@ -457,8 +457,44 @@ const investmentObjectSchema = z.object({
   payoutAmountPaise: positivePaiseSchema.optional(),
   payoutDay: z.number().int().min(1).max(31).optional(),
   payoutAccountId: idSchema.optional(),
-  payoutEndDate: dateSchema.optional()
+  payoutEndDate: dateSchema.optional(),
+  sipAmountPaise: positivePaiseSchema.optional(),
+  sipDay: z.number().int().min(1).max(31).optional(),
+  sipAccountId: idSchema.optional()
 });
+
+/** The type whose holdings can be bought a little each month. */
+export const SIP_INVESTMENT_TYPE = "mutual_funds";
+
+/**
+ * A fund bought by instalments needs every part of the schedule, and a holding that is not a fund
+ * must not carry one. Half a schedule would take nothing, which is worse than taking nothing on
+ * purpose: it would look set up.
+ */
+function checkSipFields(
+  value: { type?: string; sipAmountPaise?: number; sipDay?: number; sipAccountId?: string },
+  ctx: z.RefinementCtx
+) {
+  const parts = [
+    ["sipAmountPaise", value.sipAmountPaise, "how much goes in each month"],
+    ["sipDay", value.sipDay, "the day it goes in"],
+    ["sipAccountId", value.sipAccountId, "the bank it comes from"]
+  ] as const;
+  const given = parts.filter(([, item]) => item !== undefined);
+
+  if (value.type !== SIP_INVESTMENT_TYPE) {
+    for (const [path] of given) {
+      ctx.addIssue({ code: "custom", path: [path], message: "Only a mutual fund can be bought as a SIP." });
+    }
+    return;
+  }
+  if (!given.length) return;
+  for (const [path, item, what] of parts) {
+    if (item === undefined) {
+      ctx.addIssue({ code: "custom", path: [path], message: `A SIP needs ${what}.` });
+    }
+  }
+}
 
 /**
  * A paying holding needs every part of its schedule or it cannot pay anything out, and a holding
@@ -512,6 +548,7 @@ function checkPayoutFields(
 
 export const createInvestmentSchema = investmentObjectSchema.superRefine((value, ctx) => {
   checkPayoutFields(value, ctx, true);
+  checkSipFields(value, ctx);
   // A scheme that stopped paying before the money went in has nothing it could ever credit.
   if (value.payoutEndDate && value.purchaseDate && value.payoutEndDate <= value.purchaseDate) {
     ctx.addIssue({
@@ -531,6 +568,7 @@ export const createInvestmentSchema = investmentObjectSchema.superRefine((value,
 
 export const updateInvestmentSchema = investmentObjectSchema
   .partial()
+  .superRefine((value, ctx) => checkSipFields(value, ctx))
   .refine((value) => Object.keys(value).length > 0, "No investment changes provided.");
 
 export const createVacationSchema = z.object({
@@ -552,9 +590,25 @@ export const updateVacationSchema = z
   })
   .refine((value) => Object.keys(value).length > 0, "No vacation changes provided.");
 
+/**
+ * How holdings are listed inside an investment type.
+ *
+ * A type can hold a great many: twenty-nine post office deposits in one list is a wall. Grouping
+ * them under the year or the month they were invested turns that into a handful of short lists.
+ */
+export const HOLDING_GROUPINGS = [
+  { id: "year", label: "By year invested" },
+  { id: "month", label: "By month invested" },
+  { id: "none", label: "One list, newest first" }
+] as const;
+
+export const HOLDING_GROUPING_IDS = HOLDING_GROUPINGS.map((item) => item.id) as [string, ...string[]];
+export const DEFAULT_HOLDING_GROUPING = "year";
+
 export const updateSettingsSchema = z
   .object({
     cardUtilizationAlertPercent: z.number().int().min(1).max(100).optional(),
+    holdingGrouping: z.enum(HOLDING_GROUPING_IDS).optional(),
   })
   // Both became optional so either can be saved without the other; without this, an empty object
   // would be accepted and quietly change nothing.
@@ -798,6 +852,7 @@ export type CreateBudgetLineInput = z.infer<typeof createBudgetLineSchema>;
 export type UpdateBudgetLineInput = z.infer<typeof updateBudgetLineSchema>;
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
+export type HoldingGrouping = (typeof HOLDING_GROUPINGS)[number]["id"];
 export type InvestmentType = z.infer<typeof investmentTypeSchema>;
 export type PayoutFrequency = z.infer<typeof payoutFrequencySchema>;
 export type CreateInvestmentInput = z.infer<typeof createInvestmentSchema>;

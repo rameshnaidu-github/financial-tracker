@@ -1,3 +1,5 @@
+import type { HoldingGrouping } from "../shared/finance.ts";
+
 export function formatINR(paise: number) {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -45,6 +47,17 @@ export function parseAmountToPaise(value: string) {
 export function signedAmount(paise: number, direction: "inflow" | "outflow") {
   return `${direction === "inflow" ? "+" : "-"}${formatINR(paise)}`;
 }
+
+/**
+ * The range every date field accepts.
+ *
+ * A date input with no bounds will take a six-digit year -- 03-06-275760 was entered into one --
+ * which is a valid Date to the browser and nonsense to everyone else. These are wide enough for
+ * any loan, holding or statement anyone is recording here, and narrow enough to keep the year at
+ * four digits.
+ */
+export const EARLIEST_DATE = "1950-01-01";
+export const LATEST_DATE = "2099-12-31";
 
 export function todayISO() {
   return localISODate(new Date());
@@ -166,4 +179,37 @@ export function outstandingSplit(spendPaise: number, emiPaise: number) {
     ? Math.min(Math.max(Math.round((spendPaise / totalPaise) * 100), 0), 100)
     : 0;
   return { show, totalPaise, spendPaise, emiPaise, spendPercent, emiPercent: 100 - spendPercent };
+}
+
+/** What grouping needs of a holding: when it was invested, and when it was entered. */
+export type HoldingLike = { purchaseDate: string | null; createdAt: string };
+
+/**
+ * Holdings cut into the periods they were invested in, newest period first and newest holding
+ * first inside each.
+ *
+ * The date a holding was invested is the one that orders it; a holding with none falls back to
+ * the day it was entered, which is the closest thing it has. "none" keeps one list, still ordered,
+ * because the jumble it replaces was the complaint.
+ */
+export function groupHoldingsByPeriod<T extends HoldingLike>(items: T[], grouping: HoldingGrouping) {
+  const sorted = [...items].sort((a, b) => holdingDate(b).localeCompare(holdingDate(a)));
+  if (grouping === "none") {
+    return [{ key: "all", label: "", items: sorted }];
+  }
+  const periods = new Map<string, T[]>();
+  for (const item of sorted) {
+    const date = holdingDate(item);
+    const key = grouping === "year" ? date.slice(0, 4) : date.slice(0, 7);
+    periods.set(key, [...(periods.get(key) ?? []), item]);
+  }
+  return [...periods.entries()].map(([key, group]) => ({
+    key,
+    label: grouping === "year" ? key : formatMonth(key),
+    items: group
+  }));
+}
+
+function holdingDate(item: HoldingLike) {
+  return item.purchaseDate ?? item.createdAt.slice(0, 10);
 }
