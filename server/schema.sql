@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS accounts (
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   payment_due_day BIGINT,
+  -- The balance this account should not fall below. Zero means no alert, which is the default so
+  -- nobody is warned against a figure they never chose.
+  minimum_balance_paise BIGINT NOT NULL DEFAULT 0 CHECK (minimum_balance_paise >= 0),
   user_id TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (id, user_id)
 );
@@ -168,6 +171,9 @@ CREATE TABLE IF NOT EXISTS loans (
   tenure_months BIGINT NOT NULL CHECK (tenure_months > 0),
   monthly_emi_paise BIGINT NOT NULL CHECK (monthly_emi_paise > 0),
   emi_due_day BIGINT,
+  -- The credit card this sits on. Null is an ordinary loan; set makes it a card EMI, whose unpaid
+  -- principal counts towards that card's outstanding.
+  account_id TEXT,
   is_archived BIGINT NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
@@ -494,6 +500,16 @@ ALTER TABLE vacation_expenses DROP CONSTRAINT IF EXISTS fk_vacation_expenses_39;
 ALTER TABLE vacation_expenses ADD CONSTRAINT fk_vacation_expenses_39 FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE;
 ALTER TABLE vacations DROP CONSTRAINT IF EXISTS fk_vacations_40;
 ALTER TABLE vacations ADD CONSTRAINT fk_vacations_40 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+
+-- The card a loan sits on, on a database that predates card EMIs.
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS account_id TEXT;
+ALTER TABLE loans DROP CONSTRAINT IF EXISTS fk_loans_account;
+ALTER TABLE loans ADD CONSTRAINT fk_loans_account
+  FOREIGN KEY (account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT;
+CREATE INDEX IF NOT EXISTS idx_loans_account ON loans(account_id);
+
+-- The per-account minimum, on a database that kept one figure for the whole person instead.
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS minimum_balance_paise BIGINT NOT NULL DEFAULT 0;
 
 -- Deny by default to anyone who does not bypass row level security.
 --

@@ -3761,6 +3761,124 @@ test("the database itself refuses a row that points across to another person", a
   }
 });
 
+// A card EMI is not paid on its own: the bank charges the month's installment to the card and the
+// bill settles it along with the spending. So a card payment can say which of the card's EMIs it
+// covered, and recording it must move all three things at once -- the card, the EMIs, and the bank.
+async function cardWithTwoEmis(label: string) {
+  const bank = await services.createAccount({
+    name: `QA ${label} Bank`, type: "bank", startingBalancePaise: 1_00_000_00
+  });
+  const card = await services.createAccount({
+    name: `QA ${label} Card`, type: "credit_card", startingBalancePaise: 0, creditLimitPaise: 2_00_000_00
+  });
+  await services.createTransaction({
+    date: "2033-05-02", accountId: card.id, method: "credit_card", merchant: `QA ${label} shopping`,
+    typeId: await typeId("Expense"), subcategoryId: await subcategoryId("Expense", "Groceries"),
+    amountPaise: 20_000_00, direction: "outflow", kind: "expense"
+  });
+  const emi = async (name: string, outstandingPaise: number) =>
+    await services.createLoan({
+      name: `QA ${label} ${name}`, subcategoryId: await subcategoryId("Loan", "Vehicle"),
+      accountId: card.id, principalAmountPaise: outstandingPaise,
+      startingOutstandingPaise: outstandingPaise, startMonth: "2033-04",
+      annualInterestRateBps: 1200, tenureMonths: 10, monthlyEmiPaise: Math.round(outstandingPaise / 10)
+    });
+  return { bank, card, first: await emi("EMI one", 10_000_00), second: await emi("EMI two", 20_000_00) };
+}
+
+const cardOf = async (id: string) => (await services.listAccounts(true)).find((account) => account.id === id);
+const emiOf = async (id: string) => (await services.listLoans(true, "card-emi")).find((loan) => loan.id === id);
+
+test("a card payment settles the EMIs on that card, and the money leaves the bank once", async () => {
+  const { bank, card, first, second } = await cardWithTwoEmis("Settle");
+  const before = await cardOf(card.id);
+  assert(before?.spendOutstandingPaise === 20_000_00, "The card should start owing its 20,000 of spending.");
+  assert(before?.emiOutstandingPaise === 30_000_00, "The card should start carrying 30,000 of EMIs.");
+
+  // 20,000 of spending plus the two monthly installments of 1,000 and 2,000.
+  const payment = await services.createTransaction({
+    date: "2033-05-10", accountId: bank.id, method: "bank_transfer", merchant: "QA card bill",
+    typeId: await typeId("Credit Card Payment"), amountPaise: 23_000_00, direction: "outflow",
+    kind: "card_payment", transferAccountId: card.id,
+    cardEmiPayments: [
+      { loanId: first.id, amountPaise: 1_000_00 },
+      { loanId: second.id, amountPaise: 2_000_00 }
+    ]
+  });
+
+  // 1% a month is interest on each balance; the rest comes off the principal.
+  const settled = await cardOf(card.id);
+  assert(settled?.spendOutstandingPaise === 0, `The card's own spending should be settled, left ${settled?.spendOutstandingPaise}.`);
+  assert((await emiOf(first.id))?.outstandingPaise === 10_000_00 - (1_000_00 - 100_00), "The first EMI should come down by its principal.");
+  assert((await emiOf(second.id))?.outstandingPaise === 20_000_00 - (2_000_00 - 200_00), "The second EMI should come down by its principal.");
+  assert(settled?.outstandingPaise === settled?.emiOutstandingPaise, "A settled card should owe its running EMIs and nothing else.");
+  assert(
+    (await cardOf(bank.id))?.balancePaise === 1_00_000_00 - 23_000_00,
+    "The payment should leave the bank once: the installments are charges on the card, not second withdrawals."
+  );
+  assert((await services.getTransaction(payment.transaction.id))?.cardEmiPaise === 3_000_00, "The payment should say it carried 3,000 of EMIs.");
+
+  // The installments are spending in their own right, which is the point of charging them to the
+  // card rather than folding them into the payment: a payment is left out of every report.
+  const report = await services.getMonthlyReport(undefined, "2033-05");
+  const loanLine = report.types.find((type) => type.behavior === "loan");
+  assert(loanLine?.amountPaise === 3_000_00, `May's Loan total should be the two installments, got ${loanLine?.amountPaise}.`);
+});
+
+test("an installment settled by a card payment moves and vanishes with that payment", async () => {
+  const { bank, card, first, second } = await cardWithTwoEmis("Undo");
+  const bill = async (amountPaise: number, cardEmiPayments: Array<{ loanId: string; amountPaise: number }>) =>
+    await services.createTransaction({
+      date: "2033-05-10", accountId: bank.id, method: "bank_transfer", merchant: "QA card bill",
+      typeId: await typeId("Credit Card Payment"), amountPaise, direction: "outflow",
+      kind: "card_payment", transferAccountId: card.id, cardEmiPayments
+    });
+
+  await assertRejectsWithMessage(
+    "An EMI part larger than the payment",
+    async () => await bill(2_000_00, [{ loanId: first.id, amountPaise: 2_500_00 }]),
+    "can't be more than the payment itself"
+  );
+  await assertRejects("The same EMI twice in one payment", async () =>
+    await bill(23_000_00, [
+      { loanId: first.id, amountPaise: 1_000_00 },
+      { loanId: first.id, amountPaise: 1_000_00 }
+    ])
+  );
+  const elsewhere = await services.createLoan({
+    name: "QA Undo Home Loan", subcategoryId: await subcategoryId("Loan", "Vehicle"),
+    principalAmountPaise: 5_00_000_00, startingOutstandingPaise: 5_00_000_00, startMonth: "2033-04",
+    annualInterestRateBps: 900, tenureMonths: 120, monthlyEmiPaise: 7_000_00
+  });
+  await assertRejectsWithMessage(
+    "An ordinary loan, which no card bill covers",
+    async () => await bill(23_000_00, [{ loanId: elsewhere.id, amountPaise: 7_000_00 }]),
+    "not an EMI on this card"
+  );
+
+  const payment = await bill(23_000_00, [
+    { loanId: first.id, amountPaise: 1_000_00 },
+    { loanId: second.id, amountPaise: 2_000_00 }
+  ]);
+  const installments = async () =>
+    (await services.listTransactions({ from: "2033-05-01", to: "2033-05-31", accountId: card.id }))
+      .filter((row) => row.kind === "emi");
+  assert((await installments()).length === 2, "The payment should have charged both installments to the card.");
+
+  // An installment is not an event of its own -- it exists because the payment covered it.
+  await assertRejectsWithMessage(
+    "Deleting an installment alone",
+    async () => await services.deleteTransaction((await installments())[0].id),
+    "Change that payment instead"
+  );
+
+  await services.deleteTransaction(payment.transaction.id);
+  assert((await installments()).length === 0, "Deleting the payment should take its installments with it.");
+  assert((await cardOf(card.id))?.spendOutstandingPaise === 20_000_00, "The card should owe its spending again.");
+  assert((await cardOf(card.id))?.emiOutstandingPaise === 30_000_00, "Both EMI balances should be restored.");
+  assert((await cardOf(bank.id))?.balancePaise === 1_00_000_00, "The bank should be whole again.");
+});
+
 // These two go last on purpose: both work in a month of their own on an account of their own, so
 // nothing earlier in the suite can be disturbed by the balances they leave behind.
 test("deletes a purchase a refund links to, keeping the refund and clearing its link", async () => {

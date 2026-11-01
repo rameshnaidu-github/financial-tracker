@@ -270,9 +270,18 @@ export const createAccountSchema = z
     type: accountTypeSchema,
     startingBalancePaise: paiseSchema,
     creditLimitPaise: paiseSchema.optional(),
-    paymentDueDay: dueDaySchema.nullish()
+    paymentDueDay: dueDaySchema.nullish(),
+    // Zero, and the default, means no alert for this account.
+    minimumBalancePaise: paiseSchema.optional()
   })
   .superRefine((value, ctx) => {
+    if (value.type === "credit_card" && value.minimumBalancePaise) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["minimumBalancePaise"],
+        message: "A credit card has an outstanding rather than a balance, so a minimum does not apply."
+      });
+    }
     if (value.type === "credit_card" && value.creditLimitPaise === undefined) {
       ctx.addIssue({
         code: "custom",
@@ -296,6 +305,7 @@ export const updateAccountSchema = z
     startingBalancePaise: paiseSchema.optional(),
     creditLimitPaise: paiseSchema.optional(),
     paymentDueDay: dueDaySchema.nullish(),
+    minimumBalancePaise: paiseSchema.optional(),
     isArchived: z.boolean().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "No account changes provided.");
@@ -324,7 +334,10 @@ export const createLoanSchema = z
     annualInterestRateBps: z.number().int().min(0).max(100_000),
     tenureMonths: z.number().int().positive().max(600),
     monthlyEmiPaise: positivePaiseSchema,
-    emiDueDay: dueDaySchema.nullish()
+    emiDueDay: dueDaySchema.nullish(),
+    // The credit card this EMI sits on. Absent for an ordinary loan; the service refuses an id
+    // that is not a credit card, which a schema cannot know on its own.
+    accountId: idSchema.nullish()
   })
   .superRefine((value, ctx) => {
     if (value.startingOutstandingPaise > value.principalAmountPaise) {
@@ -427,9 +440,6 @@ export const updateVacationSchema = z
 export const updateSettingsSchema = z
   .object({
     cardUtilizationAlertPercent: z.number().int().min(1).max(100).optional(),
-    // Paise, like every other amount here. Zero is meaningful -- it turns the alert off -- so the
-    // floor is 0 rather than 1, and the ceiling is a crore, past which this is not the tool.
-    minimumBankBalancePaise: z.number().int().min(0).max(1_000_000_000).optional(),
   })
   // Both became optional so either can be saved without the other; without this, an empty object
   // would be accepted and quietly change nothing.
@@ -460,6 +470,16 @@ export const transactionSplitSchema = z.object({
   amountPaise: positivePaiseSchema
 });
 
+/**
+ * How much of a card payment went to one EMI running on that card. A card EMI is never paid on its
+ * own -- the bank charges the installment to the card and it is settled with the bill -- so the
+ * payment says which EMIs it covered and for how much, instead of each needing its own payment.
+ */
+export const cardEmiPaymentSchema = z.object({
+  loanId: idSchema,
+  amountPaise: positivePaiseSchema
+});
+
 const transactionObjectSchema = z.object({
     batchId: idSchema.optional(),
     date: dateSchema,
@@ -479,6 +499,7 @@ const transactionObjectSchema = z.object({
     subscriptionId: optionalIdSchema.optional(),
     investmentId: optionalIdSchema.optional(),
     vacationId: optionalIdSchema.optional(),
+    cardEmiPayments: z.array(cardEmiPaymentSchema).optional(),
     splits: z.array(transactionSplitSchema).optional()
   });
 
@@ -490,6 +511,34 @@ export const createTransactionSchema = transactionObjectSchema.superRefine((valu
           code: "custom",
           path: ["splits"],
           message: "Split amounts must exactly match the transaction amount."
+        });
+      }
+    }
+
+    if (value.cardEmiPayments?.length) {
+      if (value.kind !== "card_payment") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["cardEmiPayments"],
+          message: "Only a credit-card payment can settle the EMIs on that card."
+        });
+      }
+      const loanIds = new Set(value.cardEmiPayments.map((payment) => payment.loanId));
+      if (loanIds.size !== value.cardEmiPayments.length) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["cardEmiPayments"],
+          message: "One payment can cover an EMI only once."
+        });
+      }
+      // The EMI part comes out of this payment, so it cannot be larger than the payment. The rest
+      // is left to settle the card's own spending, and may legitimately be nothing at all.
+      const emiTotal = value.cardEmiPayments.reduce((sum, payment) => sum + payment.amountPaise, 0);
+      if (emiTotal > value.amountPaise) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["cardEmiPayments"],
+          message: "The EMI part of a payment can't be more than the payment itself."
         });
       }
     }
@@ -640,5 +689,6 @@ export type UpdateInvestmentInput = z.infer<typeof updateInvestmentSchema>;
 export type CreateVacationInput = z.infer<typeof createVacationSchema>;
 export type UpdateVacationInput = z.infer<typeof updateVacationSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
+export type CardEmiPaymentInput = z.infer<typeof cardEmiPaymentSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
 export type CreateBatchInput = z.infer<typeof createBatchSchema>;

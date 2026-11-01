@@ -51,6 +51,7 @@ import {
   formatShortDate,
   mondayWeekRange,
   monthValue,
+  outstandingSplit,
   parseAmountToPaise,
   signedAmount,
   splitMonth,
@@ -107,7 +108,7 @@ import {
 // System Type that ties a refund to the purchase it came from (see shared/finance.ts).
 const REFUND_TYPE_ID = "type_refund";
 
-type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "vacations" | "subscriptions" | "categories" | "faq" | "profile";
+type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "cardEmis" | "vacations" | "subscriptions" | "categories" | "faq" | "profile";
 type Theme = "light" | "dark";
 type DonutSegment = {
   id: string;
@@ -149,6 +150,7 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home; group?: Na
   { page: "accounts", label: "Accounts", icon: WalletCards, group: "Own & owe" },
   { page: "loans", label: "Loans", icon: Landmark, group: "Own & owe" },
   { page: "investments", label: "Investments", icon: TrendingUp, group: "Own & owe" },
+  { page: "cardEmis", label: "Card EMIs", icon: CreditCard, group: "Own & owe" },
   { page: "categories", label: "Categories", icon: Tags, group: "Setup" },
   { page: "faq", label: "FAQ", icon: CircleHelp, group: "Setup" },
   { page: "profile", label: "Profile", icon: UserCircle }
@@ -222,6 +224,7 @@ const mobileLabels: Record<Page, string> = {
   accounts: "Accts",
   loans: "Loan",
   investments: "Invest",
+  cardEmis: "EMIs",
   vacations: "Trips",
   subscriptions: "Auto",
   categories: "Cats",
@@ -238,6 +241,7 @@ const pagePaths: Record<Page, string> = {
   accounts: "/accounts",
   loans: "/loans",
   investments: "/investments",
+  cardEmis: "/card-emis",
   vacations: "/vacations",
   subscriptions: "/subscriptions",
   categories: "/categories",
@@ -596,33 +600,15 @@ export default function App() {
     [showNotice]
   );
 
-  const saveMinBalance = useCallback(
-    async (paise: number) => {
-      try {
-        const settings = await Api.updateSettings({ minimumBankBalancePaise: paise });
-        setBootstrap((current) => (current ? { ...current, settings } : current));
-        showNotice(paise > 0 ? "Minimum balance alert saved." : "Minimum balance alert turned off.");
-      } catch (err) {
-        showNotice(err instanceof Error ? err.message : "Could not save the setting.");
-      }
-    },
-    [showNotice]
-  );
-
   const accounts = bootstrap?.accounts ?? [];
   const loans = bootstrap?.loans ?? [];
+  const cardEmis = bootstrap?.cardEmis ?? [];
   const subscriptions = bootstrap?.subscriptions ?? [];
   const investments = bootstrap?.investments ?? [];
   const vacations = bootstrap?.vacations ?? [];
   const categoryTypes = bootstrap?.categoryTypes ?? [];
   const categories = flattenSubcategories(categoryTypes);
   const profile = bootstrap?.profile ?? emptyProfile;
-  // Paise, stored as a string like every other setting. Zero means the alert is off.
-  const minBankBalancePaise = (() => {
-    const parsed = Number(bootstrap?.settings?.minimum_bank_balance_paise ?? "0");
-    return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : 0;
-  })();
-
   const cardAlertPercent = (() => {
     const parsed = Number(bootstrap?.settings?.card_utilization_alert_percent ?? "30");
     return Number.isFinite(parsed) && parsed >= 1 && parsed <= 100 ? Math.round(parsed) : 30;
@@ -748,6 +734,7 @@ export default function App() {
                       selectedAccountId={selectedAccountId}
                       accounts={activeAccounts}
                       loans={loans.filter((loan) => !loan.isArchived)}
+                      cardEmis={cardEmis.filter((emi) => !emi.isArchived)}
                       subscriptions={subscriptions.filter((subscription) => !subscription.isArchived)}
                       mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
                       vacations={vacations.filter((vacation) => !vacation.isArchived)}
@@ -797,7 +784,6 @@ export default function App() {
         <AccountsPage
                       accounts={accounts}
                       cardAlertPercent={cardAlertPercent}
-                      minBankBalancePaise={minBankBalancePaise}
                       refresh={refresh}
                       showNotice={showNotice}
                       requestConfirm={requestConfirm}
@@ -821,6 +807,17 @@ export default function App() {
                       showNotice={showNotice}
                       requestConfirm={requestConfirm}
                     />
+        );
+      case "cardEmis":
+        return (
+          <LoansPage
+            loans={cardEmis}
+            categoryTypes={categoryTypes}
+            cards={activeAccounts.filter((account) => account.type === "credit_card")}
+            refresh={refresh}
+            showNotice={showNotice}
+            requestConfirm={requestConfirm}
+          />
         );
       case "vacations":
         return (
@@ -875,11 +872,9 @@ export default function App() {
                       theme={theme}
                       saving={profileSaving}
                       cardAlertPercent={cardAlertPercent}
-                      minBankBalancePaise={minBankBalancePaise}
                       onProfileChange={setProfileDraft}
                       onSaveProfile={saveProfile}
                       onSaveCardAlert={saveCardAlert}
-                      onSaveMinBalance={saveMinBalance}
               onDownloadReport={() => setPrinting(true)}
               preparingReport={printing}
                       onThemeToggle={() =>
@@ -1551,6 +1546,7 @@ function WeeklyEntryPage({
   selectedAccountId,
   accounts,
   loans,
+  cardEmis,
   subscriptions,
   mutualFunds,
   vacations,
@@ -1564,6 +1560,7 @@ function WeeklyEntryPage({
   selectedAccountId: string;
   accounts: Account[];
   loans: Loan[];
+  cardEmis: Loan[];
   subscriptions: AutopaySubscription[];
   mutualFunds: Investment[];
   vacations: Vacation[];
@@ -1587,6 +1584,10 @@ function WeeklyEntryPage({
   const [importOpen, setImportOpen] = useState(false);
   const [duplicateCount, setDuplicateCount] = useState(0);
   const [saving, setSaving] = useState(false);
+  // Which EMIs on the card being paid this payment covers, and for how much each, keyed by EMI.
+  // A key present means ticked, so unticking one forgets its amount rather than keeping a zero.
+  const [cardEmiAmounts, setCardEmiAmounts] = useState<Record<string, string>>({});
+  const [settleCardEmis, setSettleCardEmis] = useState(false);
   const [form, setForm] = useState({
     date: todayISO(),
     accountId: firstAccount?.id ?? "",
@@ -1639,6 +1640,13 @@ function WeeklyEntryPage({
     }
   }, [categoryTypes, defaultType?.id, form.typeId]);
 
+  // The tick describes one card's EMIs. Pointing the payment at another card, or at something
+  // that is not a card payment at all, leaves it describing EMIs that are no longer on offer.
+  useEffect(() => {
+    setSettleCardEmis(false);
+    setCardEmiAmounts({});
+  }, [form.transferAccountId, form.typeId]);
+
   const selectedAccount = accounts.find((account) => account.id === form.accountId);
   const cardAccounts = accounts.filter((account) => account.type === "credit_card");
   const selectedType = categoryTypes.find((type) => type.id === form.typeId);
@@ -1650,6 +1658,19 @@ function WeeklyEntryPage({
   const isSelfTransferSelected = form.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID;
   const isExpenseSelected = selectedBehavior === "expense";
   const selfTransferTargets = selfTransferTargetAccounts(accounts, form.accountId);
+  // The EMIs running on the card this payment is for. A card EMI is never paid on its own: the
+  // bank charges the month's installment to the card, so the bill settles it along with the
+  // spending. One already paid off has nothing left to settle.
+  const cardEmisForPayment =
+    selectedBehavior === "card_payment" && form.transferAccountId
+      ? cardEmis.filter((emi) => emi.accountId === form.transferAccountId && emi.outstandingPaise > 0)
+      : [];
+  const cardEmiAllocations = cardEmisForPayment
+    .filter((emi) => cardEmiAmounts[emi.id] !== undefined)
+    .map((emi) => ({ loanId: emi.id, amountPaise: parseAmountToPaise(cardEmiAmounts[emi.id] ?? "") }))
+    .filter((allocation) => allocation.amountPaise > 0);
+  const cardEmiTotalPaise = cardEmiAllocations.reduce((sum, allocation) => sum + allocation.amountPaise, 0);
+  const paymentAmountPaise = parseAmountToPaise(form.amount);
   const expenseTotal = transactions
     .filter((transaction) => transaction.kind === "expense")
     .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
@@ -1694,7 +1715,11 @@ function WeeklyEntryPage({
           form.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? form.subscriptionId || undefined : undefined,
         investmentId:
           form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID ? form.investmentId || undefined : undefined,
-        vacationId: behavior === "expense" ? form.vacationId || undefined : undefined
+        vacationId: behavior === "expense" ? form.vacationId || undefined : undefined,
+        cardEmiPayments:
+          behavior === "card_payment" && settleCardEmis && cardEmiAllocations.length
+            ? cardEmiAllocations
+            : undefined
       };
 
       const result = await Api.createTransaction(payload);
@@ -1710,6 +1735,8 @@ function WeeklyEntryPage({
         subscriptionId: "",
         investmentId: ""
       }));
+      setSettleCardEmis(false);
+      setCardEmiAmounts({});
       await reloadWeek();
       await refresh();
       showNotice(
@@ -1971,6 +1998,87 @@ function WeeklyEntryPage({
                   </label>
                 </>
               )}
+              {/* A card EMI is part of the card's bill, not a payment of its own. So the bill asks
+                  which of the card's EMIs it covers, and each ticked one is then charged to the
+                  card and settled by this payment -- the card's outstanding and the EMI's balance
+                  both move, from the one entry. */}
+              {selectedBehavior === "card_payment" && cardEmisForPayment.length > 0 && (
+                <label className="vacation-check wide">
+                  <input
+                    type="checkbox"
+                    checked={settleCardEmis}
+                    onChange={(event) => {
+                      const on = event.target.checked;
+                      setSettleCardEmis(on);
+                      // Ticked, every EMI on the card starts at its monthly installment, which is
+                      // what a bill normally carries. Each one can then be unticked or changed.
+                      setCardEmiAmounts(
+                        on
+                          ? Object.fromEntries(
+                              cardEmisForPayment.map((emi) => [emi.id, (emi.monthlyEmiPaise / 100).toFixed(2)])
+                            )
+                          : {}
+                      );
+                    }}
+                  />
+                  <span>EMIs on this card part of this payment?</span>
+                </label>
+              )}
+              {selectedBehavior === "card_payment" && settleCardEmis && cardEmisForPayment.length > 0 && (
+                <div className="card-emi-settle wide">
+                  {cardEmisForPayment.map((emi) => {
+                    const picked = cardEmiAmounts[emi.id] !== undefined;
+                    return (
+                      <div className="card-emi-settle-row" key={emi.id}>
+                        <label className="card-emi-settle-pick">
+                          <input
+                            type="checkbox"
+                            checked={picked}
+                            onChange={(event) =>
+                              setCardEmiAmounts((current) => {
+                                const next = { ...current };
+                                if (event.target.checked) {
+                                  next[emi.id] = (emi.monthlyEmiPaise / 100).toFixed(2);
+                                } else {
+                                  delete next[emi.id];
+                                }
+                                return next;
+                              })
+                            }
+                          />
+                          <span>
+                            <strong>{emi.name}</strong>
+                            <small>
+                              {formatINR(emi.monthlyEmiPaise)} a month · {formatINR(emi.outstandingPaise)} left
+                            </small>
+                          </span>
+                        </label>
+                        <input
+                          className="card-emi-settle-amount"
+                          value={cardEmiAmounts[emi.id] ?? ""}
+                          onChange={(event) =>
+                            setCardEmiAmounts((current) => ({ ...current, [emi.id]: event.target.value }))
+                          }
+                          placeholder="₹0"
+                          inputMode="decimal"
+                          disabled={!picked}
+                          aria-label={`How much of this payment settles ${emi.name}`}
+                        />
+                      </div>
+                    );
+                  })}
+                  {/* The payment, read as its two parts. Shown against the amount entered so that
+                      an EMI part larger than the payment is visible here rather than only as a
+                      refusal on saving. */}
+                  <p className="card-emi-settle-total">
+                    {formatINR(cardEmiTotalPaise)} of EMIs
+                    {paymentAmountPaise > 0 &&
+                      (paymentAmountPaise >= cardEmiTotalPaise
+                        ? ` · ${formatINR(paymentAmountPaise - cardEmiTotalPaise)} towards this cycle's spending`
+                        : " · more than the payment itself")}
+                  </p>
+                </div>
+              )}
               <label>
                 Amount
                 <input
@@ -2104,6 +2212,8 @@ type TransactionEditDraft = {
   subscriptionId: string;
   investmentId: string;
   vacationId: string;
+  /** For a card payment: how much of it settled EMI installments running on that card. */
+  cardEmiPaise: number;
 };
 
 function TransactionsPage({
@@ -2929,6 +3039,15 @@ function TransactionEditRow({
             </select>
           )}
         </label>
+        {behavior === "card_payment" && draft.cardEmiPaise > 0 && (
+          /* An edit must not silently drop what this payment settled, so the installments under it
+             are left alone and only stated here. Changing which EMIs a payment covered means
+             recording the payment again -- the one case where that is simpler than an edit. */
+          <p className="card-emi-settle-note">
+            Settles {formatINR(draft.cardEmiPaise)} of EMIs on this card. Delete and re-add the payment to
+            change which EMIs it covers.
+          </p>
+        )}
         {isSelfTransferSelected && (
           <label>
             Account
@@ -4318,14 +4437,12 @@ function budgetSummaryTone(plan: BudgetPlan): "neutral" | "warning" | "good" {
 function AccountsPage({
   accounts,
   cardAlertPercent,
-  minBankBalancePaise,
   refresh,
   showNotice,
   requestConfirm
 }: {
   accounts: Account[];
   cardAlertPercent: number;
-  minBankBalancePaise: number;
   refresh: () => Promise<void>;
   showNotice: (message: string) => void;
   requestConfirm: (request: ConfirmRequest) => void;
@@ -4365,7 +4482,6 @@ function AccountsPage({
                 key={account.id}
                 account={account}
                 alertPercent={cardAlertPercent}
-                minBankBalancePaise={minBankBalancePaise}
                 onRemove={remove}
                 onSaved={async (message) => {
                   await refresh();
@@ -4410,16 +4526,21 @@ function AccountsPage({
 function LoansPage({
   loans,
   categoryTypes,
+  cards,
   refresh,
   showNotice,
   requestConfirm
 }: {
   loans: Loan[];
   categoryTypes: CategoryType[];
+  /** Present on the EMI page only. Its presence is what makes this the EMI page. */
+  cards?: Account[];
   refresh: () => Promise<void>;
   showNotice: (message: string) => void;
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
+  const isCardEmi = Array.isArray(cards);
+  const noun = isCardEmi ? "EMI" : "loan";
   const [editingLoan, setEditingLoan] = useState<Loan | null>(null);
   const activeLoans = loans.filter((loan) => !loan.isArchived);
   const archivedLoans = loans.filter((loan) => loan.isArchived);
@@ -4490,7 +4611,7 @@ function LoansPage({
 
       <div className="two-column loans-layout">
         <div className="section-column">
-        <Panel title="Loan tracker">
+        <Panel title={isCardEmi ? "EMI tracker" : "Loan tracker"}>
           {activeLoans.length === 0 ? (
             <EmptyState text="No active loans yet." />
           ) : (
@@ -4523,25 +4644,26 @@ function LoansPage({
           )}
         </Panel>
 
-      <Panel title="Outstanding by loan">
+      <Panel title={`Outstanding by ${noun}`}>
           <MixChart
             segments={loanSegments}
             totalPaise={activeOutstanding}
-            ariaLabel="Outstanding by loan"
+            ariaLabel={`Outstanding by ${noun}`}
             centerLabel="Outstanding"
             centerValue={formatINRWhole(activeOutstanding)}
             className="overview-donut-chart"
-            emptyText="Nothing outstanding yet. Add a loan to see the split."
+            emptyText={`Nothing outstanding yet. Add ${isCardEmi ? "an EMI" : "a loan"} to see the split.`}
           />
         </Panel>
         </div>
 
-        <Panel title={editingLoan ? "Edit loan" : "Add loan"}>
+        <Panel title={`${editingLoan ? "Edit" : "Add"} ${noun}`}>
           {loanType ? (
             <LoanForm
               key={editingLoan?.id ?? "new-loan"}
               loan={editingLoan}
               loanType={loanType}
+              cards={cards}
               onCancel={editingLoan ? () => setEditingLoan(null) : undefined}
               onSaved={async (message) => {
                 setEditingLoan(null);
@@ -4550,7 +4672,7 @@ function LoansPage({
               }}
             />
           ) : (
-            <EmptyState text="Loan Type is missing. Add a Type with Loan behavior in Categories first." />
+            <EmptyState text={`${isCardEmi ? "EMI" : "Loan"} needs a Type with Loan behavior. Add one in Categories first.`} />
           )}
         </Panel>
       </div>
@@ -4563,14 +4685,19 @@ function LoansPage({
 function LoanForm({
   loan,
   loanType,
+  cards,
   onSaved,
   onCancel
 }: {
   loan: Loan | null;
   loanType: CategoryType;
+  /** Present on the EMI page: the credit cards an EMI may sit on. Absent on the Loans page. */
+  cards?: Account[];
   onSaved: (message: string) => Promise<void>;
   onCancel?: () => void;
 }) {
+  const isCardEmi = Array.isArray(cards);
+  const [accountId, setAccountId] = useState(loan?.accountId ?? cards?.[0]?.id ?? "");
   const defaultSubcategoryId = loan?.subcategoryId ?? loanType.subcategories[0]?.id ?? "__custom__";
   const [subcategoryChoice, setSubcategoryChoice] = useState(defaultSubcategoryId);
   const [customSubType, setCustomSubType] = useState("");
@@ -4582,6 +4709,7 @@ function LoanForm({
   const [tenureMonths, setTenureMonths] = useState(loan ? String(loan.tenureMonths) : "");
   const [monthlyEmi, setMonthlyEmi] = useState(loan ? amountInputFromPaise(loan.monthlyEmiPaise) : "");
   const [emiDueDay, setEmiDueDay] = useState(loan?.emiDueDay ? String(loan.emiDueDay) : "");
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   // Your bank's EMI is the source of truth; this is the textbook figure for the terms entered.
@@ -4627,12 +4755,15 @@ function LoanForm({
         tenureMonths: Number.parseInt(tenureMonths, 10),
         monthlyEmiPaise: parseAmountToPaise(monthlyEmi),
         // Left blank means no reminder; clearing it on an existing loan turns the reminder off.
-        emiDueDay: emiDueDay.trim() ? Number.parseInt(emiDueDay, 10) : null
+        emiDueDay: emiDueDay.trim() ? Number.parseInt(emiDueDay, 10) : null,
+        // Only the EMI form sends a card. The Loans form omits it entirely, which is what keeps
+        // an ordinary loan out of the EMI list.
+        ...(isCardEmi ? { accountId } : {})
       };
 
       if (loan) {
         await Api.updateLoan(loan.id, payload);
-        await onSaved("Loan updated.");
+        await onSaved(isCardEmi ? "EMI updated." : "Loan updated.");
       } else {
         await Api.createLoan(payload);
         setSubcategoryChoice(loanType.subcategories[0]?.id ?? "__custom__");
@@ -4645,7 +4776,7 @@ function LoanForm({
         setTenureMonths("");
         setMonthlyEmi("");
         setEmiDueDay("");
-        await onSaved("Loan added.");
+        await onSaved(isCardEmi ? "EMI added." : "Loan added.");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save loan.");
@@ -4724,6 +4855,25 @@ function LoanForm({
           />
         </label>
       </div>
+      {isCardEmi && (
+        <>
+          <label>
+            Credit card
+            <select value={accountId} onChange={(event) => setAccountId(event.target.value)} required>
+              {(cards ?? []).length === 0 && <option value="">No credit cards yet</option>}
+              {(cards ?? []).map((card) => (
+                <option key={card.id} value={card.id}>
+                  {card.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <small className="field-hint">
+            This EMI's unpaid balance is added to that card's outstanding. Do not also enter the
+            original purchase as a transaction on the card, or it will be counted twice.
+          </small>
+        </>
+      )}
       <small className="field-hint">
         The EMI due day is the day of the month it leaves your account. Set it and the Overview reminds you before it is due.
       </small>
@@ -4786,7 +4936,10 @@ function LoanCard({
           </span>
           <div>
             <strong>{loan.name}</strong>
-            <span>{loan.subcategoryName}</span>
+            {/* An EMI says which card it runs on here, in the row as it stands: that is the one
+                thing telling two EMIs of the same kind apart, and opening each to find out was
+                the question this answers. Ordinary loans have no card and show only their type. */}
+            <span>{loan.accountName ? `${loan.subcategoryName} · ${loan.accountName}` : loan.subcategoryName}</span>
           </div>
         </div>
         <div className="loan-header-actions">
@@ -6108,6 +6261,8 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
   const [starting, setStarting] = useState("");
   const [limit, setLimit] = useState("");
   const [dueDay, setDueDay] = useState("");
+  // Blank and zero both mean no alert for this account, which is the default.
+  const [minimumBalance, setMinimumBalance] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -6122,12 +6277,16 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
         type,
         startingBalancePaise: parseAmountToPaise(starting),
         creditLimitPaise: type === "credit_card" ? parseAmountToPaise(limit) : undefined,
-        paymentDueDay: type === "credit_card" && dueDay.trim() ? Number.parseInt(dueDay, 10) : null
+        paymentDueDay: type === "credit_card" && dueDay.trim() ? Number.parseInt(dueDay, 10) : null,
+        // A card has an outstanding rather than a balance, so it never carries a minimum.
+        minimumBalancePaise:
+          type === "credit_card" || !minimumBalance.trim() ? undefined : parseAmountToPaise(minimumBalance)
       });
       setName("");
       setStarting("");
       setLimit("");
       setDueDay("");
+      setMinimumBalance("");
       await onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add account.");
@@ -6154,6 +6313,20 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
         {type === "credit_card" ? "Starting outstanding" : "Starting balance"}
         <input value={starting} onChange={(event) => setStarting(event.target.value)} placeholder="₹0" inputMode="decimal" />
       </label>
+      {type !== "credit_card" && (
+        <label>
+          Minimum balance
+          <input
+            value={minimumBalance}
+            onChange={(event) => setMinimumBalance(event.target.value)}
+            placeholder="₹0"
+            inputMode="decimal"
+          />
+          <small className="field-hint">
+            This balance turns red below this figure. Leave blank for no alert.
+          </small>
+        </label>
+      )}
       {type === "credit_card" && (
         <>
           <label>
@@ -6792,7 +6965,12 @@ function categoryFromTransaction(transaction: Transaction): Category {
   if (transaction.kind === "card_payment" && transaction.transferAccountName) {
     return {
       id: transaction.transferAccountId ?? "",
-      name: transaction.transferAccountName,
+      // A bill that also settled EMIs says so in the row: without it, two payments of different
+      // amounts on the same card look like the same thing.
+      name:
+        transaction.cardEmiPaise > 0
+          ? `${transaction.transferAccountName} · ${formatINR(transaction.cardEmiPaise)} EMIs`
+          : transaction.transferAccountName,
       icon: "credit-card",
       color: transaction.typeColor ?? "#ea580c",
       isSystem: true,
@@ -6923,6 +7101,7 @@ function CardLimitSummary({ account, alertPercent }: { account: Account; alertPe
   const available = account.availableLimitPaise ?? Math.max(limit - outstanding, 0);
   const usage = creditUtilization(account);
   const highUsage = usage > alertPercent;
+  const split = outstandingSplit(account.spendOutstandingPaise, account.emiOutstandingPaise);
 
   return (
     <div className="card-limit-summary">
@@ -6933,6 +7112,32 @@ function CardLimitSummary({ account, alertPercent }: { account: Account; alertPe
       <div className="card-limit-meter">
         <span className={highUsage ? "danger" : ""} style={{ width: `${usage}%` }} />
       </div>
+      {/* The same outstanding again, cut a different way: how much of what is owed is this
+          cycle's own spending and how much is EMIs still running. A second bar rather than a line
+          of text, so the two readings of the card can be compared at a glance -- and both the
+          widths and the legend read the one pair of percentages, so they cannot disagree. */}
+      {split.show && (
+        <>
+          <div className="card-utilization-row">
+            <span>Outstanding</span>
+            <strong>100%</strong>
+          </div>
+          <div className="card-limit-meter split">
+            <span className="spend" style={{ width: `${split.spendPercent}%` }} />
+            <span className="emi" style={{ width: `${split.emiPercent}%` }} />
+          </div>
+          <div className="outstanding-legend">
+            <span className="spend">
+              <i />
+              Monthly utilization {split.spendPercent}% · {formatINR(split.spendPaise)}
+            </span>
+            <span className="emi">
+              <i />
+              EMIs {split.emiPercent}% · {formatINR(split.emiPaise)}
+            </span>
+          </div>
+        </>
+      )}
       <div className="card-limit-grid">
         <div>
           <span>Total Amount</span>
@@ -7085,8 +7290,6 @@ function ProfilePage({
   onProfileChange,
   onSaveProfile,
   onSaveCardAlert,
-  minBankBalancePaise,
-  onSaveMinBalance,
   onDownloadReport,
   preparingReport,
   onThemeToggle,
@@ -7106,8 +7309,6 @@ function ProfilePage({
   onProfileChange: (profile: UserProfile) => void;
   onSaveProfile: () => Promise<void> | void;
   onSaveCardAlert: (percent: number) => Promise<void> | void;
-  minBankBalancePaise: number;
-  onSaveMinBalance: (paise: number) => Promise<void> | void;
   onDownloadReport: () => void;
   preparingReport: boolean;
   onThemeToggle: () => void;
@@ -7117,8 +7318,6 @@ function ProfilePage({
   const displayEmail = profile.email || "Local profile";
   const [editing, setEditing] = useState(false);
   const [cardAlertDraft, setCardAlertDraft] = useState(String(cardAlertPercent));
-  // Shown in rupees, stored in paise: nobody sets a minimum balance to the paisa.
-  const [minBalanceDraft, setMinBalanceDraft] = useState(String(Math.round(minBankBalancePaise / 100)));
   // Only a real difference counts as unsaved: opening the editor changes nothing by itself.
   const profileDirty =
     profile.name !== savedProfile.name ||
@@ -7129,17 +7328,7 @@ function ProfilePage({
     setCardAlertDraft(String(cardAlertPercent));
   }, [cardAlertPercent]);
 
-  useEffect(() => {
-    setMinBalanceDraft(String(Math.round(minBankBalancePaise / 100)));
-  }, [minBankBalancePaise]);
-
-  const draftValue = Number.parseInt(cardAlertDraft, 10);
-  const minBalanceRupees = Number.parseInt(minBalanceDraft, 10);
-  // A blank box is not zero: zero is a deliberate "off", and blank is someone mid-edit.
-  const minBalanceValid =
-    minBalanceDraft.trim() !== "" && Number.isFinite(minBalanceRupees) && minBalanceRupees >= 0 && minBalanceRupees <= 10_000_000;
-  const minBalancePaiseDraft = minBalanceValid ? minBalanceRupees * 100 : minBankBalancePaise;
-  const draftIsValid = Number.isInteger(draftValue) && draftValue >= 1 && draftValue <= 100;
+  const draftValue = Number.parseInt(cardAlertDraft, 10);  const draftIsValid = Number.isInteger(draftValue) && draftValue >= 1 && draftValue <= 100;
   const profileAgeText = profile.age.trim();
   const profileAge = Number.parseInt(profileAgeText, 10);
   const profileCanSave =
@@ -7277,27 +7466,6 @@ function ProfilePage({
             </div>
             <small>Credit cards turn red when utilization crosses this value (1-100).</small>
           </div>
-          <div className="settings-row card-alert-row">
-            <span>Minimum bank balance alert</span>
-            <div className="card-alert-controls">
-              <span className="card-alert-suffix">₹</span>
-              <input
-                aria-label="Minimum bank balance in rupees"
-                inputMode="numeric"
-                value={minBalanceDraft}
-                onChange={(event) => setMinBalanceDraft(event.target.value)}
-              />
-              <button
-                type="button"
-                className="secondary-action"
-                disabled={!minBalanceValid || minBalancePaiseDraft === minBankBalancePaise}
-                onClick={() => void onSaveMinBalance(minBalancePaiseDraft)}
-              >
-                Save
-              </button>
-            </div>
-            <small>Bank and food card balances turn red below this. Zero turns the alert off.</small>
-          </div>
           <button className="settings-row" onClick={onDownloadReport} disabled={preparingReport}>
             <span>Report</span>
             <strong>{preparingReport ? "Preparing…" : "Download"}</strong>
@@ -7329,14 +7497,12 @@ function ProfilePage({
 function AccountManagerLine({
   account,
   alertPercent,
-  minBankBalancePaise,
   onRemove,
   onSaved,
   onError
 }: {
   account: Account;
   alertPercent: number;
-  minBankBalancePaise: number;
   onRemove?: (account: Account) => void;
   onSaved?: (message: string) => Promise<void>;
   onError?: (message: string) => void;
@@ -7402,8 +7568,9 @@ function AccountManagerLine({
   // The mirror of the card's utilisation alert: a balance that has fallen under the figure the
   // person set. Cards are excluded -- their number is what is owed, where small is good -- and a
   // minimum of zero means the alert is off rather than meaning every account qualifies.
+  const minimumBalancePaise = account.minimumBalancePaise ?? 0;
   const belowMinimum =
-    !isCard && !account.isArchived && minBankBalancePaise > 0 && account.balancePaise < minBankBalancePaise;
+    !isCard && !account.isArchived && minimumBalancePaise > 0 && account.balancePaise < minimumBalancePaise;
 
   return (
     <article className={`loan-card account-card ${account.isArchived ? "archived" : ""}`}>
@@ -7420,7 +7587,7 @@ function AccountManagerLine({
         <div className="loan-header-actions">
           <div className="account-card-primary">
             <strong className={belowMinimum ? "below-minimum" : undefined}>{formatINR(primaryValue)}</strong>
-            <span>{belowMinimum ? `Below ${formatINR(minBankBalancePaise)}` : primaryLabel}</span>
+            <span>{belowMinimum ? `Below ${formatINR(minimumBalancePaise)}` : primaryLabel}</span>
           </div>
           <button
             type="button"
@@ -7976,7 +8143,8 @@ function draftFromTransaction(
     loanPaymentType: transaction.loanPaymentType ?? "emi",
     subscriptionId: transaction.subscriptionId ?? "",
     investmentId: transaction.investmentId ?? "",
-    vacationId: transaction.vacationId ?? ""
+    vacationId: transaction.vacationId ?? "",
+    cardEmiPaise: transaction.cardEmiPaise
   };
 }
 
