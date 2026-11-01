@@ -2772,9 +2772,16 @@ test("budget totals keep budgeted equal to used plus remaining", async () => {
     startingBalancePaise: 1_00_000_00
   });
 
+  // A month of its own, and a far-future one. These assertions are totals for the whole month
+  // across every account, and a budget line is unique per SubType per month -- so this test fails
+  // the moment another test budgets Groceries in the same month. That is what happened when the
+  // month it used to name, 2026-11, became the current one: "builds a budget-vs-actual trend for
+  // a SubType" budgets Groceries in whatever month today is, and the two collided with
+  // "Expense / Groceries already has a budget for 2026-11". Keep this month ahead of the clock.
+  //
   // Deliberately overspend one line so its remaining goes negative.
   await services.createTransaction({
-    date: "2026-11-05",
+    date: "2034-02-05",
     accountId: bank.id,
     method: "upi",
     typeId: await typeId("Expense"),
@@ -2784,7 +2791,7 @@ test("budget totals keep budgeted equal to used plus remaining", async () => {
     kind: "expense"
   });
   await services.createTransaction({
-    date: "2026-11-06",
+    date: "2034-02-06",
     accountId: bank.id,
     method: "upi",
     typeId: await typeId("Expense"),
@@ -2795,19 +2802,19 @@ test("budget totals keep budgeted equal to used plus remaining", async () => {
   });
 
   await services.createBudgetLine({
-    month: "2026-11",
+    month: "2034-02",
     scopeType: "subcategory",
     scopeId: await subcategoryId("Expense", "Groceries"),
     amountPaise: 5_000_00
   });
   await services.createBudgetLine({
-    month: "2026-11",
+    month: "2034-02",
     scopeType: "subcategory",
     scopeId: await subcategoryId("Expense", "Transport"),
     amountPaise: 4_000_00
   });
 
-  const plan = await services.getBudgetPlan("2026-11", "2026-11-30");
+  const plan = await services.getBudgetPlan("2034-02", "2034-02-28");
   assert(plan.totals.amountPaise === 9_000_00, "Budgeted should be the sum of the budget lines.");
   assert(plan.totals.actualPaise === 10_000_00, "Used should be the sum of the actuals.");
   assert(
@@ -3754,6 +3761,102 @@ test("the database itself refuses a row that points across to another person", a
     (await db.prepare("DELETE FROM transactions WHERE date = '2029-02-01'").run());
     await removeSecondPerson(other);
   }
+});
+
+// These two go last on purpose: both work in a month of their own on an account of their own, so
+// nothing earlier in the suite can be disturbed by the balances they leave behind.
+test("deletes a purchase a refund links to, keeping the refund and clearing its link", async () => {
+  const db = dbModule.db;
+  const owner = dbModule.currentUserId();
+  const account = await services.createAccount({
+    name: "QA Unlink Bank",
+    type: "bank",
+    startingBalancePaise: 1_000_00
+  });
+  const purchase = (await services.createTransaction({
+    date: "2033-07-04",
+    accountId: account.id,
+    method: "upi",
+    merchant: "QA unlink headphones",
+    typeId: await typeId("Expense"),
+    subcategoryId: await subcategoryId("Expense", "Shopping"),
+    amountPaise: 500_00,
+    direction: "outflow",
+    kind: "expense"
+  })).transaction;
+  assert(purchase, "The purchase should be created.");
+  const refund = (await services.createTransaction({
+    date: "2033-07-09",
+    accountId: account.id,
+    method: "upi",
+    merchant: "QA unlink refund",
+    typeId: "type_refund",
+    amountPaise: 200_00,
+    direction: "inflow",
+    kind: "refund",
+    linkedTransactionId: purchase.id
+  })).transaction;
+  assert(refund?.linkedTransactionId === purchase.id, "The refund should be linked to its purchase.");
+
+  // The reported failure: a composite ON DELETE SET NULL key that also nulled user_id, so this
+  // threw "null value in column user_id ... violates not-null constraint" instead of deleting.
+  await services.deleteTransaction(purchase.id);
+
+  assert(!(await services.getTransaction(purchase.id)), "The purchase should be gone.");
+  // The refund is money that genuinely arrived, so it survives; only its link goes.
+  const row = (await db
+    .prepare("SELECT user_id, linked_transaction_id, amount_paise FROM transactions WHERE id = ?")
+    .get(refund.id)) as { user_id?: string; linked_transaction_id?: string | null; amount_paise?: number } | undefined;
+  assert(row, "The refund should outlive the purchase it pointed at.");
+  assert(row.linked_transaction_id === null, "The refund's link should be cleared, not left dangling.");
+  assert(row.user_id === owner, "The refund must keep its owner; nulling user_id is the bug this covers.");
+  assert(row.amount_paise === 200_00, "The refund's amount should be untouched.");
+  assert(
+    !(await db.prepare("SELECT id FROM transaction_links WHERE target_transaction_id = ?").get(purchase.id)),
+    "The link record belongs to the purchase and should go with it."
+  );
+  // 1,000 starting, 500 spent and refunded 200; with the purchase gone the refund still counts.
+  const balance = (await services.listAccounts()).find((item) => item.id === account.id)?.balancePaise;
+  assert(balance === 1_200_00, `The refund should still move the balance, got ${balance}.`);
+  const report = await services.getMonthlyReport(undefined, "2033-07");
+  assert(report.totalInflowPaise === 200_00, `An unlinked refund is money in, got ${report.totalInflowPaise}.`);
+  assert(
+    !(await services.listTransactions({ status: "uncategorized" })).some((item) => item.id === refund.id),
+    "An unlinked refund is still described, so it should not land in the uncategorized tray."
+  );
+});
+
+test("deletes an entry batch, keeping its transactions and clearing their batch", async () => {
+  const db = dbModule.db;
+  const owner = dbModule.currentUserId();
+  const account = await services.createAccount({ name: "QA Unbatch Bank", type: "bank", startingBalancePaise: 0 });
+  const spend = (await services.createTransaction({
+    date: "2033-08-01",
+    accountId: account.id,
+    method: "upi",
+    merchant: "QA unbatch spend",
+    typeId: await typeId("Expense"),
+    subcategoryId: await subcategoryId("Expense", "Shopping"),
+    amountPaise: 100_00,
+    direction: "outflow",
+    kind: "expense"
+  })).transaction;
+  assert(spend, "The spend should be created.");
+  const batch = randomUUID();
+  (await db
+    .prepare("INSERT INTO entry_batches (id, user_id, week_start, week_end, status) VALUES (?, ?, '2033-08-01', '2033-08-07', 'draft')")
+    .run(batch, owner));
+  (await db.prepare("UPDATE transactions SET batch_id = ? WHERE id = ? AND user_id = ?").run(batch, spend.id, owner));
+
+  // The same composite-key fault as the refund link, on the other key that nulls a column.
+  (await db.prepare("DELETE FROM entry_batches WHERE id = ? AND user_id = ?").run(batch, owner));
+
+  const row = (await db
+    .prepare("SELECT user_id, batch_id FROM transactions WHERE id = ?")
+    .get(spend.id)) as { user_id?: string; batch_id?: string | null } | undefined;
+  assert(row, "Deleting a batch should not delete the transactions in it.");
+  assert(row.batch_id === null, "The transaction's batch should be cleared.");
+  assert(row.user_id === owner, "The transaction must keep its owner.");
 });
 
 let failed = 0;

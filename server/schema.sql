@@ -1,7 +1,11 @@
 -- The application's schema, in Postgres.
 --
--- Derived from the schema the application actually has, by .unlazy/ship-7/derive-schema.mjs.
--- Hand edits belong in that script, not here, or the next derivation will discard them.
+-- First derived from the schema the application actually has, by .unlazy/ship-7/derive-schema.mjs.
+-- That derivation is finished: this file has since gained the composite primary keys that make a
+-- row belong to one person, the row-level-security block, schema_state, and the foreign-key
+-- comments below, none of which that script produces -- re-running it would discard all of them.
+-- This file is the authored schema now, so edit it here, then run
+-- `node scripts/generate-schema-module.mjs` to carry the change into server/schema.ts.
 --
 -- Order matters only in that every table exists before any foreign key is added, which is why
 -- the keys are ALTERs at the end rather than clauses inside the CREATEs.
@@ -464,14 +468,22 @@ ALTER TABLE transactions DROP CONSTRAINT IF EXISTS fk_transactions_30;
 ALTER TABLE transactions ADD CONSTRAINT fk_transactions_30 FOREIGN KEY (account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT;
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS fk_transactions_31;
 ALTER TABLE transactions ADD CONSTRAINT fk_transactions_31 FOREIGN KEY (transfer_account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT;
+-- The two keys below name the column they null, and must keep naming it.
+--
+-- Both are composite because a row's id is only unique per person, so a key has to carry user_id
+-- to point at one. A bare ON DELETE SET NULL nulls *every* column of the referencing side, which
+-- here means user_id as well -- and user_id is NOT NULL, so deleting a purchase that had a linked
+-- refund failed outright with "null value in column user_id ... violates not-null constraint",
+-- and deleting an entry batch would have failed the same way. Naming the one column to null is
+-- the fix; Postgres has accepted the column list since 15, and the hosted database is 17.
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS fk_transactions_32;
-ALTER TABLE transactions ADD CONSTRAINT fk_transactions_32 FOREIGN KEY (batch_id, user_id) REFERENCES entry_batches(id, user_id) ON DELETE SET NULL;
+ALTER TABLE transactions ADD CONSTRAINT fk_transactions_32 FOREIGN KEY (batch_id, user_id) REFERENCES entry_batches(id, user_id) ON DELETE SET NULL (batch_id);
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS fk_transactions_33;
 ALTER TABLE transactions ADD CONSTRAINT fk_transactions_33 FOREIGN KEY (type_id, user_id) REFERENCES category_types(id, user_id) ON DELETE RESTRICT;
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS fk_transactions_34;
 ALTER TABLE transactions ADD CONSTRAINT fk_transactions_34 FOREIGN KEY (subcategory_id, user_id) REFERENCES subcategories(id, user_id) ON DELETE RESTRICT;
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS fk_transactions_35;
-ALTER TABLE transactions ADD CONSTRAINT fk_transactions_35 FOREIGN KEY (linked_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE SET NULL;
+ALTER TABLE transactions ADD CONSTRAINT fk_transactions_35 FOREIGN KEY (linked_transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE SET NULL (linked_transaction_id);
 ALTER TABLE user_settings DROP CONSTRAINT IF EXISTS fk_user_settings_36;
 ALTER TABLE user_settings ADD CONSTRAINT fk_user_settings_36 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
 ALTER TABLE vacation_expenses DROP CONSTRAINT IF EXISTS fk_vacation_expenses_37;
