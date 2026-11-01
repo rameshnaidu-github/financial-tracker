@@ -1284,7 +1284,6 @@ function OverviewPage({
             value={formatINRWhole(overview.summary.cardSpendingPaise)}
             countPaise={overview.summary.cardSpendingPaise}
             icon={<CreditCard />}
-            note={<span className="summary-note">This month, EMIs not included</span>}
           />
           <SummaryCard
             label="Outflow"
