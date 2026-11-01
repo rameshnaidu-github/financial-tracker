@@ -2478,6 +2478,77 @@ a {
   line-height: 1.5;
 }
 
+/* Picking several transactions to delete together. The tick sits ahead of the row's own content
+   and takes no width it does not need, so a ledger nobody is selecting from reads as it always
+   did. The bar appears only once something is ticked. */
+.transaction-select {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.transaction-select input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  flex: 0 0 auto;
+  accent-color: #0ea5e9;
+  cursor: pointer;
+}
+
+.ledger-row.selected {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--panel-soft);
+}
+
+.selection-bar strong {
+  margin-right: auto;
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+/* Holdings cut into the periods they were invested in. A heading per period, quieter than the
+   type's own header above it, so the hierarchy reads type -> period -> holding. */
+.investment-period + .investment-period {
+  margin-top: 14px;
+}
+
+.investment-period-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 950;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* A setting chosen from a list rather than typed. */
+.settings-select {
+  width: auto;
+  min-width: 190px;
+  justify-self: end;
+}
+
 /* An AutoPay that fell due and was held back for want of money. Marked rather than coloured like
    an urgent one: nothing has gone wrong, there was simply nothing to take. */
 .upcoming-row.held {

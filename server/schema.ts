@@ -156,6 +156,12 @@ CREATE TABLE IF NOT EXISTS investments (
   payout_through TEXT,
   -- The final day the scheme pays interest. A credit falling on it is paid; none after it.
   payout_end_date TEXT,
+  -- A fund bought a little at a time: how much each month, on which day, from which bank, and
+  -- how far it has been taken. A fund with no schedule was bought in one go.
+  sip_amount_paise BIGINT CHECK (sip_amount_paise > 0),
+  sip_day BIGINT CHECK (sip_day BETWEEN 1 AND 31),
+  sip_account_id TEXT,
+  sip_through TEXT,
   user_id TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (id, user_id)
 );
@@ -528,6 +534,20 @@ CREATE INDEX IF NOT EXISTS idx_loans_account ON loans(account_id);
 
 -- The per-account minimum, on a database that kept one figure for the whole person instead.
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS minimum_balance_paise BIGINT NOT NULL DEFAULT 0;
+
+-- A fund bought by instalments, on a database that predates them.
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS sip_amount_paise BIGINT;
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS sip_day BIGINT;
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS sip_account_id TEXT;
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS sip_through TEXT;
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS investments_sip_amount_paise_check;
+ALTER TABLE investments ADD CONSTRAINT investments_sip_amount_paise_check CHECK (sip_amount_paise > 0);
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS investments_sip_day_check;
+ALTER TABLE investments ADD CONSTRAINT investments_sip_day_check CHECK (sip_day BETWEEN 1 AND 31);
+ALTER TABLE investments DROP CONSTRAINT IF EXISTS fk_investments_sip_account;
+ALTER TABLE investments ADD CONSTRAINT fk_investments_sip_account
+  FOREIGN KEY (sip_account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT;
+CREATE INDEX IF NOT EXISTS idx_investments_sip_account ON investments(sip_account_id);
 
 -- The day a scheme stops paying, and the bank an AutoPay is taken from, on a database that
 -- predates both.

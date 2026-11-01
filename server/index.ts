@@ -41,6 +41,7 @@ import {
   deleteInvestment,
   deleteSubcategory,
   deleteTransaction,
+  deleteTransactions,
   deleteVacation,
   buildImportTemplate,
   exportTransactionsCsv,
@@ -62,6 +63,7 @@ import {
   listCategoryTypes,
   catchUpAutopayDebits,
   catchUpPayoutCredits,
+  catchUpSipInstalments,
   listInvestments,
   listLoans,
   listTransactions,
@@ -314,7 +316,8 @@ app.get("/api/auth/me", async (request) => {
 // Money that has moved by itself since the app was last opened is written first -- interest a
 // holding has paid in, AutoPay taken out -- so everything below describes what has really
 // happened rather than what was due.
-app.get("/api/bootstrap", async () => (await catchUpPayoutCredits(), await catchUpAutopayDebits(), {
+app.get("/api/bootstrap", async () => (
+  await catchUpPayoutCredits(), await catchUpAutopayDebits(), await catchUpSipInstalments(), {
   settings: await getSettings(),
   profile: await getProfile(),
   accounts: (await listAccounts()).filter((account) => !account.isArchived),
@@ -331,6 +334,12 @@ app.get("/api/profile", async () => getProfile());
 app.patch("/api/profile", async (request) => updateProfile(request.body as never));
 
 app.patch("/api/settings", async (request) => updateAppSettings(request.body as never));
+
+app.post("/api/transactions/bulk-delete", async (request, reply) => {
+  const body = request.body as { ids?: unknown };
+  const ids = Array.isArray(body?.ids) ? body.ids.filter((id): id is string => typeof id === "string") : [];
+  return reply.send(await deleteTransactions(ids));
+});
 
 app.get("/api/overview", async (request) => {
   const query = request.query as { accountId?: string; month?: string };
