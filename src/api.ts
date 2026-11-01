@@ -38,6 +38,7 @@ type InvestmentPayload = {
   payoutAmountPaise?: number;
   payoutDay?: number;
   payoutAccountId?: string;
+  payoutEndDate?: string;
 };
 
 type ApiOptions = Omit<RequestInit, "body"> & {
@@ -174,6 +175,7 @@ export const Api = {
     amountPaise: number;
     startDate: string;
     durationMonths: number;
+    accountId?: string;
   }) => api<AutopaySubscription>("/api/subscriptions", { method: "POST", body }),
   updateSubscription: (
     id: string,
@@ -182,6 +184,7 @@ export const Api = {
       amountPaise: number;
       startDate: string;
       durationMonths: number;
+      accountId: string;
       isArchived: boolean;
     }>
   ) => api<AutopaySubscription>(`/api/subscriptions/${id}`, { method: "PATCH", body }),

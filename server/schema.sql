@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS autopay_subscriptions (
   amount_paise BIGINT NOT NULL CHECK (amount_paise > 0),
   start_date TEXT NOT NULL,
   duration_months BIGINT NOT NULL CHECK (duration_months > 0),
+  -- The bank it is taken from, and how far it has been taken. A subscription with no account
+  -- pays nothing; one that is given an account pays from that day on, never back-dated.
+  account_id TEXT,
+  debited_through TEXT,
   is_archived BIGINT NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
   updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
@@ -146,6 +150,8 @@ CREATE TABLE IF NOT EXISTS investments (
   payout_day BIGINT CHECK (payout_day BETWEEN 1 AND 31),
   payout_account_id TEXT,
   payout_through TEXT,
+  -- The final day the scheme pays interest. A credit falling on it is paid; none after it.
+  payout_end_date TEXT,
   user_id TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (id, user_id)
 );
@@ -518,6 +524,16 @@ CREATE INDEX IF NOT EXISTS idx_loans_account ON loans(account_id);
 
 -- The per-account minimum, on a database that kept one figure for the whole person instead.
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS minimum_balance_paise BIGINT NOT NULL DEFAULT 0;
+
+-- The day a scheme stops paying, and the bank an AutoPay is taken from, on a database that
+-- predates both.
+ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_end_date TEXT;
+ALTER TABLE autopay_subscriptions ADD COLUMN IF NOT EXISTS account_id TEXT;
+ALTER TABLE autopay_subscriptions ADD COLUMN IF NOT EXISTS debited_through TEXT;
+ALTER TABLE autopay_subscriptions DROP CONSTRAINT IF EXISTS fk_autopay_subscriptions_account;
+ALTER TABLE autopay_subscriptions ADD CONSTRAINT fk_autopay_subscriptions_account
+  FOREIGN KEY (account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT;
+CREATE INDEX IF NOT EXISTS idx_autopay_subscriptions_account ON autopay_subscriptions(account_id);
 
 -- A holding that pays money back at an interval, on a database that predates post office schemes.
 ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_frequency TEXT;

@@ -1716,6 +1716,27 @@ body::after {
   gap: 1px;
 }
 
+/* The headline is read across, so its five figures share one row. Wrapping put two of them on a
+   half-empty second row, which reads as a second, lesser group rather than as part of the same
+   line. Below this width they go back to wrapping, where one row would leave each too narrow. */
+@media (min-width: 900px) {
+  .overview-lead .summary-grid.overview-summary {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  /* Five across leaves each column too narrow for the first figure's full size. */
+  .overview-lead .overview-summary .summary-card:first-child strong {
+    font-size: clamp(1.4rem, 0.9rem + 0.9vw, 2rem);
+  }
+
+  /* "Credit card outstanding" needs two lines in a column this narrow and "Outflow" needs one,
+     which left their figures at different heights along the row. Every label keeps room for two
+     lines, so the five figures read across as one line of numbers. */
+  .overview-lead .overview-summary .summary-card p {
+    min-height: 2.5em;
+  }
+}
+
 .overview-lead .summary-grid .summary-card:nth-child(n),
 :root[data-theme="dark"] .overview-lead .summary-grid .summary-card:nth-child(n) {
   border: 0;
@@ -1736,7 +1757,7 @@ body::after {
   }
 }
 
-@media (min-width: 1121px) {
+@media (min-width: 1500px) {
   .overview-lead .overview-summary .summary-card:first-child strong {
     font-size: clamp(1.9rem, 1.3rem + 1.2vw, 2.5rem);
   }

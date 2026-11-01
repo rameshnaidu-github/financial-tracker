@@ -151,6 +151,9 @@ export type AutopaySubscription = {
   expiryDate: string;
   paymentCount: number;
   status: "active" | "expired";
+  /** The bank it is taken from. Without one it only reminds; with one it pays itself. */
+  accountId: string | null;
+  accountName: string | null;
   isArchived: boolean;
 };
 
@@ -226,6 +229,8 @@ export type Overview = {
   summary: {
     availableCashPaise: number;
     creditOutstandingPaise: number;
+    /** What was spent on credit cards this month, EMI installments excluded. */
+    cardSpendingPaise: number;
     totalSpendingPaise: number;
     totalOutflowPaise: number;
     totalInflowPaise: number;
@@ -253,6 +258,8 @@ export type UpcomingPayment = {
   dueDate: string;
   daysAway: number;
   amountPaise: number;
+  /** Set when an AutoPay fell due and its bank did not cover it, naming that bank. */
+  notCoveredBy?: string;
 };
 
 export type UpcomingPayments = {
@@ -352,6 +359,8 @@ export type Investment = {
   payoutDay: number | null;
   payoutAccountId: string | null;
   payoutAccountName: string | null;
+  /** The last day this pays interest. Nothing is credited on or after it. */
+  payoutEndDate: string | null;
   payoutCreditedPaise: number;
   payoutCreditCount: number;
   nextPayoutDate: string | null;

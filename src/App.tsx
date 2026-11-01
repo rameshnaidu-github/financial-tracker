@@ -105,6 +105,7 @@ import {
   SELF_TRANSFER_SUBCATEGORY_ID,
   INVESTMENT_TYPES,
   PAYOUT_FREQUENCIES,
+  isPayoutInvestmentType,
   calculateEmiPaise
 } from "../shared/finance";
 
@@ -839,6 +840,7 @@ export default function App() {
         return (
         <SubscriptionsPage
                       subscriptions={subscriptions}
+                      accounts={activeAccounts}
                       refresh={refresh}
                       showNotice={showNotice}
                       requestConfirm={requestConfirm}
@@ -1274,6 +1276,14 @@ function OverviewPage({
             countPaise={overview.summary.creditOutstandingPaise}
             icon={<CreditCard />}
             tone="warning"
+          />
+          {/* What the cards were actually used for this month, which the outstanding beside it
+              cannot say: that figure carries EMIs and whatever was left unpaid from before. */}
+          <SummaryCard
+            label="Credit card spends"
+            value={formatINRWhole(overview.summary.cardSpendingPaise)}
+            countPaise={overview.summary.cardSpendingPaise}
+            icon={<CreditCard />}
           />
           <SummaryCard
             label="Outflow"
@@ -5204,6 +5214,7 @@ function InvestmentCard({
 }) {
   const tone = gainToneClass(investment.gainPaise);
   const positive = investment.gainPaise > 0;
+  const pays = isPayoutInvestmentType(investment.type);
   return (
     <article className="loan-card investment-card">
       <div className="loan-card-header">
@@ -5221,10 +5232,14 @@ function InvestmentCard({
             </span>
           </div>
         </div>
-        <span className={`investment-gain-badge ${tone}`}>
-          {positive ? "+" : ""}
-          {investment.gainPercent}%
-        </span>
+        {/* A scheme that pays its interest out has no gain to show: the money invested is still
+            the money invested. What it has paid is reported below, as interest earned. */}
+        {!pays && (
+          <span className={`investment-gain-badge ${tone}`}>
+            {positive ? "+" : ""}
+            {investment.gainPercent}%
+          </span>
+        )}
       </div>
 
       <div className="investment-values">
@@ -5237,8 +5252,10 @@ function InvestmentCard({
           <strong>{formatINR(investment.currentValuePaise)}</strong>
         </div>
         <div>
-          <span>Gain / loss</span>
-          <strong className={tone}>{signedImpact(investment.gainPaise)}</strong>
+          <span>{pays ? "Interest earned" : "Gain / loss"}</span>
+          <strong className={pays ? gainToneClass(investment.payoutCreditedPaise) : tone}>
+            {pays ? formatINR(investment.payoutCreditedPaise) : signedImpact(investment.gainPaise)}
+          </strong>
         </div>
       </div>
 
@@ -5255,6 +5272,13 @@ function InvestmentCard({
         <p className="investment-note">
           Next {formatINR(investment.payoutAmountPaise)} on {formatDateWithYear(investment.nextPayoutDate)}
           {investment.payoutDay ? ` · ${ordinalDay(investment.payoutDay)} of the month` : ""}
+        </p>
+      )}
+
+      {pays && investment.payoutEndDate && (
+        <p className="investment-note">
+          {investment.nextPayoutDate ? "Pays until" : "Stopped paying on"}{" "}
+          {formatDateWithYear(investment.payoutEndDate)}
         </p>
       )}
 
@@ -5304,7 +5328,10 @@ function InvestmentGroup({
   const gain = current - invested;
   const gainPercent = invested > 0 ? Math.round((gain / invested) * 100) : 0;
   const tone = gainToneClass(gain);
-  const positive = gain > 0;
+  // These never gain: they are worth what went into them and pay the interest out instead. A
+  // "Net gain 0%" beside them would be true and useless; what has been earned is the figure.
+  const pays = isPayoutInvestmentType(type.id);
+  const interestEarned = items.reduce((sum, item) => sum + item.payoutCreditedPaise, 0);
 
   return (
     <div className={`investment-group ${expanded ? "expanded" : ""}`}>
@@ -5329,10 +5356,9 @@ function InvestmentGroup({
             <strong>{formatINR(current)}</strong>
           </div>
           <div>
-            <span>Net {gain < 0 ? "loss" : "gain"}</span>
-            <strong className={tone}>
-              {signedImpact(gain)} ({gainPercent > 0 ? "+" : ""}
-              {gainPercent}%)
+            <span>{pays ? "Interest earned" : `Net ${gain < 0 ? "loss" : "gain"}`}</span>
+            <strong className={pays ? gainToneClass(interestEarned) : tone}>
+              {pays ? formatINR(interestEarned) : `${signedImpact(gain)} (${gainPercent > 0 ? "+" : ""}${gainPercent}%)`}
             </strong>
           </div>
         </div>
@@ -5381,11 +5407,13 @@ function InvestmentForm({
   const [payoutAccountId, setPayoutAccountId] = useState(
     investment?.payoutAccountId ?? bankAccounts[0]?.id ?? ""
   );
+  const [payoutEndDate, setPayoutEndDate] = useState(investment?.payoutEndDate ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  // A Post Office holding keeps its money where it is and pays the interest into a bank, so it is
-  // described by a schedule rather than by a current value anyone has to keep up to date.
-  const pays = type === "post_office";
+  // A post office scheme, a fixed deposit and a bond all keep the money where it is and pay the
+  // interest into a bank, so each is described by a schedule rather than by a current value
+  // anyone has to keep up to date.
+  const pays = isPayoutInvestmentType(type);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -5403,6 +5431,11 @@ function InvestmentForm({
         setSaving(false);
         return;
       }
+      if (pays && !payoutEndDate) {
+        setError("Enter the last day this pays interest.");
+        setSaving(false);
+        return;
+      }
       const payload = {
         type,
         name: name.trim(),
@@ -5415,7 +5448,8 @@ function InvestmentForm({
         payoutFrequency: pays ? payoutFrequency : undefined,
         payoutAmountPaise: pays ? parseAmountToPaise(payoutAmount) : undefined,
         payoutDay: pays ? Number(payoutDay) : undefined,
-        payoutAccountId: pays ? payoutAccountId : undefined
+        payoutAccountId: pays ? payoutAccountId : undefined,
+        payoutEndDate: pays ? payoutEndDate : undefined
       };
       if (investment) {
         // A note saved before this field was removed is left as it is.
@@ -5510,9 +5544,18 @@ function InvestmentForm({
               ))}
             </select>
           </label>
+          <label>
+            Last day it pays
+            <input
+              type="date"
+              value={payoutEndDate}
+              onChange={(event) => setPayoutEndDate(event.target.value)}
+              required
+            />
+          </label>
           <p className="field-hint investment-form-hint">
-            Each credit is added to that bank on its day, from the date invested onwards, and this
-            holding is worth the amount invested plus everything it has credited so far.
+            Each credit is added to that bank on its day, from the date invested until the day it
+            stops paying. The holding stays worth what you put in; what it pays is interest earned.
           </p>
         </>
       )}
@@ -5848,16 +5891,19 @@ function VacationForm({
 
 function SubscriptionsPage({
   subscriptions,
+  accounts,
   refresh,
   showNotice,
   requestConfirm
 }: {
   subscriptions: AutopaySubscription[];
+  accounts: Account[];
   refresh: () => Promise<void>;
   showNotice: (message: string) => void;
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
   const [editing, setEditing] = useState<AutopaySubscription | null>(null);
+  const bankAccounts = accounts.filter((account) => account.type === "bank");
   const active = subscriptions.filter((subscription) => !subscription.isArchived);
   const archived = subscriptions.filter((subscription) => subscription.isArchived);
   const activeCount = active.filter((subscription) => subscription.status === "active").length;
@@ -5939,6 +5985,7 @@ function SubscriptionsPage({
           <SubscriptionForm
             key={editing?.id ?? "new-subscription"}
             subscription={editing}
+            bankAccounts={bankAccounts}
             onCancel={editing ? () => setEditing(null) : undefined}
             onSaved={async (message) => {
               setEditing(null);
@@ -6046,10 +6093,12 @@ function SubscriptionCard({
 
 function SubscriptionForm({
   subscription,
+  bankAccounts,
   onSaved,
   onCancel
 }: {
   subscription: AutopaySubscription | null;
+  bankAccounts: Account[];
   onSaved: (message: string) => Promise<void>;
   onCancel?: () => void;
 }) {
@@ -6057,6 +6106,7 @@ function SubscriptionForm({
   const [amount, setAmount] = useState(subscription ? amountInputFromPaise(subscription.amountPaise) : "");
   const [startDate, setStartDate] = useState(subscription?.startDate ?? todayISO());
   const [durationMonths, setDurationMonths] = useState(String(subscription?.durationMonths ?? 12));
+  const [accountId, setAccountId] = useState(subscription?.accountId ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -6070,7 +6120,8 @@ function SubscriptionForm({
         name,
         amountPaise: parseAmountToPaise(amount),
         startDate,
-        durationMonths: Number.parseInt(durationMonths, 10)
+        durationMonths: Number.parseInt(durationMonths, 10),
+        accountId: accountId || undefined
       };
 
       if (subscription) {
@@ -6115,6 +6166,24 @@ function SubscriptionForm({
           ))}
         </select>
       </label>
+      <label>
+        Paid from
+        <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
+          <option value="">Just remind me</option>
+          {bankAccounts.map((account) => (
+            <option key={account.id} value={account.id}>
+              {account.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {/* Named rather than implied: this is the one thing in the app that spends money without
+          being asked each time, so it says plainly what it will and will not do. */}
+      <p className="field-hint investment-form-hint">
+        {accountId
+          ? "Each payment is taken from that account on its day, from today onwards, but only when the balance covers it. A month it cannot cover stays listed in Upcoming payments until it can."
+          : "Left as a reminder, this is listed in Upcoming payments and you record each payment yourself."}
+      </p>
       {error && <p className="form-error">{error}</p>}
       <div className="loan-form-actions">
         {onCancel && (
@@ -7920,11 +7989,20 @@ function UpcomingPaymentsList({
               <strong>{formatINR(groupTotal)}</strong>
             </header>
             {group.items.map((item) => (
-              <div className={`upcoming-row${item.daysAway <= 2 ? " soon" : ""}`} key={`${item.kind}-${item.id}`}>
+              <div
+                className={`upcoming-row${item.notCoveredBy ? " held" : item.daysAway <= 2 ? " soon" : ""}`}
+                key={`${item.kind}-${item.id}`}
+              >
                 <span className="upcoming-icon">{group.icon}</span>
                 <div className="upcoming-main">
                   <strong>{item.name}</strong>
-                  <small>{dueLabel(item.daysAway, item.dueDate)}</small>
+                  {/* An AutoPay that fell due and could not be taken says so here rather than
+                      disappearing: nothing was recorded, so this is the only sign it is owed. */}
+                  <small>
+                    {item.notCoveredBy
+                      ? `Due ${formatShortDate(item.dueDate)} · not enough in ${item.notCoveredBy}`
+                      : dueLabel(item.daysAway, item.dueDate)}
+                  </small>
                 </div>
                 <strong className="amount-out">{formatINR(item.amountPaise)}</strong>
               </div>

@@ -40,8 +40,24 @@ export const PAYOUT_FREQUENCIES = [
 
 export const PAYOUT_FREQUENCY_IDS = PAYOUT_FREQUENCIES.map((item) => item.id) as [string, ...string[]];
 
-/** The type whose holdings pay out; everything else keeps the plain invested/current pair. */
-export const PAYOUT_INVESTMENT_TYPE = "post_office";
+/**
+ * The types whose holdings pay money back on a schedule; everything else keeps the plain
+ * invested/current pair.
+ *
+ * A post office scheme, a non-cumulative fixed deposit and a coupon-paying bond all work the same
+ * way: the money stays where it is and the interest arrives in a bank account on a set day. So
+ * all three are described by a schedule rather than by a current value anyone has to maintain.
+ */
+export const PAYOUT_INVESTMENT_TYPES = ["post_office", "fd", "bonds"] as const;
+
+export function isPayoutInvestmentType(type: string | undefined) {
+  return PAYOUT_INVESTMENT_TYPES.includes(type as (typeof PAYOUT_INVESTMENT_TYPES)[number]);
+}
+
+/** What such a type is called, for a message that has to name it. */
+export function investmentTypeLabel(type: string | undefined) {
+  return INVESTMENT_TYPES.find((item) => item.id === type)?.label ?? "This holding";
+}
 
 export function payoutMonths(frequency: string) {
   return PAYOUT_FREQUENCIES.find((item) => item.id === frequency)?.months ?? 0;
@@ -396,7 +412,9 @@ export const createAutopaySubscriptionSchema = z.object({
   name: z.string().trim().min(2).max(90),
   amountPaise: positivePaiseSchema,
   startDate: dateSchema,
-  durationMonths: z.number().int().positive().max(600)
+  durationMonths: z.number().int().positive().max(600),
+  /** The bank it is taken from. Without one it is a reminder; with one it pays itself. */
+  accountId: idSchema.optional()
 });
 
 export const updateAutopaySubscriptionSchema = z
@@ -405,6 +423,7 @@ export const updateAutopaySubscriptionSchema = z
     amountPaise: positivePaiseSchema.optional(),
     startDate: dateSchema.optional(),
     durationMonths: z.number().int().positive().max(600).optional(),
+    accountId: z.union([idSchema, z.literal("")]).optional().transform((value) => value || undefined),
     isArchived: z.boolean().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "No subscription changes provided.");
@@ -437,7 +456,8 @@ const investmentObjectSchema = z.object({
   payoutFrequency: payoutFrequencySchema.optional(),
   payoutAmountPaise: positivePaiseSchema.optional(),
   payoutDay: z.number().int().min(1).max(31).optional(),
-  payoutAccountId: idSchema.optional()
+  payoutAccountId: idSchema.optional(),
+  payoutEndDate: dateSchema.optional()
 });
 
 /**
@@ -451,6 +471,8 @@ function checkPayoutFields(
     payoutAmountPaise?: number;
     payoutDay?: number;
     payoutAccountId?: string;
+    payoutEndDate?: string;
+    purchaseDate?: string;
   },
   ctx: z.RefinementCtx,
   required: boolean
@@ -459,14 +481,19 @@ function checkPayoutFields(
     ["payoutFrequency", value.payoutFrequency, "how often the money is credited"],
     ["payoutAmountPaise", value.payoutAmountPaise, "the amount credited"],
     ["payoutDay", value.payoutDay, "the day it is credited"],
-    ["payoutAccountId", value.payoutAccountId, "the bank it is credited to"]
+    ["payoutAccountId", value.payoutAccountId, "the bank it is credited to"],
+    ["payoutEndDate", value.payoutEndDate, "the day it stops paying"]
   ] as const;
 
-  if (value.type === PAYOUT_INVESTMENT_TYPE) {
+  if (isPayoutInvestmentType(value.type)) {
     if (!required) return;
     for (const [path, given, what] of parts) {
       if (given === undefined || given === null || given === "") {
-        ctx.addIssue({ code: "custom", path: [path], message: `A Post Office holding needs ${what}.` });
+        ctx.addIssue({
+          code: "custom",
+          path: [path],
+          message: `A ${investmentTypeLabel(value.type)} holding needs ${what}.`
+        });
       }
     }
     return;
@@ -477,7 +504,7 @@ function checkPayoutFields(
       ctx.addIssue({
         code: "custom",
         path: [path],
-        message: "Only a Post Office holding is credited on a schedule."
+        message: `A ${investmentTypeLabel(value.type)} holding is not credited on a schedule.`
       });
     }
   }
@@ -485,7 +512,15 @@ function checkPayoutFields(
 
 export const createInvestmentSchema = investmentObjectSchema.superRefine((value, ctx) => {
   checkPayoutFields(value, ctx, true);
-  if (value.type !== PAYOUT_INVESTMENT_TYPE && value.currentValuePaise === undefined) {
+  // A scheme that stopped paying before the money went in has nothing it could ever credit.
+  if (value.payoutEndDate && value.purchaseDate && value.payoutEndDate <= value.purchaseDate) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["payoutEndDate"],
+      message: "A holding has to stop paying after the day the money went in, not before it."
+    });
+  }
+  if (!isPayoutInvestmentType(value.type) && value.currentValuePaise === undefined) {
     ctx.addIssue({
       code: "custom",
       path: ["currentValuePaise"],

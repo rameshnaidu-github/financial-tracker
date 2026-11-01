@@ -2478,6 +2478,18 @@ a {
   line-height: 1.5;
 }
 
+/* An AutoPay that fell due and was held back for want of money. Marked rather than coloured like
+   an urgent one: nothing has gone wrong, there was simply nothing to take. */
+.upcoming-row.held {
+  border-left: 2px solid var(--warning);
+  padding-left: 8px;
+}
+
+.upcoming-row.held small {
+  color: var(--warning);
+  font-weight: 850;
+}
+
 .add-button {
   align-self: end;
 }
