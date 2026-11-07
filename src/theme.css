@@ -793,7 +793,7 @@ textarea:focus {
    * 164px clears the longest realistic figure measured in the browser (a crore with paise, 145px).
    */
   .ledger-row {
-    grid-template-columns: minmax(150px, 1.1fr) minmax(0, 2fr) 164px 185px;
+    grid-template-columns: auto minmax(150px, 1.1fr) minmax(0, 2fr) 164px 185px;
   }
 
   /* Figures read down the column from their sign, not from their last digit. */
@@ -2578,17 +2578,24 @@ button.mix-bar-head:hover > span {
    what changes is only where the boxes land. */
 @media (max-width: 1120px) {
   .ledger-row.transaction-row-card {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 10px;
     align-items: start;
   }
 
-  .ledger-row.transaction-row-card .transaction-primary-cell {
+  /* Every one of the five is placed by hand here, the tick included: a child left to find its
+     own cell is the thing that put the actions on a row of their own. */
+  .ledger-row.transaction-row-card .transaction-select {
     grid-area: 1 / 1 / 2 / 2;
+    align-self: center;
+  }
+
+  .ledger-row.transaction-row-card .transaction-primary-cell {
+    grid-area: 1 / 2 / 2 / 3;
   }
 
   .ledger-row.transaction-row-card .transaction-amount-cell {
-    grid-area: 1 / 2 / 2 / 3;
+    grid-area: 1 / 3 / 2 / 4;
     align-self: center;
     text-align: right;
     white-space: nowrap;

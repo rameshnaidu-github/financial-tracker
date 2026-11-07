@@ -213,3 +213,49 @@ export function groupHoldingsByPeriod<T extends HoldingLike>(items: T[], groupin
 function holdingDate(item: HoldingLike) {
   return item.purchaseDate ?? item.createdAt.slice(0, 10);
 }
+
+export type LedgerDayItem = {
+  date: string;
+  amountPaise: number;
+  direction: "inflow" | "outflow";
+};
+
+export type LedgerDay<T> = {
+  date: string;
+  items: T[];
+  /** What the day did to the money: inflows less outflows, so a spending day reads negative. */
+  netPaise: number;
+};
+
+/**
+ * Splits a ledger into one group per day, in the order the rows arrived rather than by sorting
+ * them. A new group starts whenever the date changes, so the grouping can neither reorder the
+ * list nor lose a row: joining the groups back together gives exactly the list it was handed.
+ */
+export function groupTransactionsByDay<T extends LedgerDayItem>(items: T[]): LedgerDay<T>[] {
+  const days: LedgerDay<T>[] = [];
+  for (const item of items) {
+    let day = days[days.length - 1];
+    if (!day || day.date !== item.date) {
+      day = { date: item.date, items: [], netPaise: 0 };
+      days.push(day);
+    }
+    day.items.push(item);
+    day.netPaise += item.direction === "inflow" ? item.amountPaise : -item.amountPaise;
+  }
+  return days;
+}
+
+/**
+ * The heading over a day's transactions: weekday and date, carrying the year only when it is not
+ * the year we are in, so a long scroll back never leaves you guessing which December it was.
+ */
+export function formatDayHeading(date: string, today = new Date()) {
+  const parsed = new Date(`${date}T00:00:00`);
+  return parsed.toLocaleDateString("en-IN", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    ...(parsed.getFullYear() === today.getFullYear() ? {} : { year: "numeric" })
+  });
+}

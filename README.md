@@ -1,7 +1,13 @@
 # Financial Tracker
 
-A local-first personal finance tracker. It runs entirely on your own machine — the web app and its SQLite
-database both live on your computer, with no external hosting and no cloud account required.
+A personal finance tracker for one household's real money: accounts and cards, weekly entry, budgets, loans
+and EMIs, investments that pay you back, subscriptions that pay themselves, and reports that agree with each
+other.
+
+It runs two ways from the same code. **Hosted**, so it opens on a phone like any other site: the app is
+deployed to Vercel and keeps its data in a hosted Postgres database, behind a sign-in. **On your own machine**,
+where it starts an in-process Postgres under `data/` and reaches nothing outside the project. Which one you get
+is decided by a single environment variable, `DATABASE_URL`.
 
 ![Financial Tracker overview screen](assets/screenshots/overview.png)
 
@@ -12,8 +18,9 @@ database both live on your computer, with no external hosting and no cloud accou
 - Overview dashboard with financial highlights, recent activity, spending mix, net worth, asset allocation,
   this month's cashflow, emergency-fund runway, and budget guardrails
 - Weekly transaction entry across bank accounts, credit cards, and food cards
-- Full transaction ledger with search (merchant, SubType or amount), type/subtype/date filters, an
-  "uncategorized only" view, CSV export of the current filters, undo after delete, and one-tap "add again"
+- Full transaction ledger grouped by day, each heading carrying that day's count and net, with search
+  (merchant, SubType or amount), type/subtype/date filters, an "uncategorized only" view, CSV export of the
+  current filters, undo after delete, one-tap "add again", and multi-select delete
 - Refunds tied to the purchase they came from (the Refund button on a purchase), so money back reduces that
   purchase's category instead of counting as income
 - Self transfers between your own bank accounts, which move both balances without counting as spending
@@ -21,16 +28,24 @@ database both live on your computer, with no external hosting and no cloud accou
   trends, and a budget-vs-actual chart per expense SubType
 - Budget Planner for monthly expense-SubType budgets, usage percentage, projected spend, and early warning states;
   a new month can copy last month's budget in one tap
-- Investment holdings — stocks, mutual funds, gold, land, property, PF, fixed deposits and bonds — grouped by type with
-  invested/current/net-gain, feeding the Overview's asset-allocation donut, plus per-holding SIP payment history.
-  SIPs logged against a mutual fund after you last entered its figures are added to its Invested and Current value
-  automatically (earlier SIPs are assumed to be included, so nothing is counted twice)
+- Investment holdings — stocks, mutual funds, gold, land, property, PF, fixed deposits, bonds and Post Office
+  schemes — grouped by type with invested/current/net-gain, optionally sub-grouped by the year or month you
+  invested, feeding the Overview's asset-allocation donut
+- Holdings that pay you back — Post Office schemes, fixed deposits and bonds — credit their bank on schedule
+  until their last paying day, showing interest earned rather than a paper gain, and counted once in net worth
+- Mutual funds bought as a SIP take their own monthly instalment from a chosen bank when the balance covers it
 - Vacations — tag any expense to a trip and it still counts as a normal expense while also rolling up under the
   trip, with a per-SubType breakdown and an optional trip budget
-- Loans with a suggested EMI, reducing-balance interest/principal split, months left and closure month worked out
-  from the outstanding balance (a regular final EMI closes the loan)
-- AutoPay subscription, account, credit-card, and food-card tracking; an account's name, opening balance and
-  card limit can be corrected later to match your bank statement
+- Loans and card EMIs with a suggested EMI, reducing-balance interest/principal split, months left and closure
+  month worked out from the outstanding balance (a regular final EMI closes the loan). The interest paid before
+  you started recording EMIs is read from the loan's own schedule, walked until it has repaid the gap between
+  the original principal and the balance you entered
+- Credit-card EMIs settled as part of the card bill: paying the card asks which EMIs the payment covered, and
+  updates the card and each instalment together
+- AutoPay subscriptions that take their own payment from the bank you attach, only when the balance covers it,
+  and stay listed under Upcoming payments when it doesn't
+- Account, credit-card and food-card tracking with per-account minimum balances; an account's name, opening
+  balance and card limit can be corrected later to match your bank statement
 - Custom Types and SubTypes
 - Built-in FAQ explaining how each figure is calculated
 - Import transactions from a spreadsheet; new users can type new accounts, Types, and SubTypes directly in the
@@ -40,12 +55,23 @@ database both live on your computer, with no external hosting and no cloud accou
 
 ## How it works
 
-- **Frontend:** React + Vite
+- **Frontend:** React 19 + Vite
 - **Backend:** Node.js + Fastify
-- **Database:** SQLite, stored locally at `data/finance.db`
+- **Database:** Postgres, either hosted (`DATABASE_URL`, Supabase in production) or in process under `data/`
+  when that variable is unset. One schema file serves both, so what the tests meet is the engine production runs.
 
-Your data never leaves your device. Nothing is synced or uploaded anywhere — the database file is excluded from git
-via `.gitignore`, so only the application source code is version-controlled.
+### Accounts and privacy
+
+There is no sign-up. An account exists only because the owner made one:
+
+```bash
+node server/account.ts create someone@example.com
+```
+
+Every row in every table carries whose it is, and the database enforces that with row-level security rather
+than trusting the application to remember — two people on the same deployment cannot see each other's money.
+The local database files and the `backups/` folder are excluded from git, so only source code is
+version-controlled.
 
 Account deletion is history-safe:
 
@@ -111,9 +137,14 @@ pnpm start
 
 The app will be available at **http://127.0.0.1:4000**.
 To deliberately allow other devices on your network to reach it, start with `HOST=0.0.0.0 pnpm start` and use that
-only on a trusted network. The app is designed for local personal use and does not include login/authentication.
+only on a trusted network.
 
-On first run, the app creates its own SQLite database at `data/finance.db` — no setup required. Your data stays on this machine.
+On first run the app starts its own Postgres in process and keeps it under `data/` — no database to install. It
+then needs one account before anyone can sign in:
+
+```bash
+node server/account.ts create you@example.com
+```
 
 These steps work the same on **macOS, Windows, and Linux** — install Node.js and pnpm for your platform and run the
 commands above from a terminal (on Windows, use PowerShell or Command Prompt). The optional `scripts/start.sh` /
@@ -133,7 +164,10 @@ Press `Ctrl+C` in the terminal where it's running. This triggers a graceful shut
 
 ## Backups
 
-Automatic backups are written to the local `backups/` folder (also excluded from git):
+These apply to a database the app keeps on disk. When `DATABASE_URL` points at a hosted Postgres there is no file
+to copy and the app takes no backups of its own — that database's host keeps them.
+
+Locally, backups are written to the `backups/` folder (excluded from git):
 
 - Every 30 minutes while the server is running
 - On graceful shutdown (`Ctrl+C`)
@@ -142,7 +176,23 @@ The newest 5 backups are always kept, plus the newest backup of each of the last
 push every good copy out. If you run a second copy against another database with `FINANCE_DB_PATH`, its backups go
 to a `backups/` folder beside that database (or to `FINANCE_BACKUP_DIR` if set), never into this app's `backups/`.
 
+Either way, the Transactions page exports everything the current filters show, which is a copy you hold yourself.
+
+## Deploying it
+
+The hosted build runs on Vercel: `vercel.json` builds the client with Vite and serves the API from a single
+function in `api/`. Set `DATABASE_URL` for **every** environment you deploy — Production, Preview and
+Development each read their own — because a hosted runtime has no disk to fall back to, and the app refuses to
+start rather than quietly accept transactions it would lose. The schema applies itself at boot, so a deploy that
+adds a column needs no migration step.
+
 ## For a friend/second machine
 
-Each install is fully independent. Cloning this repo on another computer and running the steps above creates a
-brand-new, empty database on that machine — it does not share or sync data with any other install.
+Two ways to share it, and they are not the same.
+
+**Their own copy.** Cloning this repo on another computer and running the steps above creates a brand-new, empty
+database on that machine. Nothing is shared or synced with any other install.
+
+**An account on yours.** Create one with `node server/account.ts create them@example.com`. They sign in to the
+same deployment and see only their own rows. Never hand anyone the `DATABASE_URL` itself: the application
+connects as a role that bypasses row-level security, so that string reads and writes everyone's money.

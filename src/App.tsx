@@ -51,7 +51,9 @@ import {
   formatMonth,
   EARLIEST_DATE,
   LATEST_DATE,
+  formatDayHeading,
   groupHoldingsByPeriod,
+  groupTransactionsByDay,
   formatShortDate,
   ordinalDay,
   mondayWeekRange,
@@ -2844,7 +2846,20 @@ function TransactionsPage({
         ) : visibleTransactions.length === 0 ? (
           <EmptyState text="No matching transactions." />
         ) : (
-          visibleTransactions.map((transaction) => {
+          groupTransactionsByDay(visibleTransactions).map((day) => (
+            <section className="ledger-day" key={day.date}>
+              {/* One heading a day, carrying what the rows below it add up to. The rows no
+                  longer each repeat the date. */}
+              <h3 className="ledger-day-heading">
+                <span className="ledger-day-date">{formatDayHeading(day.date)}</span>
+                <span className="ledger-day-count">
+                  {day.items.length} {day.items.length === 1 ? "transaction" : "transactions"}
+                </span>
+                <strong className={`ledger-day-net ${day.netPaise < 0 ? "amount-out" : "amount-in"}`}>
+                  {signedAmount(Math.abs(day.netPaise), day.netPaise < 0 ? "outflow" : "inflow")}
+                </strong>
+              </h3>
+              {day.items.map((transaction) => {
             const typeCategory = typeCategoryFromTransaction(transaction);
             const subTypeCategory = categoryFromTransaction(transaction);
             return (
@@ -2866,79 +2881,16 @@ function TransactionsPage({
                     onDelete={() => remove(transaction)}
                   />
                 ) : (
-                  <div
-                    className={`ledger-row transaction-row-card${selectedIds.includes(transaction.id) ? " selected" : ""}`}
-                  >
-                    <label className="transaction-select">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(transaction.id)}
-                        onChange={() => toggleSelected(transaction.id)}
-                        aria-label={`Select ${transaction.merchant || transaction.note || "transaction"} of ${formatINR(transaction.amountPaise)} on ${formatShortDate(transaction.date)}`}
-                      />
-                    </label>
-                    <div className="transaction-primary-cell">
-                      <strong>{transaction.merchant || transaction.note || "Untitled transaction"}</strong>
-                      <span>
-                        {formatShortDate(transaction.date)} · {methodLabel(transaction.method)}
-                      </span>
-                    </div>
-                    <div className="transaction-tag-strip" aria-label="Transaction tags">
-                      <TransactionTag
-                        tone="account"
-                        icon={accountIconForType(transaction.accountType, 13)}
-                        label={transaction.accountName}
-                      />
-                      <TransactionTag
-                        tone="subtype"
-                        icon={<IconGlyph name={subTypeCategory.icon} size={13} />}
-                        label={subTypeCategory.name}
-                        title={`${typeCategory.name}: ${subTypeCategory.name}`}
-                        color={subTypeCategory.color}
-                      />
-                    </div>
-                    <strong className={`transaction-amount-cell ${transaction.direction === "inflow" ? "amount-in" : "amount-out"}`}>
-                      {signedAmount(transaction.amountPaise, transaction.direction)}
-                      {transaction.refundedPaise > 0 && (
-                        <small className="refunded-note">
-                          {transaction.refundedPaise >= transaction.amountPaise
-                            ? "Fully refunded"
-                            : `${formatINR(transaction.refundedPaise)} refunded`}
-                        </small>
-                      )}
-                    </strong>
-                    <div className="row-actions">
-                      {canRefund(transaction) && (
-                        <button
-                          type="button"
-                          className="secondary-action row-icon-action"
-                          onClick={() => startRefund(transaction)}
-                          title="Refund: record money you got back for this"
-                          aria-label={`Record a refund for ${transaction.merchant || "this transaction"}`}
-                        >
-                          <RotateCcw size={16} />
-                        </button>
-                      )}
-                      {canAddAgain(transaction) && (
-                        <button
-                          type="button"
-                          className="secondary-action row-icon-action"
-                          onClick={() => void addAgain(transaction)}
-                          title="Add again with today's date"
-                          aria-label={`Add ${transaction.merchant || "this transaction"} again with today's date`}
-                        >
-                          <Plus size={16} />
-                        </button>
-                      )}
-                      <button
-                        className="secondary-action row-edit-action"
-                        onClick={() => setEditDraft(draftFromTransaction(transaction, categoryTypes, accounts))}
-                      >
-                        <Pencil size={16} />
-                        Edit
-                      </button>
-                    </div>
-                  </div>
+                  <LedgerRow
+                    transaction={transaction}
+                    subTypeCategory={subTypeCategory}
+                    typeCategory={typeCategory}
+                    selected={selectedIds.includes(transaction.id)}
+                    onToggleSelected={() => toggleSelected(transaction.id)}
+                    onRefund={canRefund(transaction) ? () => startRefund(transaction) : undefined}
+                    onAddAgain={canAddAgain(transaction) ? () => void addAgain(transaction) : undefined}
+                    onEdit={() => setEditDraft(draftFromTransaction(transaction, categoryTypes, accounts))}
+                  />
                 )}
                 {refundDraft?.id === transaction.id && (
                   <form
@@ -2980,7 +2932,9 @@ function TransactionsPage({
                 )}
               </div>
             );
-          })
+              })}
+            </section>
+          ))
         )}
       </div>
       {visibleTransactions.length > 0 && (
@@ -2999,6 +2953,99 @@ function TransactionsPage({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/* One line of the ledger. Its five parts -- the tick, the item, its tags, the amount and the
+   actions -- each get a track of their own, so none of them is pushed onto a second row. */
+function LedgerRow({
+  transaction,
+  subTypeCategory,
+  typeCategory,
+  selected,
+  onToggleSelected,
+  onRefund,
+  onAddAgain,
+  onEdit
+}: {
+  transaction: Transaction;
+  subTypeCategory: Category;
+  typeCategory: Category;
+  selected: boolean;
+  onToggleSelected: () => void;
+  onRefund?: () => void;
+  onAddAgain?: () => void;
+  onEdit: () => void;
+}) {
+  return (
+    <div className={`ledger-row transaction-row-card${selected ? " selected" : ""}`}>
+      <label className="transaction-select">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelected}
+          aria-label={`Select ${transaction.merchant || transaction.note || "transaction"} of ${formatINR(transaction.amountPaise)} on ${formatShortDate(transaction.date)}`}
+        />
+      </label>
+      <div className="transaction-primary-cell">
+        <strong>{transaction.merchant || transaction.note || "Untitled transaction"}</strong>
+        {/* The date is on the day's heading above; repeating it on every row said the same
+            thing a dozen times down a page. What is left is how the money moved. */}
+        <span>{methodLabel(transaction.method)}</span>
+      </div>
+      <div className="transaction-tag-strip" aria-label="Transaction tags">
+        <TransactionTag
+          tone="account"
+          icon={accountIconForType(transaction.accountType, 13)}
+          label={transaction.accountName}
+        />
+        <TransactionTag
+          tone="subtype"
+          icon={<IconGlyph name={subTypeCategory.icon} size={13} />}
+          label={subTypeCategory.name}
+          title={`${typeCategory.name}: ${subTypeCategory.name}`}
+          color={subTypeCategory.color}
+        />
+      </div>
+      <strong className={`transaction-amount-cell ${transaction.direction === "inflow" ? "amount-in" : "amount-out"}`}>
+        {signedAmount(transaction.amountPaise, transaction.direction)}
+        {transaction.refundedPaise > 0 && (
+          <small className="refunded-note">
+            {transaction.refundedPaise >= transaction.amountPaise
+              ? "Fully refunded"
+              : `${formatINR(transaction.refundedPaise)} refunded`}
+          </small>
+        )}
+      </strong>
+      <div className="row-actions">
+        {onRefund && (
+          <button
+            type="button"
+            className="secondary-action row-icon-action"
+            onClick={onRefund}
+            title="Refund: record money you got back for this"
+            aria-label={`Record a refund for ${transaction.merchant || "this transaction"}`}
+          >
+            <RotateCcw size={16} />
+          </button>
+        )}
+        {onAddAgain && (
+          <button
+            type="button"
+            className="secondary-action row-icon-action"
+            onClick={onAddAgain}
+            title="Add again with today's date"
+            aria-label={`Add ${transaction.merchant || "this transaction"} again with today's date`}
+          >
+            <Plus size={16} />
+          </button>
+        )}
+        <button className="secondary-action row-edit-action" onClick={onEdit}>
+          <Pencil size={16} />
+          Edit
+        </button>
+      </div>
     </div>
   );
 }
@@ -7471,9 +7518,9 @@ function categoryFromTransaction(transaction: Transaction): Category {
 
 const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
-    question: "Where is my data stored? Is anything uploaded online?",
+    question: "Where is my data stored, and who else can see it?",
     answer:
-      "Everything runs on this device. Your accounts, transactions, budgets and settings live in a local database on your computer. Nothing is uploaded to any server. Backups are also saved locally."
+      "This copy runs on the web, so your accounts, transactions, budgets and settings live in a hosted Postgres database rather than on your phone or laptop. Getting in needs your email and password, and there is no sign-up: an account only exists because the owner created one with the account command. Every row carries whose it is, and the database itself refuses to hand one person's rows to another, so two people using the same copy never see each other's money. You can also run the app on your own machine instead, which keeps the database in a file under the project and reaches nothing outside it."
   },
   {
     question: "How is 'Available cash' calculated?",
@@ -7498,7 +7545,7 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "Are my investment values updated automatically?",
     answer:
-      "Market prices aren't fetched: stocks, mutual funds, gold, land, property, PF and fixed-deposit (FD) values are entered by you. One exception: a SIP you log against a mutual fund (Type Investment, SubType Mutual Funds, linked to the fund) is added to that fund's Invested and Current value automatically, if it's dated after you last typed those figures. SIPs from before then are assumed to be included already, so nothing is counted twice. When you enter a new value from your statement, that becomes the new starting point. The Investments page shows the date you last saved a change so you know how current the figures are. Each investment type is a dropdown showing its total invested, current value and net gain. Click it to reveal every holding of that type."
+      "Market prices aren't fetched: stocks, mutual funds, gold, land, property and PF values are entered by you. Two things do move on their own. A fund bought as a SIP takes its monthly instalment from the bank you chose and adds it to that fund. And any SIP transaction you record yourself against a mutual fund is added too, if it's dated after you last typed the fund's figures — earlier ones are assumed to be included already, so nothing is counted twice. When you enter a new value from your statement, that becomes the new starting point. Each investment type is a dropdown showing its total invested, current value and net gain; open it to see every holding, grouped by the year or month you invested if you've chosen that in Profile."
   },
   {
     question: "How do vacations work, and do trip expenses still count as normal expenses?",
@@ -7518,12 +7565,37 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "How are loan interest, months left and the closure month worked out?",
     answer:
-      "Each EMI you link to a loan is split the way banks do on a reducing balance: this month's interest is the outstanding × annual rate ÷ 12, and the rest of the EMI repays principal, which lowers next month's interest. Prepayments go fully to principal. 'Months left' is how many EMIs it takes to clear today's outstanding at your EMI and rate, and the closure month counts those forward from this month (or next month, if this month's EMI is already recorded). 'Interest paid' adds the interest in the EMIs you've linked to an estimate for the months before you started tracking, worked out from how much principal had already been repaid. Your final EMI can be a normal EMI even if it's a little more than the payoff shown; it closes the loan. Archiving a loan hides it from the tracker, but anything still owed keeps counting in your net worth."
+      "Each EMI you link to a loan is split the way banks do on a reducing balance: this month's interest is the outstanding × annual rate ÷ 12, and the rest of the EMI repays principal, which lowers next month's interest. Prepayments go fully to principal. 'Months left' is how many EMIs it takes to clear today's outstanding at your EMI and rate, and the closure month counts those forward from this month (or next month, if this month's EMI is already recorded). For the time before you started recording EMIs here, the gap between the loan's original principal and the outstanding you entered says how much had already been repaid; the app walks the loan's own schedule until it has repaid that much, and the interest those instalments carried is the interest paid. So a loan you enter with nothing yet repaid shows no interest paid, and one you enter years in shows the interest those years really cost. 'Principal paid' is simply the original principal less what is still outstanding. Your final EMI can be a normal EMI even if it's a little more than the payoff shown; it closes the loan. Archiving a loan hides it from the tracker, but anything still owed keeps counting in your net worth."
   },
   {
     question: "How are backups made?",
     answer:
-      "The app saves a local backup automatically every 30 minutes while it's running, and once more when you close it normally. Backups are kept in a local 'backups' folder on this device: the newest 5, plus the newest one from each of the last 7 days."
+      "It depends where the database is. When you run the app on your own machine it copies the database file every 30 minutes and once more when you close it normally, into a local 'backups' folder: the newest 5, plus the newest from each of the last 7 days. When the app is running on the web the database is not a file this app can copy, so it takes no backups of its own — the database host keeps those. You can always take your own copy of everything from the export on the Transactions page."
+  },
+  {
+    question: "How do Post Office schemes, fixed deposits and bonds pay out?",
+    answer:
+      "These are the holdings that pay you back while you hold them, so they are entered differently from a fund. Alongside the amount invested you give how often it pays (monthly, quarterly, every six months or yearly), the interest amount, the day it lands, the bank it lands in, and the last day it pays. From then on each payment writes itself into that bank as income on its due day — never for a date before you entered the holding, and never twice for the same period. Because the money has already arrived in the bank, the holding's own value stays at what you put in: the page shows Interest earned rather than a net gain, and net worth counts the principal once and the credits once, not the credits twice."
+  },
+  {
+    question: "Can AutoPay and SIPs pay themselves?",
+    answer:
+      "Yes, once you tell them which bank to use. An AutoPay with a bank attached takes its payment on its own day: if the balance covers it, the payment is written and the balance drops; if it doesn't, nothing happens at all and the payment stays listed under Upcoming payments against the bank that fell short. A mutual fund bought as a SIP works the same way — you give the monthly amount, the day and the bank, and each instalment is taken when the bank can cover it and added to the fund. Neither ever pays twice for the same month, and neither back-dates: nothing is written for a day before you set it up."
+  },
+  {
+    question: "My credit card EMIs are part of the card bill. How do I record that?",
+    answer:
+      "When you record a payment to a credit card, the form lists the EMIs running on that card and asks which of them this payment settled. Tick them and the single bill payment does both jobs: the card's outstanding comes down by the whole amount, and each ticked EMI is recorded against its own loan with its interest and principal split out. Those settled instalments belong to the bill, so they move and disappear with it — editing or deleting one on its own is refused, and deleting the card payment takes them with it."
+  },
+  {
+    question: "What does 'Credit card spends' on the Overview count?",
+    answer:
+      "What you charged to your cards this calendar month, less anything refunded back onto them. EMI instalments are left out, because an EMI is an older purchase being paid off rather than new spending this month."
+  },
+  {
+    question: "How do I tidy up a lot of transactions at once?",
+    answer:
+      "Tick the rows on the Transactions page and a bar appears saying how many are selected, with a Delete that asks once before it acts. An EMI instalment that was settled as part of a card payment is refused on its own — it belongs to that payment — and the refusal is per row, so the rest of the batch still goes."
   }
 ];
 
@@ -9036,6 +9108,7 @@ export {
   FormDialog,
   InvestmentForm,
   InvestmentsPage,
+  LedgerRow,
   LoanForm,
   LoansPage,
   SubscriptionCard,
