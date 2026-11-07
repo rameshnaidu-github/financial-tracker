@@ -674,22 +674,10 @@ a {
   gap: 18px;
 }
 
-/* Add account is a short form next to a list that can be any length. Left to stretch it
-   became a tall empty box, so the column sizes to its own content and follows the list
-   instead of being padded out to match it. */
+/* The account list can be any length; the utilisation donut beside it is a fixed height. The
+   row sizes each panel to its own content rather than padding the short one out to match. */
 .accounts-page {
   align-items: start;
-}
-
-.accounts-page > .panel {
-  position: sticky;
-  top: 18px;
-}
-
-@media (max-width: 1120px) {
-  .accounts-page > .panel {
-    position: static;
-  }
 }
 
 .overview-report-section {
@@ -5344,3 +5332,141 @@ a {
   }
 }
 
+
+/* ---------- Editing comes to the item ----------
+   The edit forms used to live in a column of their own at the top of the page. Changing
+   something near the bottom of a long list meant a trip up to the form and a trip back. The
+   form is a dialog now, and it opens where you already are. */
+.form-dialog-backdrop {
+  overflow-y: auto;
+  place-items: center;
+}
+
+.form-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(560px, 100%);
+  max-height: calc(100dvh - 36px);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.form-dialog:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+.form-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding: 15px 18px;
+}
+
+.form-dialog-header h2 {
+  margin: 0;
+  font-size: 1.02rem;
+}
+
+/* The form scrolls inside the dialog. The page behind it does not scroll at all. */
+.form-dialog-body {
+  overflow-y: auto;
+  padding: 18px;
+}
+
+/* ---------- Add forms stay folded until they are wanted ----------
+   A section leads with what you already have. The form for adding more is one row until it is
+   asked for, and folds itself back up once it has saved. */
+.collapsible-form {
+  display: grid;
+  align-content: start;
+}
+
+.collapsible-form.as-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.collapsible-form.as-inset {
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.collapsible-form-heading {
+  margin: 0;
+  font-size: inherit;
+}
+
+.collapsible-form-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  background: transparent;
+  color: inherit;
+  padding: 14px 18px;
+  text-align: left;
+  font-weight: 900;
+}
+
+.collapsible-form.as-inset .collapsible-form-toggle {
+  padding: 12px 14px;
+}
+
+.collapsible-form-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.collapsible-form-mark {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.collapsible-form-chevron {
+  flex: none;
+  color: var(--muted);
+  transition: transform 0.18s ease;
+}
+
+.collapsible-form.open .collapsible-form-chevron {
+  transform: rotate(180deg);
+}
+
+.collapsible-form-body {
+  padding: 0 18px 18px;
+}
+
+.collapsible-form.as-inset .collapsible-form-body {
+  padding: 0 14px 14px;
+}
+
+@media (max-width: 720px) {
+  .form-dialog-backdrop {
+    padding: 12px;
+  }
+
+  .form-dialog {
+    max-height: calc(100dvh - 24px);
+  }
+
+  .form-dialog-body,
+  .collapsible-form-body {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+}

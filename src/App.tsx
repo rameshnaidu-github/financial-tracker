@@ -39,7 +39,8 @@ import {
   WalletCards,
   X
 } from "./ui-icons";
-import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Api } from "./api";
 import {
   MONTH_CHOICES,
@@ -4164,6 +4165,7 @@ function BudgetPlannerPage({
   const [amount, setAmount] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState("");
+  const [adding, setAdding] = useState(false);
   const [editAmount, setEditAmount] = useState("");
 
   // Budgets are planned per Expense SubType only (no whole-Type budgets).
@@ -4219,6 +4221,7 @@ function BudgetPlannerPage({
     try {
       await Api.createBudgetLine({ month, scopeType: scope.scopeType, scopeId: scope.scopeId, amountPaise });
       setAmount("");
+      setAdding(false);
       await loadPlan();
       showNotice("Budget added.");
     } catch (err) {
@@ -4265,6 +4268,15 @@ function BudgetPlannerPage({
       setSaving(false);
     }
   }
+
+  function cancelEdit() {
+    setEditingId("");
+    setEditAmount("");
+  }
+
+  /* The line being edited, read back out of the freshly loaded plan so the dialog shows what the
+     server has rather than what was on screen when Edit was pressed. */
+  const editingLine = plan?.lines.find((line) => line.id === editingId) ?? null;
 
   function remove(line: BudgetLine) {
     requestConfirm({
@@ -4346,51 +4358,6 @@ function BudgetPlannerPage({
               <SummaryCard label="Projected" value={formatINRWhole(plan.totals.projectedPaise)} countPaise={plan.totals.projectedPaise} icon={<TrendingUp />} tone={plan.totals.projectedPaise > plan.totals.amountPaise ? "warning" : "neutral"} />
             </div>
 
-            <form className="budget-add-form" onSubmit={addBudget}>
-              <label>
-                SubType
-                <select value={subKey} onChange={(event) => setSubKey(event.target.value)} disabled={!subScopes.length}>
-                  {subScopes.length === 0 && <option value="">No SubTypes available</option>}
-                  {subScopes.map((scope) => (
-                    <option key={budgetScopeKey(scope)} value={budgetScopeKey(scope)}>
-                      {budgetSubLabel(scope)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Amount
-                <input
-                  inputMode="decimal"
-                  value={amount}
-                  onChange={(event) => setAmount(event.target.value)}
-                  placeholder="25000"
-                />
-              </label>
-              <button className="primary-action" type="submit" disabled={saving || !subScopes.length}>
-                <Plus size={17} />
-                Add
-              </button>
-              {/* Its own row: inside a field this note made that column taller and the row went ragged. */}
-              {selectedScope && (
-                <p className="budget-last-month budget-add-note">
-                  {selectedScope.previousActualPaise > 0 ? (
-                    <>
-                      {formatMonth(plan.previousMonth)}: <strong>{formatINR(selectedScope.previousActualPaise)}</strong>
-                      <button
-                        type="button"
-                        className="text-action"
-                        onClick={() => setAmount(String(Math.round(selectedScope.previousActualPaise / 100)))}
-                      >
-                        Use this
-                      </button>
-                    </>
-                  ) : (
-                    <>Nothing spent here in {formatMonth(plan.previousMonth)}</>
-                  )}
-                </p>
-              )}
-            </form>
 
             {plan.lines.length === 0 ? (
               <div className="stacked-empty-state">
@@ -4406,50 +4373,114 @@ function BudgetPlannerPage({
                   <BudgetLineCard
                     key={line.id}
                     line={line}
-                    isEditing={editingId === line.id}
-                    editAmount={editAmount}
-                    saving={saving}
-                    onEditAmount={setEditAmount}
                     onStartEdit={() => {
                       setEditingId(line.id);
                       setEditAmount(String(line.amountPaise / 100));
                     }}
-                    onCancelEdit={() => {
-                      setEditingId("");
-                      setEditAmount("");
-                    }}
-                    onSave={() => void saveEdit(line)}
                     onDelete={() => remove(line)}
                   />
                 ))}
               </div>
             )}
+
+            <CollapsibleForm title="Add budget line" variant="inset" open={adding} onToggle={setAdding}>
+              <form className="budget-add-form" onSubmit={addBudget}>
+                <label>
+                  SubType
+                  <select value={subKey} onChange={(event) => setSubKey(event.target.value)} disabled={!subScopes.length}>
+                    {subScopes.length === 0 && <option value="">No SubTypes available</option>}
+                    {subScopes.map((scope) => (
+                      <option key={budgetScopeKey(scope)} value={budgetScopeKey(scope)}>
+                        {budgetSubLabel(scope)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Amount
+                  <input
+                    inputMode="decimal"
+                    value={amount}
+                    onChange={(event) => setAmount(event.target.value)}
+                    placeholder="25000"
+                  />
+                </label>
+                <button className="primary-action" type="submit" disabled={saving || !subScopes.length}>
+                  <Plus size={17} />
+                  Add
+                </button>
+                {/* Its own row: inside a field this note made that column taller and the row went ragged. */}
+                {selectedScope && (
+                  <p className="budget-last-month budget-add-note">
+                    {selectedScope.previousActualPaise > 0 ? (
+                      <>
+                        {formatMonth(plan.previousMonth)}: <strong>{formatINR(selectedScope.previousActualPaise)}</strong>
+                        <button
+                          type="button"
+                          className="text-action"
+                          onClick={() => setAmount(String(Math.round(selectedScope.previousActualPaise / 100)))}
+                        >
+                          Use this
+                        </button>
+                      </>
+                    ) : (
+                      <>Nothing spent here in {formatMonth(plan.previousMonth)}</>
+                    )}
+                  </p>
+                )}
+              </form>
+            </CollapsibleForm>
           </>
         )}
       </Panel>
+
+      {editingLine && (
+        <FormDialog title={`Edit ${editingLine.name} budget`} onClose={cancelEdit}>
+          <form
+            className="stack-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveEdit(editingLine);
+            }}
+          >
+            <label>
+              Budget for {formatMonth(editingLine.month)}
+              <input
+                autoFocus
+                aria-label={`Budget amount for ${editingLine.name}`}
+                inputMode="decimal"
+                value={editAmount}
+                onChange={(event) => setEditAmount(event.target.value)}
+              />
+              <small className="field-hint">
+                {editingLine.previousActualPaise > 0
+                  ? `Spent here last month: ${formatINR(editingLine.previousActualPaise)}`
+                  : "Nothing was spent here last month."}
+              </small>
+            </label>
+            <div className="loan-form-actions">
+              <button type="button" className="secondary-action" onClick={cancelEdit} disabled={saving}>
+                Cancel
+              </button>
+              <button type="submit" className="primary-action" disabled={saving}>
+                <Check size={16} />
+                {saving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </form>
+        </FormDialog>
+      )}
     </div>
   );
 }
 
 function BudgetLineCard({
   line,
-  isEditing,
-  editAmount,
-  saving,
-  onEditAmount,
   onStartEdit,
-  onCancelEdit,
-  onSave,
   onDelete
 }: {
   line: BudgetLine;
-  isEditing: boolean;
-  editAmount: string;
-  saving: boolean;
-  onEditAmount: (value: string) => void;
   onStartEdit: () => void;
-  onCancelEdit: () => void;
-  onSave: () => void;
   onDelete: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -4516,34 +4547,14 @@ function BudgetLineCard({
       </div>
 
       <div className="budget-line-actions">
-        {isEditing ? (
-          <>
-            <input
-              aria-label={`Budget amount for ${line.name}`}
-              inputMode="decimal"
-              value={editAmount}
-              onChange={(event) => onEditAmount(event.target.value)}
-            />
-            <button type="button" className="secondary-action" disabled={saving} onClick={onSave}>
-              <Check size={16} />
-              Save
-            </button>
-            <button type="button" className="secondary-action" onClick={onCancelEdit}>
-              Cancel
-            </button>
-          </>
-        ) : (
-          <>
-            <button type="button" className="secondary-action" onClick={onStartEdit}>
-              <Pencil size={16} />
-              Edit
-            </button>
-            <button type="button" className="secondary-action danger-action" onClick={onDelete}>
-              <Trash2 size={16} />
-              Remove
-            </button>
-          </>
-        )}
+        <button type="button" className="secondary-action" onClick={onStartEdit}>
+          <Pencil size={16} />
+          Edit
+        </button>
+        <button type="button" className="secondary-action danger-action" onClick={onDelete}>
+          <Trash2 size={16} />
+          Remove
+        </button>
       </div>
       </>}
     </article>
@@ -4582,6 +4593,7 @@ function AccountsPage({
   showNotice: (message: string) => void;
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
+  const [adding, setAdding] = useState(false);
   const activeAccounts = accounts.filter((account) => !account.isArchived);
   const cardSegments = cardUtilisationSegments(activeAccounts);
   const cardOutstandingPaise = cardSegments.reduce((sum, segment) => sum + segment.amountPaise, 0);
@@ -4605,8 +4617,8 @@ function AccountsPage({
   }
 
   return (
-    <div className="two-column accounts-page">
-      <div className="section-column">
+    <div className="page-grid">
+      <div className="two-column accounts-page">
       <Panel title="Accounts & cards">
         {activeAccounts.length === 0 ? (
           <EmptyState text="No active accounts or cards. Add one to keep tracking." />
@@ -4646,14 +4658,15 @@ function AccountsPage({
       </Panel>
       </div>
 
-      <Panel title="Add account">
+      <CollapsibleForm title="Add account" open={adding} onToggle={setAdding}>
         <AccountForm
           onCreated={async () => {
+            setAdding(false);
             await refresh();
             showNotice("Account added.");
           }}
         />
-      </Panel>
+      </CollapsibleForm>
     </div>
   );
 }
@@ -4677,6 +4690,7 @@ function LoansPage({
   const isCardEmi = Array.isArray(cards);
   const noun = isCardEmi ? "EMI" : "loan";
   const [editingLoan, setEditingLoan] = useState<Loan | null>(null);
+  const [adding, setAdding] = useState(false);
   const activeLoans = loans.filter((loan) => !loan.isArchived);
   const archivedLoans = loans.filter((loan) => loan.isArchived);
   const loanType = categoryTypes.find((type) => type.behavior === "loan");
@@ -4745,7 +4759,6 @@ function LoansPage({
       </section>
 
       <div className="two-column loans-layout">
-        <div className="section-column">
         <Panel title={isCardEmi ? "EMI tracker" : "Loan tracker"}>
           {activeLoans.length === 0 ? (
             <EmptyState text="No active loans yet." />
@@ -4779,7 +4792,7 @@ function LoansPage({
           )}
         </Panel>
 
-      <Panel title={`Outstanding by ${noun}`}>
+        <Panel title={`Outstanding by ${noun}`}>
           <MixChart
             segments={loanSegments}
             totalPaise={activeOutstanding}
@@ -4790,16 +4803,35 @@ function LoansPage({
             emptyText={`Nothing outstanding yet. Add ${isCardEmi ? "an EMI" : "a loan"} to see the split.`}
           />
         </Panel>
-        </div>
+      </div>
 
-        <Panel title={`${editingLoan ? "Edit" : "Add"} ${noun}`}>
+      <CollapsibleForm title={`Add ${noun}`} open={adding} onToggle={setAdding}>
+        {loanType ? (
+          <LoanForm
+            loan={null}
+            loanType={loanType}
+            cards={cards}
+            onCancel={() => setAdding(false)}
+            onSaved={async (message) => {
+              setAdding(false);
+              await refresh();
+              showNotice(message);
+            }}
+          />
+        ) : (
+          <EmptyState text={`${isCardEmi ? "EMI" : "Loan"} needs a Type with Loan behavior. Add one in Categories first.`} />
+        )}
+      </CollapsibleForm>
+
+      {editingLoan && (
+        <FormDialog title={`Edit ${noun}`} onClose={() => setEditingLoan(null)}>
           {loanType ? (
             <LoanForm
-              key={editingLoan?.id ?? "new-loan"}
+              key={editingLoan.id}
               loan={editingLoan}
               loanType={loanType}
               cards={cards}
-              onCancel={editingLoan ? () => setEditingLoan(null) : undefined}
+              onCancel={() => setEditingLoan(null)}
               onSaved={async (message) => {
                 setEditingLoan(null);
                 await refresh();
@@ -4809,8 +4841,8 @@ function LoansPage({
           ) : (
             <EmptyState text={`${isCardEmi ? "EMI" : "Loan"} needs a Type with Loan behavior. Add one in Categories first.`} />
           )}
-        </Panel>
-      </div>
+        </FormDialog>
+      )}
 
 
     </div>
@@ -5188,6 +5220,7 @@ function InvestmentsPage({
 }) {
   const bankAccounts = accounts.filter((account) => account.type === "bank");
   const [editing, setEditing] = useState<Investment | null>(null);
+  const [adding, setAdding] = useState(false);
   const [chartTypeId, setChartTypeId] = useState<string>("all");
   const totalInvested = investments.reduce((sum, item) => sum + item.investedPaise, 0);
   const totalCurrent = investments.reduce((sum, item) => sum + item.currentValuePaise, 0);
@@ -5242,10 +5275,9 @@ function InvestmentsPage({
       </section>
 
       <div className="two-column loans-layout">
-        <div className="section-column">
         <Panel title="Portfolio">
           {groups.length === 0 ? (
-            <EmptyState text="No investments yet. Add your first holding on the right." />
+            <EmptyState text="No investments yet. Add your first holding below." />
           ) : (
             <div className="investment-groups">
               {groups.map((group) => (
@@ -5262,7 +5294,7 @@ function InvestmentsPage({
           )}
         </Panel>
 
-      <Panel
+        <Panel
           title={chartType ? `${chartType.label} holdings` : "Current value by type"}
           action={
             <label className="chart-scope">
@@ -5289,22 +5321,36 @@ function InvestmentsPage({
             onSegmentClick={chartType ? undefined : (segment) => setChartTypeId(segment.id)}
           />
         </Panel>
-        </div>
+      </div>
 
-        <Panel title={editing ? "Edit investment" : "Add investment"}>
+      <CollapsibleForm title="Add investment" open={adding} onToggle={setAdding}>
+        <InvestmentForm
+          investment={null}
+          bankAccounts={bankAccounts}
+          onCancel={() => setAdding(false)}
+          onSaved={async (message) => {
+            setAdding(false);
+            await refresh();
+            showNotice(message);
+          }}
+        />
+      </CollapsibleForm>
+
+      {editing && (
+        <FormDialog title="Edit investment" onClose={() => setEditing(null)}>
           <InvestmentForm
-            key={editing?.id ?? "new-investment"}
+            key={editing.id}
             investment={editing}
             bankAccounts={bankAccounts}
-            onCancel={editing ? () => setEditing(null) : undefined}
+            onCancel={() => setEditing(null)}
             onSaved={async (message) => {
               setEditing(null);
               await refresh();
               showNotice(message);
             }}
           />
-        </Panel>
-      </div>
+        </FormDialog>
+      )}
 
 
     </div>
@@ -5827,6 +5873,7 @@ function VacationsPage({
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
   const [editing, setEditing] = useState<Vacation | null>(null);
+  const [adding, setAdding] = useState(false);
   const totalSpent = vacations.reduce((sum, item) => sum + item.totalSpentPaise, 0);
   const totalBudget = vacations.reduce((sum, item) => sum + (item.budgetPaise ?? 0), 0);
 
@@ -5870,32 +5917,44 @@ function VacationsPage({
         Tag any expense to a trip from the Weekly Entry form. It still counts in your normal expenses, and also rolls up here.
       </p>
 
-      <div className="two-column loans-layout">
-        <Panel title="Your trips">
-          {vacations.length === 0 ? (
-            <EmptyState text="No vacations yet. Create your first trip on the right, then tag expenses to it." />
-          ) : (
-            <div className="vacation-list">
-              {vacations.map((vacation) => (
-                <VacationCard key={vacation.id} vacation={vacation} onEdit={setEditing} onDelete={remove} />
-              ))}
-            </div>
-          )}
-        </Panel>
+      <Panel title="Your trips">
+        {vacations.length === 0 ? (
+          <EmptyState text="No vacations yet. Add your first trip below, then tag expenses to it." />
+        ) : (
+          <div className="vacation-list">
+            {vacations.map((vacation) => (
+              <VacationCard key={vacation.id} vacation={vacation} onEdit={setEditing} onDelete={remove} />
+            ))}
+          </div>
+        )}
+      </Panel>
 
-        <Panel title={editing ? "Edit vacation" : "Add vacation"}>
+      <CollapsibleForm title="Add vacation" open={adding} onToggle={setAdding}>
+        <VacationForm
+          vacation={null}
+          onCancel={() => setAdding(false)}
+          onSaved={async (message) => {
+            setAdding(false);
+            await refresh();
+            showNotice(message);
+          }}
+        />
+      </CollapsibleForm>
+
+      {editing && (
+        <FormDialog title="Edit vacation" onClose={() => setEditing(null)}>
           <VacationForm
-            key={editing?.id ?? "new-vacation"}
+            key={editing.id}
             vacation={editing}
-            onCancel={editing ? () => setEditing(null) : undefined}
+            onCancel={() => setEditing(null)}
             onSaved={async (message) => {
               setEditing(null);
               await refresh();
               showNotice(message);
             }}
           />
-        </Panel>
-      </div>
+        </FormDialog>
+      )}
     </div>
   );
 }
@@ -6113,6 +6172,7 @@ function SubscriptionsPage({
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
   const [editing, setEditing] = useState<AutopaySubscription | null>(null);
+  const [adding, setAdding] = useState(false);
   const bankAccounts = accounts.filter((account) => account.type === "bank");
   const active = subscriptions.filter((subscription) => !subscription.isArchived);
   const archived = subscriptions.filter((subscription) => subscription.isArchived);
@@ -6157,8 +6217,7 @@ function SubscriptionsPage({
         <SummaryCard label="Monthly total" value={formatINRWhole(monthlyTotal)} countPaise={monthlyTotal} icon={<ArrowDownUp />} tone="warning" />
       </section>
 
-      <div className="two-column loans-layout">
-        <Panel title="Subscription tracker">
+      <Panel title="Subscription tracker">
           {active.length === 0 ? (
             <EmptyState text="No active subscriptions yet." />
           ) : (
@@ -6189,22 +6248,36 @@ function SubscriptionsPage({
               </div>
             </>
           )}
-        </Panel>
+      </Panel>
 
-        <Panel title={editing ? "Edit subscription" : "Add subscription"}>
+      <CollapsibleForm title="Add subscription" open={adding} onToggle={setAdding}>
+        <SubscriptionForm
+          subscription={null}
+          bankAccounts={bankAccounts}
+          onCancel={() => setAdding(false)}
+          onSaved={async (message) => {
+            setAdding(false);
+            await refresh();
+            showNotice(message);
+          }}
+        />
+      </CollapsibleForm>
+
+      {editing && (
+        <FormDialog title="Edit subscription" onClose={() => setEditing(null)}>
           <SubscriptionForm
-            key={editing?.id ?? "new-subscription"}
+            key={editing.id}
             subscription={editing}
             bankAccounts={bankAccounts}
-            onCancel={editing ? () => setEditing(null) : undefined}
+            onCancel={() => setEditing(null)}
             onSaved={async (message) => {
               setEditing(null);
               await refresh();
               showNotice(message);
             }}
           />
-        </Panel>
-      </div>
+        </FormDialog>
+      )}
     </div>
   );
 }
@@ -6235,6 +6308,10 @@ function SubscriptionCard({
           </div>
         </div>
         <div className="loan-header-actions">
+          {/* The bank the payment is taken from, in the same chip the EMI tracker uses: two
+              subscriptions of the same amount are told apart by where the money leaves from.
+              One with no bank set only reminds, and wears no chip. */}
+          {subscription.accountName && <span className="loan-bank">{subscription.accountName}</span>}
           <span className={`subscription-status ${expired ? "expired" : "active"}`}>
             {expired ? "Expired" : "Active"}
           </span>
@@ -6428,6 +6505,7 @@ function CategoriesPage({
   const [icon, setIcon] = useState(iconOptions[0]);
   const [color, setColor] = useState(colorOptions[0]);
   const [openTypeIds, setOpenTypeIds] = useState<string[]>([]);
+  const [adding, setAdding] = useState(false);
   const parentTypes = useMemo(
     () => categoryTypes.filter((type) => type.behavior !== "card_payment"),
     [categoryTypes]
@@ -6461,6 +6539,7 @@ function CategoriesPage({
         await Api.createSubcategory({ typeId, name, icon, color });
       }
       setName("");
+      setAdding(false);
       await refresh();
       showNotice(mode === "type" ? "Type created." : "SubType created.");
     } catch (err) {
@@ -6505,8 +6584,61 @@ function CategoriesPage({
   }
 
   return (
-    <div className="two-column">
-      <Panel title="Create Type or SubType">
+    <div className="page-grid">
+      <Panel title="Type library">
+        <div className="taxonomy-tree">
+          {categoryTypes.map((categoryType) => {
+            const isOpen = openTypeIds.includes(categoryType.id);
+            return (
+            <div className={`taxonomy-group ${isOpen ? "open" : ""}`} key={categoryType.id}>
+              <div className="taxonomy-type-row">
+                <button
+                  className="taxonomy-toggle"
+                  type="button"
+                  aria-expanded={isOpen}
+                  onClick={() => toggleTypeOpen(categoryType.id)}
+                >
+                  <ChevronDown size={16} />
+                  <CategoryBadge category={typeToCategory(categoryType)} />
+                </button>
+                <span className="category-flags">
+                  {categoryType.isLocked ? "Locked" : categoryType.isSystem ? "Default" : "Custom"}
+                </span>
+                <button
+                  className="icon-button danger"
+                  onClick={() => removeType(categoryType)}
+                  disabled={categoryType.isLocked}
+                  title={categoryType.isLocked ? "This Type is locked" : "Delete Type"}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+              {isOpen && categoryType.behavior === "card_payment" ? (
+                <p className="helper-text dynamic-subtype-note">SubTypes come from active credit-card accounts.</p>
+              ) : isOpen ? (
+                <div className="taxonomy-subtypes">
+                  {categoryType.subcategories.map((subcategory) => (
+                    <div className="taxonomy-subtype-row" key={subcategory.id}>
+                      <CategoryBadge category={subcategoryToCategory(subcategory)} compact />
+                      <button
+                        className="icon-button danger"
+                        onClick={() => removeSubcategory(subcategory)}
+                        disabled={subcategory.isLocked}
+                        title={subcategory.isLocked ? "This SubType is locked" : "Delete SubType"}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          );
+          })}
+        </div>
+      </Panel>
+
+      <CollapsibleForm title="Create Type or SubType" open={adding} onToggle={setAdding}>
         <form className="stack-form" onSubmit={submit}>
           <div className="segmented-control">
             <button type="button" className={mode === "subtype" ? "active" : ""} onClick={() => setMode("subtype")}>
@@ -6585,60 +6717,7 @@ function CategoriesPage({
             {mode === "type" ? "Add Type" : "Add SubType"}
           </button>
         </form>
-      </Panel>
-
-      <Panel title="Type library">
-        <div className="taxonomy-tree">
-          {categoryTypes.map((categoryType) => {
-            const isOpen = openTypeIds.includes(categoryType.id);
-            return (
-            <div className={`taxonomy-group ${isOpen ? "open" : ""}`} key={categoryType.id}>
-              <div className="taxonomy-type-row">
-                <button
-                  className="taxonomy-toggle"
-                  type="button"
-                  aria-expanded={isOpen}
-                  onClick={() => toggleTypeOpen(categoryType.id)}
-                >
-                  <ChevronDown size={16} />
-                  <CategoryBadge category={typeToCategory(categoryType)} />
-                </button>
-                <span className="category-flags">
-                  {categoryType.isLocked ? "Locked" : categoryType.isSystem ? "Default" : "Custom"}
-                </span>
-                <button
-                  className="icon-button danger"
-                  onClick={() => removeType(categoryType)}
-                  disabled={categoryType.isLocked}
-                  title={categoryType.isLocked ? "This Type is locked" : "Delete Type"}
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-              {isOpen && categoryType.behavior === "card_payment" ? (
-                <p className="helper-text dynamic-subtype-note">SubTypes come from active credit-card accounts.</p>
-              ) : isOpen ? (
-                <div className="taxonomy-subtypes">
-                  {categoryType.subcategories.map((subcategory) => (
-                    <div className="taxonomy-subtype-row" key={subcategory.id}>
-                      <CategoryBadge category={subcategoryToCategory(subcategory)} compact />
-                      <button
-                        className="icon-button danger"
-                        onClick={() => removeSubcategory(subcategory)}
-                        disabled={subcategory.isLocked}
-                        title={subcategory.isLocked ? "This SubType is locked" : "Delete SubType"}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          );
-          })}
-        </div>
-      </Panel>
+      </CollapsibleForm>
     </div>
   );
 }
@@ -8011,7 +8090,20 @@ function AccountManagerLine({
 
       {expanded && <>
         {isCard && <CardLimitSummary account={account} alertPercent={alertPercent} />}
-        {editing ? (
+        <div className="account-actions">
+          <button type="button" className="secondary-action" onClick={startEdit}>
+            <Pencil size={16} />
+            Edit
+          </button>
+          <button className="secondary-action danger-action" onClick={() => onRemove?.(account)}>
+            <Trash2 size={16} />
+            Delete
+          </button>
+        </div>
+      </>}
+
+      {editing && (
+        <FormDialog title={`Edit ${account.name}`} onClose={() => setEditing(false)}>
           <form className="stack-form account-edit-form" onSubmit={save}>
             <label>
               Name
@@ -8067,19 +8159,8 @@ function AccountManagerLine({
               </button>
             </div>
           </form>
-        ) : (
-        <div className="account-actions">
-          <button type="button" className="secondary-action" onClick={startEdit}>
-            <Pencil size={16} />
-            Edit
-          </button>
-          <button className="secondary-action danger-action" onClick={() => onRemove?.(account)}>
-            <Trash2 size={16} />
-            Delete
-          </button>
-        </div>
-        )}
-      </>}
+        </FormDialog>
+      )}
     </article>
   );
 }
@@ -8100,6 +8181,155 @@ function Panel({
         {action && <div className="panel-action">{action}</div>}
       </div>
       {children}
+    </section>
+  );
+}
+
+/* Editing used to happen in a form parked at the top of the page, so changing a holding near the
+   bottom of a long list meant scrolling up to the form and scrolling back down to see what it
+   did. The form comes to the item instead. One dialog serves every section. */
+function FormDialog({
+  title,
+  onClose,
+  children
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const titleId = useId();
+  const dialog = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+      /* A modal that lets Tab wander out onto the page behind it is not modal. Tab cycles
+         inside the dialog instead, wrapping at both ends. */
+      if (event.key !== "Tab" || !dialog.current) return;
+      const focusable = [...dialog.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )].filter((element) => element.offsetParent !== null);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (!event.shiftKey && (active === last || !dialog.current.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && (active === first || !dialog.current.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  /* Holding the page still while the dialog is open. overflow:hidden alone is ignored by Safari
+     on a phone, so the body is pinned at its current offset and put back afterwards -- which is
+     also what keeps the page exactly where it was when the dialog closes. */
+  useEffect(() => {
+    const offset = window.scrollY;
+    const body = document.body;
+    const before = {
+      position: body.style.position,
+      top: body.style.top,
+      width: body.style.width,
+      overflow: body.style.overflow
+    };
+    body.style.position = "fixed";
+    body.style.top = `-${offset}px`;
+    body.style.width = "100%";
+    body.style.overflow = "hidden";
+    /* Whatever was focused when the dialog opened -- the Edit button, almost always -- gets the
+       focus back when it closes, so the keyboard does not land back at the top of the page. */
+    const opener = document.activeElement as HTMLElement | null;
+    dialog.current?.focus({ preventScroll: true });
+    return () => {
+      body.style.position = before.position;
+      body.style.top = before.top;
+      body.style.width = before.width;
+      body.style.overflow = before.overflow;
+      window.scrollTo(0, offset);
+      opener?.focus?.({ preventScroll: true });
+    };
+  }, []);
+
+  /* Through a portal onto the body, not into the page. A page that is mid-transition carries a
+     transform, and a transform makes its subtree the containing block for position:fixed -- which
+     put the first version of this dialog a page and a half above the top of the screen. */
+  const content = (
+    <div
+      className="modal-backdrop form-dialog-backdrop"
+      role="presentation"
+      /* mousedown rather than click: a drag that starts on a field and ends on the backdrop
+         should not throw the form away. */
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="form-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        ref={dialog}
+        tabIndex={-1}
+      >
+        <div className="form-dialog-header">
+          <h2 id={titleId}>{title}</h2>
+          <button type="button" className="icon-button" onClick={onClose} aria-label={`Close ${title}`}>
+            <X size={18} />
+          </button>
+        </div>
+        <div className="form-dialog-body">{children}</div>
+      </div>
+    </div>
+  );
+
+  // There is no body to portal onto while this is being rendered to a string off the browser.
+  return typeof document === "undefined" ? content : createPortal(content, document.body);
+}
+
+/* An add form kept folded away. A section leads with what you already have; the form for adding
+   more is one row until you ask for it. The page owns `open` so that saving can fold it back up,
+   and so the fields leave the page entirely rather than being hidden in place. */
+function CollapsibleForm({
+  title,
+  open,
+  onToggle,
+  variant = "panel",
+  children
+}: {
+  title: string;
+  open: boolean;
+  onToggle: (open: boolean) => void;
+  variant?: "panel" | "inset";
+  children: React.ReactNode;
+}) {
+  const bodyId = useId();
+  return (
+    <section className={`collapsible-form as-${variant} ${open ? "open" : ""}`}>
+      <h2 className="collapsible-form-heading">
+        <button
+          type="button"
+          className="collapsible-form-toggle"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={() => onToggle(!open)}
+        >
+          <span className="collapsible-form-mark">
+            <Plus size={16} />
+          </span>
+          <span className="collapsible-form-label">{title}</span>
+          <ChevronDown size={18} className="collapsible-form-chevron" />
+        </button>
+      </h2>
+      {open && (
+        <div className="collapsible-form-body" id={bodyId}>
+          {children}
+        </div>
+      )}
     </section>
   );
 }
@@ -8794,3 +9024,23 @@ function formatBackupDetail(status: BackupStatus | null) {
     ? "The database is hosted, and its host takes the backups. The app does not copy it, and could not: a hosted database does not hand a client its own storage."
     : "This database is running locally and nothing is backing it up.";
 }
+
+/* Exported for the gate verifier in .unlazy/forms-19, which renders these to static markup to
+   check what a page shows before anything has been clicked. Nothing else imports them. */
+export {
+  AccountForm,
+  AccountsPage,
+  BudgetPlannerPage,
+  CategoriesPage,
+  CollapsibleForm,
+  FormDialog,
+  InvestmentForm,
+  InvestmentsPage,
+  LoanForm,
+  LoansPage,
+  SubscriptionCard,
+  SubscriptionForm,
+  SubscriptionsPage,
+  VacationForm,
+  VacationsPage
+};

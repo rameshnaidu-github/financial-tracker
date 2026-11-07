@@ -2434,15 +2434,6 @@ button.mix-bar-head:hover > span {
   gap: 10px;
 }
 
-/* ---------- A section's list and its chart share one column ---------- */
-/* Without this the taller add form left dead space beside a short list. */
-.section-column {
-  display: grid;
-  gap: var(--space-5);
-  align-content: start;
-  min-width: 0;
-}
-
 /* ---------- Coming up: one block per kind of payment ---------- */
 .upcoming-group {
   display: grid;
