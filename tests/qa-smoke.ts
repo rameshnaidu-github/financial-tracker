@@ -4169,11 +4169,14 @@ test("an AutoPay with a bank takes its own payment, and waits when the balance i
   const poor = await services.createAccount({
     name: `QA AutoPay Poor ${suffix}`, type: "bank", startingBalancePaise: 100_00
   });
-  const firstOfThisMonth = `${currentIsoDateForTests().slice(0, 7)}-01`;
+  // Due today, whatever day that is. Pinning this to the 1st made the test pass only on the
+  // 1st: from the 2nd onwards the catch-up rightly refuses to pay a period that is already
+  // behind the day the subscription was recorded.
+  const dueToday = currentIsoDateForTests();
 
   // 200 against 1,000: taken, leaving 800.
   const paid = await services.createAutopaySubscription({
-    name: `QA Netflix ${suffix}`, amountPaise: 200_00, startDate: firstOfThisMonth,
+    name: `QA Netflix ${suffix}`, amountPaise: 200_00, startDate: dueToday,
     durationMonths: 12, accountId: rich.id
   });
   const balance = async (id: string) => (await services.listAccounts(true)).find((item) => item.id === id)?.balancePaise;
@@ -4189,7 +4192,7 @@ test("an AutoPay with a bank takes its own payment, and waits when the balance i
 
   // 200 against 100: nothing happens at all.
   const held = await services.createAutopaySubscription({
-    name: `QA Spotify ${suffix}`, amountPaise: 200_00, startDate: firstOfThisMonth,
+    name: `QA Spotify ${suffix}`, amountPaise: 200_00, startDate: dueToday,
     durationMonths: 12, accountId: poor.id
   });
   assert(await balance(poor.id) === 100_00, "A payment the bank cannot cover must not be taken.");
@@ -4315,12 +4318,14 @@ test("a mutual fund bought as a SIP takes its instalment when the bank covers it
   const poor = await services.createAccount({
     name: `QA SIP Poor ${suffix}`, type: "bank", startingBalancePaise: 100_00
   });
-  const firstOfThisMonth = `${currentIsoDateForTests().slice(0, 7)}-01`;
+  // Due today, for the same reason as the AutoPay above.
+  const dueToday = currentIsoDateForTests();
+  const sipDay = Number(dueToday.slice(8, 10));
 
   const fund = await services.createInvestment({
     type: "mutual_funds", name: `QA SIP Flexicap ${suffix}`, investedPaise: 50_000_00,
-    currentValuePaise: 50_000_00, purchaseDate: firstOfThisMonth,
-    sipAmountPaise: 2_000_00, sipDay: 1, sipAccountId: rich.id
+    currentValuePaise: 50_000_00, purchaseDate: dueToday,
+    sipAmountPaise: 2_000_00, sipDay, sipAccountId: rich.id
   });
   const balance = async (id: string) => (await services.listAccounts(true)).find((item) => item.id === id)?.balancePaise;
   assert(await balance(rich.id) === 8_000_00, `The instalment should leave 8,000, got ${await balance(rich.id)}.`);
@@ -4332,8 +4337,8 @@ test("a mutual fund bought as a SIP takes its instalment when the bank covers it
   // Short: nothing is taken, and it is listed rather than passing by in silence.
   const short = await services.createInvestment({
     type: "mutual_funds", name: `QA SIP Smallcap ${suffix}`, investedPaise: 1_000_00,
-    currentValuePaise: 1_000_00, purchaseDate: firstOfThisMonth,
-    sipAmountPaise: 2_000_00, sipDay: 1, sipAccountId: poor.id
+    currentValuePaise: 1_000_00, purchaseDate: dueToday,
+    sipAmountPaise: 2_000_00, sipDay, sipAccountId: poor.id
   });
   assert(await balance(poor.id) === 100_00, "An instalment the bank cannot cover must not be taken.");
   const listed = (await services.getUpcomingPayments(14)).items.find((item) => item.id === short.id);
