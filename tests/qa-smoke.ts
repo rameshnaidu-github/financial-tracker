@@ -2943,12 +2943,36 @@ test("backfilled EMIs are not double counted in loan history", async () => {
   }
   const summary = (await services.listLoans(true)).find((item) => item.id === loan.id);
   assert(summary, "Loan should be listed.");
-  // Apr 2025 – Dec 2025 are estimated history; Jan–Mar 2026 are the recorded EMIs.
-  const historical = 9;
+  // The entered balance is 1,00,000 below the principal, so the instalments behind it are however
+  // many of the loan's own schedule it takes to repay that much -- and the interest is the
+  // interest those instalments carried. Worked out here rather than read back from the service.
+  // A balance rarely lands exactly on a schedule point, so the instalment taken is the one whose
+  // repaid principal comes closest to the gap.
+  const gap = 8_00_000_00 - 7_00_000_00;
+  let balance = 8_00_000_00;
+  let repaid = 0;
+  let runningInterest = 0;
+  let historical = 0;
+  let scheduledInterest = 0;
+  let closest = gap;
+  for (let instalment = 1; instalment <= 60; instalment += 1) {
+    const interest = Math.round(balance * (900 / 10_000 / 12));
+    const principal = emiPaise - interest;
+    balance -= principal;
+    repaid += principal;
+    runningInterest += interest;
+    if (Math.abs(repaid - gap) <= closest) {
+      closest = Math.abs(repaid - gap);
+      historical = instalment;
+      scheduledInterest = runningInterest;
+    }
+    if (repaid >= gap) break;
+  }
+  assert(historical === 9, `This loan's 1,00,000 is closest to 9 instalments, got ${historical}.`);
   assert(summary.monthsElapsed === historical + 3, `Months elapsed should be 12, got ${summary.monthsElapsed}.`);
   assert(
-    summary.estimatedHistoricalInterestPaidPaise === historical * emiPaise - (8_00_000_00 - 7_00_000_00),
-    `Historical interest should cover only the 9 unrecorded months, got ${summary.estimatedHistoricalInterestPaidPaise}.`
+    summary.estimatedHistoricalInterestPaidPaise === scheduledInterest,
+    `Historical interest should be the 9 unrecorded months' schedule interest (${scheduledInterest}), got ${summary.estimatedHistoricalInterestPaidPaise}.`
   );
   const r = 900 / 10_000 / 12;
   const amortized = Math.ceil(-Math.log(1 - (summary.outstandingPaise * r) / emiPaise) / Math.log(1 + r));
@@ -3442,53 +3466,82 @@ test("bonds are an investment type with their own allocation slice", async () =>
   assert(constraint?.definition.includes("'bonds'"), "The investments table should accept bonds.");
 });
 
-test("historical interest never exceeds what the loan's rate charges", async () => {
-  // Started three months ago, added today, balance still the full principal: the formula
-  // "EMIs due minus principal drop" used to book every assumed EMI as interest, even at 0%.
+test("a loan whose balance has not moved has paid no interest here", async () => {
+  // The old reading worked history out from the calendar: a loan three months old was assumed to
+  // have paid three EMIs, and "EMIs due minus the principal drop" booked the lot as interest --
+  // even at 0%, where there is no interest to book. Interest now follows the principal that
+  // actually came off, so a balance that has not moved carries none of it, at any rate.
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth() - 2, 1);
   const startMonth = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`;
-  const zero = await services.createLoan({
-    name: "QA 0% consumer loan",
-    subcategoryId: await subcategoryId("Loan", "Personal"),
-    principalAmountPaise: 5_000_00,
-    startingOutstandingPaise: 5_000_00,
-    startMonth,
-    annualInterestRateBps: 0,
-    tenureMonths: 10,
-    monthlyEmiPaise: 500_00
-  });
-  const zeroSummary = (await services.listLoans(true)).find((item) => item.id === zero.id);
-  assert(zeroSummary && zeroSummary.monthsElapsed > 0, "The 0% loan should have untracked months before today.");
-  assert(
-    zeroSummary.estimatedHistoricalInterestPaidPaise === 0 && zeroSummary.interestPaidPaise === 0,
-    `A 0% loan must show no interest paid, got ${zeroSummary.interestPaidPaise}.`
-  );
 
-  // Same shape at 12%: interest is capped at what 12% a year charges on 5,000 over those months.
-  const rated = await services.createLoan({
-    name: "QA 12% loan with an unchanged balance",
+  for (const [label, rateBps, emiPaise] of [["0%", 0, 500_00], ["12%", 1200, 528_00]] as const) {
+    const loan = await services.createLoan({
+      name: `QA unmoved ${label} loan`,
+      subcategoryId: await subcategoryId("Loan", "Personal"),
+      principalAmountPaise: 5_000_00,
+      startingOutstandingPaise: 5_000_00,
+      startMonth,
+      annualInterestRateBps: rateBps,
+      tenureMonths: 10,
+      monthlyEmiPaise: emiPaise
+    });
+    const summary = (await services.listLoans(true)).find((item) => item.id === loan.id);
+    assert(summary, `The ${label} loan should be listed.`);
+    assert(
+      summary.monthsElapsed === 0,
+      `Nothing has come off the ${label} loan, so no instalment is behind it; got ${summary.monthsElapsed}.`
+    );
+    assert(
+      summary.estimatedHistoricalInterestPaidPaise === 0 && summary.interestPaidPaise === 0,
+      `The ${label} loan must show no interest paid, got ${summary.interestPaidPaise}.`
+    );
+    assert(
+      summary.outstandingPaise === 5_000_00,
+      `The ${label} loan still owes the whole principal, got ${summary.outstandingPaise}.`
+    );
+  }
+
+  // And when the balance has moved, the interest is the schedule's, not a guess from the calendar.
+  const moved = await services.createLoan({
+    name: "QA moved 12% loan",
     subcategoryId: await subcategoryId("Loan", "Personal"),
     principalAmountPaise: 5_000_00,
-    startingOutstandingPaise: 5_000_00,
+    startingOutstandingPaise: 4_000_00,
     startMonth,
     annualInterestRateBps: 1200,
     tenureMonths: 10,
     monthlyEmiPaise: 528_00
   });
-  const ratedSummary = (await services.listLoans(true)).find((item) => item.id === rated.id);
-  assert(ratedSummary, "The 12% loan should be listed.");
+  const movedSummary = (await services.listLoans(true)).find((item) => item.id === moved.id);
+  assert(movedSummary, "The moved loan should be listed.");
+  const gap = 5_000_00 - 4_000_00;
   let balance = 5_000_00;
+  let repaid = 0;
+  let runningInterest = 0;
+  let months = 0;
   let scheduled = 0;
-  for (let month = 0; month < ratedSummary.monthsElapsed; month += 1) {
+  let closest = gap;
+  for (let instalment = 1; instalment <= 10; instalment += 1) {
     const interest = Math.round(balance * 0.01);
-    scheduled += interest;
-    balance -= 528_00 - interest;
+    const principal = 528_00 - interest;
+    balance -= principal;
+    repaid += principal;
+    runningInterest += interest;
+    if (Math.abs(repaid - gap) <= closest) {
+      closest = Math.abs(repaid - gap);
+      months = instalment;
+      scheduled = runningInterest;
+    }
+    if (repaid >= gap) break;
   }
   assert(
-    ratedSummary.estimatedHistoricalInterestPaidPaise > 0 &&
-      Math.abs(ratedSummary.estimatedHistoricalInterestPaidPaise - scheduled) <= ratedSummary.monthsElapsed,
-    `Estimated interest should follow the 12% schedule (${scheduled}), got ${ratedSummary.estimatedHistoricalInterestPaidPaise}.`
+    movedSummary.monthsElapsed === months,
+    `The moved loan is ${months} instalments in, got ${movedSummary.monthsElapsed}.`
+  );
+  assert(
+    movedSummary.estimatedHistoricalInterestPaidPaise === scheduled,
+    `Its interest should be the schedule's ${scheduled}, got ${movedSummary.estimatedHistoricalInterestPaidPaise}.`
   );
 });
 

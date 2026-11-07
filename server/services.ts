@@ -450,9 +450,8 @@ export async function listLoans(includeArchived = false, kind: "loan" | "card-em
                 account_id, is_archived, created_at, updated_at
          FROM loans
          WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}${cardFilter}
-         -- The name column is declared COLLATE NOCASE, which SQLite applies to the ordering as
-         -- well as to comparisons, so repeating it here changes nothing -- and it is the one
-         -- construct Postgres has no spelling for.
+         -- The name column is CITEXT, which Postgres applies to the ordering as well as to
+         -- comparisons, so "hdfc" sorts beside "HDFC" without a COLLATE here.
          ORDER BY is_archived ASC, name ASC`
       )
       .all(currentUserId()))
@@ -4582,40 +4581,21 @@ async function mapLoan(row: LoanRow): Promise<LoanSummary> {
     row.principal_amount_paise - row.starting_outstanding_paise,
     0
   );
-  // The entered outstanding is the balance before the first EMI recorded here, so the
-  // estimated history must stop the month before that EMI. Otherwise an EMI backfilled for
-  // an earlier month is counted once as "history" and again as a tracked payment.
-  const earliestEmiMonth = asRecord<{ month: string | null }>(
-    (await db
-      .prepare(
-        `SELECT MIN(substr(t.date, 1, 7)) AS month
-         FROM loan_payments lp JOIN transactions t ON t.id = lp.transaction_id AND t.user_id = lp.user_id
-         WHERE lp.loan_id = ? AND lp.user_id = ? AND lp.payment_type = 'emi'`
-      )
-      .get(row.id, currentUserId()))
-  ).month;
-  const createdMonth = localMonthFromSqliteTimestamp(row.created_at);
-  const trackingStartMonth =
-    earliestEmiMonth && addMonths(earliestEmiMonth, -1) < createdMonth
-      ? addMonths(earliestEmiMonth, -1)
-      : createdMonth;
-  const historicalInstallments = paidInstallmentsThroughMonth(
-    row.start_month,
-    trackingStartMonth,
+  // What was paid before this app saw the loan is not a question of when the record happened to
+  // be created -- it is what the entered outstanding says. Walking the loan's own schedule from
+  // the full principal down to that balance gives both the instalments behind it and the
+  // interest they carried. The old reading counted from the month the record was made, which
+  // charged a brand-new loan a month of interest it had never paid, and lost most of the history
+  // of a loan whose first recorded EMI sat close to its start month.
+  const history = scheduleUntilPrincipalRepaid(
+    row.principal_amount_paise,
+    row.annual_interest_rate_bps,
+    row.monthly_emi_paise,
+    openingPrincipalPaidPaise,
     row.tenure_months
   );
-  // EMIs due minus the principal that came down is the interest, but only if those EMIs were
-  // really paid. When the entered balance never dropped (or the rate is 0%), that difference is
-  // not interest, so the estimate is capped at what the loan's own rate would have charged.
-  const estimatedHistoricalInterestPaidPaise = Math.min(
-    Math.max(historicalInstallments * row.monthly_emi_paise - openingPrincipalPaidPaise, 0),
-    scheduledInterestPaise(
-      row.principal_amount_paise,
-      row.annual_interest_rate_bps,
-      row.monthly_emi_paise,
-      historicalInstallments
-    )
-  );
+  const historicalInstallments = history.installments;
+  const estimatedHistoricalInterestPaidPaise = history.interestPaise;
   const trackedPrincipalPaidPaise = paymentTotals?.principal_paise ?? 0;
   const trackedInterestPaidPaise = paymentTotals?.interest_paise ?? 0;
   const trackedEmiCount = paymentTotals?.emi_count ?? 0;
@@ -4682,21 +4662,48 @@ async function mapLoan(row: LoanRow): Promise<LoanSummary> {
 }
 
 /** Interest the amortisation schedule charges over the first `installments` EMIs of a loan. */
-function scheduledInterestPaise(
+/**
+ * Walks a reducing-balance schedule from the full principal and stops at the instalment whose
+ * repaid principal comes closest to `principalRepaidPaise` -- the amount the entered outstanding
+ * says has already come off. Reports how many instalments that is and the interest they carried.
+ *
+ * A loan entered with nothing yet repaid returns zero of both, which is the whole point: it has
+ * paid no interest either. An EMI too small to cover its own interest never reduces the balance,
+ * so the walk stops rather than looping to the tenure.
+ */
+function scheduleUntilPrincipalRepaid(
   principalPaise: number,
   annualInterestRateBps: number,
   monthlyEmiPaise: number,
-  installments: number
+  principalRepaidPaise: number,
+  tenureMonths: number
 ) {
+  if (principalRepaidPaise <= 0 || monthlyEmiPaise <= 0 || principalPaise <= 0) {
+    return { installments: 0, interestPaise: 0 };
+  }
   const monthlyRate = annualInterestRateBps / 10_000 / 12;
   let balance = principalPaise;
+  let repaid = 0;
   let interestPaise = 0;
-  for (let month = 0; month < installments && balance > 0; month += 1) {
+  let best = { installments: 0, interestPaise: 0, distance: principalRepaidPaise };
+  for (let installment = 1; installment <= tenureMonths && balance > 0; installment += 1) {
     const interest = Math.round(balance * monthlyRate);
+    const principalPart = Math.min(Math.max(monthlyEmiPaise - interest, 0), balance);
+    if (principalPart === 0) {
+      break;
+    }
+    balance -= principalPart;
+    repaid += principalPart;
     interestPaise += interest;
-    balance -= Math.max(monthlyEmiPaise - interest, 0);
+    const distance = Math.abs(repaid - principalRepaidPaise);
+    if (distance <= best.distance) {
+      best = { installments: installment, interestPaise, distance };
+    }
+    if (repaid >= principalRepaidPaise) {
+      break;
+    }
   }
-  return interestPaise;
+  return { installments: best.installments, interestPaise: best.interestPaise };
 }
 
 function calculateRemainingPayments(
@@ -6267,27 +6274,6 @@ function currentMonth() {
 function localIsoDateFromSqliteTimestamp(timestamp: string) {
   const parsed = new Date(`${timestamp.replace(" ", "T")}Z`);
   return Number.isNaN(parsed.getTime()) ? currentIsoDate() : localIsoDate(parsed);
-}
-
-function localMonthFromSqliteTimestamp(timestamp: string) {
-  const parsed = new Date(`${timestamp.replace(" ", "T")}Z`);
-  if (Number.isNaN(parsed.getTime())) {
-    return currentMonth();
-  }
-  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function monthsBetween(startMonth: string, endMonth: string) {
-  const [startYear, startIndex] = startMonth.split("-").map(Number);
-  const [endYear, endIndex] = endMonth.split("-").map(Number);
-  return Math.max((endYear - startYear) * 12 + (endIndex - startIndex), 0);
-}
-
-function paidInstallmentsThroughMonth(startMonth: string, throughMonth: string, tenureMonths: number) {
-  if (startMonth > throughMonth) {
-    return 0;
-  }
-  return Math.min(monthsBetween(startMonth, throughMonth) + 1, tenureMonths);
 }
 
 function addMonths(month: string, count: number) {

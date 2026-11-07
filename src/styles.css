@@ -3248,9 +3248,11 @@ a {
   gap: 10px;
 }
 
+/* Five things, five tracks. The tick was added to the markup without one, which pushed the
+   actions onto an implicit second row and left a tall empty band under every transaction. */
 .ledger-row {
   display: grid;
-  grid-template-columns: minmax(150px, 1.1fr) minmax(420px, 2fr) minmax(104px, auto) auto;
+  grid-template-columns: auto minmax(150px, 1.1fr) minmax(300px, 1.7fr) minmax(104px, auto) auto;
   gap: 14px;
   align-items: center;
   border: 1px solid var(--line);
@@ -3262,16 +3264,46 @@ a {
     box-shadow 160ms ease;
 }
 
-.ledger-item:nth-child(odd) .ledger-row {
+/* By type, not by position: each day's heading is the first child of its section, so counting
+   children would flip the stripes from one day to the next. */
+.ledger-item:nth-of-type(odd) .ledger-row {
   background: rgba(37, 99, 235, 0.045);
 }
 
-.ledger-item:nth-child(even) .ledger-row {
+.ledger-item:nth-of-type(even) .ledger-row {
   background: var(--panel);
 }
 
-.transaction-row-card {
-  min-height: 78px;
+/* ---------- One heading a day ---------- */
+.ledger-day {
+  display: grid;
+  gap: 10px;
+}
+
+.ledger-day-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 2px 0 0;
+  padding: 0 4px;
+  font-size: 0.82rem;
+}
+
+.ledger-day-date {
+  color: var(--text);
+  font-weight: 900;
+  letter-spacing: 0.01em;
+}
+
+.ledger-day-count {
+  margin-right: auto;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.ledger-day-net {
+  font-size: 0.88rem;
+  white-space: nowrap;
 }
 
 .transaction-primary-cell {
