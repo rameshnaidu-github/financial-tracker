@@ -319,24 +319,18 @@ a {
   min-height: 38px;
 }
 
-.profile-save-button,
-.profile-menu button {
+/* Only Save. This used to catch `.profile-menu button`, which made every button on the page a
+   full-width transparent block -- including the ones that are meant to sit beside a label. */
+.profile-save-button {
   display: flex;
-  width: 100%;
   align-items: center;
+  justify-content: center;
   gap: 9px;
   border-radius: 8px;
-  background: transparent;
-  color: var(--text);
-  padding: 10px;
-  font-weight: 850;
-  text-align: left;
-}
-
-.profile-save-button {
-  justify-content: center;
   background: var(--accent);
   color: #ffffff;
+  padding: 10px 16px;
+  font-weight: 850;
 }
 
 .profile-menu .profile-save-button,
@@ -481,20 +475,6 @@ a {
 /* The owner's backup row carries a value and a button, so it needs a column for each. */
 .backup-row.has-action {
   grid-template-columns: minmax(0, 1fr) auto auto;
-}
-
-.theme-row {
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  background: var(--accent-soft);
-  color: var(--text);
-}
-
-:root[data-theme="dark"] .theme-row {
-  background: var(--accent-soft);
-}
-
-.profile-menu button:hover {
-  background: var(--accent-soft);
 }
 
 .control-field {

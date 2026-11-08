@@ -40,7 +40,7 @@ import {
   WalletCards,
   X
 } from "./ui-icons";
-import { FormEvent, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Api, withoutCleared } from "./api";
 import {
@@ -4225,6 +4225,242 @@ function PaymentHistoryGrid({
   );
 }
 
+/**
+ * What an amount looks like in a budget input: whole rupees when it is whole rupees, because
+ * "25000" is what someone would have typed and "25000.00" is what a machine would have.
+ */
+export function budgetAmountInput(paise: number) {
+  return paise % 100 === 0 ? String(Math.round(paise / 100)) : (paise / 100).toFixed(2);
+}
+
+/**
+ * Last month, offered rather than recounted.
+ *
+ * Shown on every month, not only an empty one: the common case is a month part-planned, where
+ * the rest of last month's plan is exactly what is missing. The button states the count and the
+ * month so pressing it holds no surprise, and when there is nothing to copy it says so instead
+ * of disappearing -- a control that vanishes teaches nothing about why.
+ */
+export function CopyLastMonthRow({
+  previousPlan,
+  busy,
+  onCopy
+}: {
+  previousPlan: BudgetPlan["previousPlan"];
+  busy: boolean;
+  onCopy: () => void;
+}) {
+  // Last month had no plan either, so there is nothing to offer and nothing to explain.
+  if (previousPlan.lineCount === 0) {
+    return null;
+  }
+  const { missingCount, lineCount, missingAmountPaise, month } = previousPlan;
+  const settled = missingCount === 0;
+  return (
+    <div className={`budget-copy-row ${settled ? "is-settled" : ""}`}>
+      <div className="budget-copy-copy">
+        <strong>Same as last month</strong>
+        <span>
+          {settled
+            ? `This month already carries every line ${formatMonth(month)} had.`
+            : `${missingCount} of ${formatMonth(month)}'s ${lineCount} line${lineCount === 1 ? "" : "s"} ${
+                missingCount === 1 ? "is" : "are"
+              } not set here yet, worth ${formatINR(missingAmountPaise)}.`}
+        </span>
+      </div>
+      <button
+        type="button"
+        className="secondary-action budget-copy-button"
+        onClick={onCopy}
+        disabled={busy || settled}
+      >
+        <RotateCcw size={17} />
+        {settled ? "Nothing to copy" : `Copy ${missingCount} line${missingCount === 1 ? "" : "s"}`}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The two figures that answer "how much?" without arithmetic: what this category was budgeted
+ * last month, and what it actually cost. Each is a button that fills the amount in, so the
+ * common answer -- the same as last time -- costs one press.
+ */
+export function PreviousMonthHints({
+  month,
+  budgetPaise,
+  actualPaise,
+  onUse
+}: {
+  month: string;
+  budgetPaise: number;
+  actualPaise: number;
+  onUse: (paise: number) => void;
+}) {
+  const label = formatMonth(month);
+  if (budgetPaise <= 0 && actualPaise <= 0) {
+    return <p className="budget-last-month">Nothing budgeted or spent here in {label}.</p>;
+  }
+  return (
+    <p className="budget-last-month">
+      <span className="budget-last-month-label">{label}</span>
+      {budgetPaise > 0 ? (
+        <button
+          type="button"
+          className="budget-hint-chip"
+          aria-label={`Use the ${formatINR(budgetPaise)} budgeted in ${label}`}
+          onClick={() => onUse(budgetPaise)}
+        >
+          <span>Budgeted</span>
+          <strong>{formatINR(budgetPaise)}</strong>
+        </button>
+      ) : (
+        <span className="budget-hint-chip is-empty">
+          <span>Budgeted</span>
+          <strong>Nothing</strong>
+        </span>
+      )}
+      {actualPaise > 0 ? (
+        <button
+          type="button"
+          className="budget-hint-chip"
+          aria-label={`Use the ${formatINR(actualPaise)} spent in ${label}`}
+          onClick={() => onUse(actualPaise)}
+        >
+          <span>Spent</span>
+          <strong>{formatINR(actualPaise)}</strong>
+        </button>
+      ) : (
+        <span className="budget-hint-chip is-empty">
+          <span>Spent</span>
+          <strong>Nothing</strong>
+        </span>
+      )}
+    </p>
+  );
+}
+
+/**
+ * Everything the planner shows once the plan has arrived.
+ *
+ * Split out from the page so it can be rendered against a plan rather than against a server: the
+ * question "is the copy action offered on a month that already has lines" is answered by handing
+ * this a plan that has lines, which is not a question the fetching page can be asked.
+ */
+export function BudgetPlanBody({
+  plan,
+  saving,
+  subScopes,
+  subKey,
+  selectedScope,
+  amount,
+  adding,
+  onSubKeyChange,
+  onAmountChange,
+  onAddingChange,
+  onAdd,
+  onCopyPreviousMonth,
+  onStartEdit,
+  onDelete
+}: {
+  plan: BudgetPlan;
+  saving: boolean;
+  subScopes: BudgetScope[];
+  subKey: string;
+  selectedScope: BudgetScope | null;
+  amount: string;
+  adding: boolean;
+  onSubKeyChange: (key: string) => void;
+  onAmountChange: (amount: string) => void;
+  onAddingChange: (open: boolean) => void;
+  onAdd: (event: FormEvent) => void;
+  onCopyPreviousMonth: () => void;
+  onStartEdit: (line: BudgetLine) => void;
+  onDelete: (line: BudgetLine) => void;
+}) {
+  return (
+    <>
+      <p className="helper-text budget-range">
+        {formatShortDate(plan.start)} to {formatShortDate(plan.end)} · Day {plan.dayOfMonth} of {plan.daysInMonth}
+      </p>
+      <div className="summary-grid report-summary">
+        <SummaryCard label="Budgeted" value={formatINRWhole(plan.totals.amountPaise)} countPaise={plan.totals.amountPaise} icon={<PiggyBank />} />
+        <SummaryCard label="Used" value={formatINRWhole(plan.totals.actualPaise)} countPaise={plan.totals.actualPaise} icon={<BarChart3 />} tone={budgetSummaryTone(plan)} />
+        <SummaryCard
+          label="Remaining"
+          value={formatINRWhole(plan.totals.remainingPaise)} countPaise={plan.totals.remainingPaise}
+          icon={<WalletCards />}
+          tone={plan.totals.remainingPaise < 0 ? "warning" : "good"}
+        />
+        <SummaryCard label="Projected" value={formatINRWhole(plan.totals.projectedPaise)} countPaise={plan.totals.projectedPaise} icon={<TrendingUp />} tone={plan.totals.projectedPaise > plan.totals.amountPaise ? "warning" : "neutral"} />
+      </div>
+
+      <CopyLastMonthRow previousPlan={plan.previousPlan} busy={saving} onCopy={onCopyPreviousMonth} />
+
+      {plan.lines.length === 0 ? (
+        <EmptyState
+          text={
+            plan.previousPlan.lineCount > 0
+              ? "No budget lines for this month yet. Take last month's plan above, or add a line below."
+              : "No budget lines for this month yet. Add one below."
+          }
+        />
+      ) : (
+        <div className="budget-line-list">
+          {plan.lines.map((line) => (
+            <BudgetLineCard
+              key={line.id}
+              line={line}
+              onStartEdit={() => onStartEdit(line)}
+              onDelete={() => onDelete(line)}
+            />
+          ))}
+        </div>
+      )}
+
+      <CollapsibleForm title="Add budget line" variant="inset" open={adding} onToggle={onAddingChange}>
+        <form className="budget-add-form" onSubmit={onAdd}>
+          <label>
+            SubType
+            <select value={subKey} onChange={(event) => onSubKeyChange(event.target.value)} disabled={!subScopes.length}>
+              {subScopes.length === 0 && <option value="">No SubTypes available</option>}
+              {subScopes.map((scope) => (
+                <option key={budgetScopeKey(scope)} value={budgetScopeKey(scope)}>
+                  {budgetSubLabel(scope)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Amount
+            <input
+              inputMode="decimal"
+              value={amount}
+              onChange={(event) => onAmountChange(event.target.value)}
+              placeholder="25000"
+            />
+          </label>
+          <button className="primary-action" type="submit" disabled={saving || !subScopes.length}>
+            <Plus size={17} />
+            Add
+          </button>
+          {/* Its own row: inside a field this note made that column taller and the row went ragged. */}
+          {selectedScope && (
+            <div className="budget-add-note">
+              <PreviousMonthHints
+                month={plan.previousMonth}
+                budgetPaise={selectedScope.previousBudgetPaise}
+                actualPaise={selectedScope.previousActualPaise}
+                onUse={(paise) => onAmountChange(budgetAmountInput(paise))}
+              />
+            </div>
+          )}
+        </form>
+      </CollapsibleForm>
+    </>
+  );
+}
+
 function BudgetPlannerPage({
   refreshKey,
   showNotice,
@@ -4308,7 +4544,9 @@ function BudgetPlannerPage({
     }
   }
 
-  // A new month starts empty; most people want last month's plan as the starting point.
+  /* Takes whatever of last month's plan this month does not have. Additive and line-by-line
+     reversible, so it asks nothing first; the button already said what it would do, and the
+     notice says what it did. */
   async function copyPreviousMonth() {
     setSaving(true);
     try {
@@ -4316,7 +4554,7 @@ function BudgetPlannerPage({
       await loadPlan();
       showNotice(
         result.copiedCount === 0
-          ? `${formatMonth(result.fromMonth)} has no budget lines to copy.`
+          ? `${formatMonth(result.fromMonth)} has nothing left to copy.`
           : `Copied ${result.copiedCount} budget line${result.copiedCount === 1 ? "" : "s"} from ${formatMonth(result.fromMonth)}. Adjust any amounts below.`
       );
     } catch (err) {
@@ -4419,95 +4657,25 @@ function BudgetPlannerPage({
         ) : !plan ? (
           <PanelLoader label="Loading budget" />
         ) : (
-          <>
-            <p className="helper-text budget-range">
-              {formatShortDate(plan.start)} to {formatShortDate(plan.end)} · Day {plan.dayOfMonth} of {plan.daysInMonth}
-            </p>
-            <div className="summary-grid report-summary">
-              <SummaryCard label="Budgeted" value={formatINRWhole(plan.totals.amountPaise)} countPaise={plan.totals.amountPaise} icon={<PiggyBank />} />
-              <SummaryCard label="Used" value={formatINRWhole(plan.totals.actualPaise)} countPaise={plan.totals.actualPaise} icon={<BarChart3 />} tone={budgetSummaryTone(plan)} />
-              <SummaryCard
-                label="Remaining"
-                value={formatINRWhole(plan.totals.remainingPaise)} countPaise={plan.totals.remainingPaise}
-                icon={<WalletCards />}
-                tone={plan.totals.remainingPaise < 0 ? "warning" : "good"}
-              />
-              <SummaryCard label="Projected" value={formatINRWhole(plan.totals.projectedPaise)} countPaise={plan.totals.projectedPaise} icon={<TrendingUp />} tone={plan.totals.projectedPaise > plan.totals.amountPaise ? "warning" : "neutral"} />
-            </div>
-
-
-            {plan.lines.length === 0 ? (
-              <div className="stacked-empty-state">
-                <EmptyState text="No budget lines for this month yet." />
-                <button type="button" className="secondary-action" onClick={() => void copyPreviousMonth()} disabled={saving}>
-                  <RotateCcw size={17} />
-                  Copy {formatMonth(previousMonthOf(month))} budget
-                </button>
-              </div>
-            ) : (
-              <div className="budget-line-list">
-                {plan.lines.map((line) => (
-                  <BudgetLineCard
-                    key={line.id}
-                    line={line}
-                    onStartEdit={() => {
-                      setEditingId(line.id);
-                      setEditAmount(String(line.amountPaise / 100));
-                    }}
-                    onDelete={() => remove(line)}
-                  />
-                ))}
-              </div>
-            )}
-
-            <CollapsibleForm title="Add budget line" variant="inset" open={adding} onToggle={setAdding}>
-              <form className="budget-add-form" onSubmit={addBudget}>
-                <label>
-                  SubType
-                  <select value={subKey} onChange={(event) => setSubKey(event.target.value)} disabled={!subScopes.length}>
-                    {subScopes.length === 0 && <option value="">No SubTypes available</option>}
-                    {subScopes.map((scope) => (
-                      <option key={budgetScopeKey(scope)} value={budgetScopeKey(scope)}>
-                        {budgetSubLabel(scope)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Amount
-                  <input
-                    inputMode="decimal"
-                    value={amount}
-                    onChange={(event) => setAmount(event.target.value)}
-                    placeholder="25000"
-                  />
-                </label>
-                <button className="primary-action" type="submit" disabled={saving || !subScopes.length}>
-                  <Plus size={17} />
-                  Add
-                </button>
-                {/* Its own row: inside a field this note made that column taller and the row went ragged. */}
-                {selectedScope && (
-                  <p className="budget-last-month budget-add-note">
-                    {selectedScope.previousActualPaise > 0 ? (
-                      <>
-                        {formatMonth(plan.previousMonth)}: <strong>{formatINR(selectedScope.previousActualPaise)}</strong>
-                        <button
-                          type="button"
-                          className="text-action"
-                          onClick={() => setAmount(String(Math.round(selectedScope.previousActualPaise / 100)))}
-                        >
-                          Use this
-                        </button>
-                      </>
-                    ) : (
-                      <>Nothing spent here in {formatMonth(plan.previousMonth)}</>
-                    )}
-                  </p>
-                )}
-              </form>
-            </CollapsibleForm>
-          </>
+          <BudgetPlanBody
+            plan={plan}
+            saving={saving}
+            subScopes={subScopes}
+            subKey={subKey}
+            selectedScope={selectedScope}
+            amount={amount}
+            adding={adding}
+            onSubKeyChange={setSubKey}
+            onAmountChange={setAmount}
+            onAddingChange={setAdding}
+            onAdd={addBudget}
+            onCopyPreviousMonth={() => void copyPreviousMonth()}
+            onStartEdit={(line) => {
+              setEditingId(line.id);
+              setEditAmount(budgetAmountInput(line.amountPaise));
+            }}
+            onDelete={remove}
+          />
         )}
       </Panel>
 
@@ -4529,12 +4697,13 @@ function BudgetPlannerPage({
                 value={editAmount}
                 onChange={(event) => setEditAmount(event.target.value)}
               />
-              <small className="field-hint">
-                {editingLine.previousActualPaise > 0
-                  ? `Spent here last month: ${formatINR(editingLine.previousActualPaise)}`
-                  : "Nothing was spent here last month."}
-              </small>
             </label>
+            <PreviousMonthHints
+              month={previousMonthOf(editingLine.month)}
+              budgetPaise={editingLine.previousBudgetPaise}
+              actualPaise={editingLine.previousActualPaise}
+              onUse={(paise) => setEditAmount(budgetAmountInput(paise))}
+            />
             <div className="loan-form-actions">
               <button type="button" className="secondary-action" onClick={cancelEdit} disabled={saving}>
                 Cancel
@@ -4550,6 +4719,7 @@ function BudgetPlannerPage({
     </div>
   );
 }
+
 
 function BudgetLineCard({
   line,
@@ -7648,6 +7818,12 @@ function storedNewsSeen(): string | null {
   }
 }
 
+/* Two groups and no others: what you can now do, and what is no longer wrong. */
+const NEWS_GROUPS = [
+  { key: "added", heading: "New", tone: "is-new" },
+  { key: "fixed", heading: "Fixed", tone: "is-fixed" }
+] as const;
+
 function WhatsNewPage({ entries, onRead }: { entries: NewsEntry[]; onRead: () => void }) {
   useEffect(() => {
     onRead();
@@ -7657,7 +7833,7 @@ function WhatsNewPage({ entries, onRead }: { entries: NewsEntry[]; onRead: () =>
     <div className="page-grid">
       <Panel title="What's new">
         <p className="helper-text faq-intro">
-          What has changed in this app, newest first.
+          New features and fixes, newest first.
         </p>
         {entries.length === 0 ? (
           <EmptyState text="Nothing new yet." />
@@ -7666,11 +7842,22 @@ function WhatsNewPage({ entries, onRead }: { entries: NewsEntry[]; onRead: () =>
             {entries.map((entry) => (
               <li className="news-entry" key={entry.date}>
                 <h3>{formatDayHeading(entry.date)}</h3>
-                <ul>
-                  {entry.lines.map((line) => (
-                    <li key={line}>{line}</li>
-                  ))}
-                </ul>
+                {NEWS_GROUPS.map(({ key, heading, tone }) => {
+                  const lines = entry[key] ?? [];
+                  if (lines.length === 0) {
+                    return null;
+                  }
+                  return (
+                    <div className="news-group" key={key}>
+                      <h4 className={`news-group-heading ${tone}`}>{heading}</h4>
+                      <ul>
+                        {lines.map((line) => (
+                          <li key={line}>{line}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })}
               </li>
             ))}
           </ol>
@@ -7805,6 +7992,44 @@ function AccountImpactCard({ account, transactions }: { account: Account; transa
  * and they knew it. Everything else here is about money; this is the one screen that is about
  * whose money it is.
  */
+/**
+ * One settings row, the same shape every time: what it is on the left, the control that changes
+ * it on the right, and a line underneath when the setting needs explaining.
+ *
+ * The page used to mix three shapes -- a row that was itself a button, a row with a button inside
+ * it, and a row that was only a readout -- so nothing on it taught you how the next row behaved.
+ * Every row here is a region with a real, separately named control in it.
+ */
+function SettingsRow({
+  label,
+  hint,
+  tone,
+  children
+}: {
+  label: string;
+  hint?: string;
+  tone?: "danger";
+  children: ReactNode;
+}) {
+  return (
+    <div className={`settings-row ${tone ? `settings-row-${tone}` : ""}`}>
+      <span className="settings-row-label">{label}</span>
+      <div className="settings-row-control">{children}</div>
+      {hint ? <small>{hint}</small> : null}
+    </div>
+  );
+}
+
+/** A group of rows under a heading, so a reader can scan for the kind of thing they want. */
+function ProfileSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="profile-section">
+      <h3>{title}</h3>
+      <div className="profile-section-rows">{children}</div>
+    </section>
+  );
+}
+
 function PasswordRow() {
   const [open, setOpen] = useState(false);
   const [current, setCurrent] = useState("");
@@ -7843,16 +8068,24 @@ function PasswordRow() {
 
   if (!open) {
     return (
-      <button className="settings-row" onClick={() => { setDone(false); setOpen(true); }}>
-        <span>Password</span>
-        <strong>{done ? "Changed" : "Change"}</strong>
-      </button>
+      <SettingsRow label="Password" hint={done ? "Changed. Every other browser was signed out." : undefined}>
+        <button
+          type="button"
+          className="secondary-action"
+          onClick={() => {
+            setDone(false);
+            setOpen(true);
+          }}
+        >
+          Change
+        </button>
+      </SettingsRow>
     );
   }
 
   return (
     <form className="settings-row password-row" onSubmit={submit}>
-      <span>Password</span>
+      <span className="settings-row-label">Password</span>
       <label>
         Current password
         <input
@@ -7886,8 +8119,10 @@ function PasswordRow() {
       {error ? <small className="password-error">{error}</small> : null}
       <small>Changing it signs out every other browser.</small>
       <div className="password-actions">
-        <button type="button" onClick={close} disabled={busy}>Cancel</button>
-        <button type="submit" disabled={busy || !current || !next || !again}>
+        <button type="button" className="secondary-action" onClick={close} disabled={busy}>
+          Cancel
+        </button>
+        <button type="submit" className="primary-action" disabled={busy || !current || !next || !again}>
           {busy ? "Changing…" : "Change password"}
         </button>
       </div>
@@ -7895,7 +8130,30 @@ function PasswordRow() {
   );
 }
 
-function ProfilePage({
+/** What is wrong with each identity field, field by field, so the page can say it where it is. */
+export function profileFieldProblems(profile: UserProfile) {
+  const name = profile.name.trim();
+  const email = profile.email.trim();
+  const age = profile.age.trim();
+  const ageNumber = Number.parseInt(age, 10);
+  return {
+    name: name.length === 0 ? "Add your name." : null,
+    email:
+      email.length === 0
+        ? "Add your email address."
+        : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+          ? null
+          : "That is not an email address.",
+    age:
+      age.length === 0
+        ? "Add your age."
+        : /^\d+$/.test(age) && Number.isInteger(ageNumber) && ageNumber >= 1 && ageNumber <= 120
+          ? null
+          : "Age is a whole number between 1 and 120."
+  };
+}
+
+export function ProfilePage({
   onPlayIntro,
   introOnLaunch,
   onToggleIntroOnLaunch,
@@ -7938,91 +8196,122 @@ function ProfilePage({
   onThemeToggle: () => void;
   onSignOut: () => void;
 }) {
-  const displayName = profile.name || "Your profile";
-  const displayEmail = profile.email || "Local profile";
   const [editing, setEditing] = useState(false);
+  /* A field complains once it has been touched, not the moment the editor opens. An empty
+     profile would otherwise greet you with three red lines about things you have not done yet. */
+  const [touched, setTouched] = useState<Record<"name" | "email" | "age", boolean>>({
+    name: false,
+    email: false,
+    age: false
+  });
   const [cardAlertDraft, setCardAlertDraft] = useState(String(cardAlertPercent));
-  // Only a real difference counts as unsaved: opening the editor changes nothing by itself.
-  const profileDirty =
-    profile.name !== savedProfile.name ||
-    profile.email !== savedProfile.email ||
-    profile.age !== savedProfile.age;
 
   useEffect(() => {
     setCardAlertDraft(String(cardAlertPercent));
   }, [cardAlertPercent]);
 
-  const draftValue = Number.parseInt(cardAlertDraft, 10);  const draftIsValid = Number.isInteger(draftValue) && draftValue >= 1 && draftValue <= 100;
-  const profileAgeText = profile.age.trim();
-  const profileAge = Number.parseInt(profileAgeText, 10);
-  const profileCanSave =
-    profile.name.trim().length > 0 &&
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.email.trim()) &&
-    /^\d+$/.test(profileAgeText) &&
-    Number.isInteger(profileAge) &&
-    profileAge >= 1 &&
-    profileAge <= 120;
+  const displayName = profile.name.trim() || "Your profile";
+  const displayEmail = profile.email.trim() || "No email yet";
+  // Only a real difference counts as unsaved: opening the editor changes nothing by itself.
+  const profileDirty =
+    profile.name !== savedProfile.name ||
+    profile.email !== savedProfile.email ||
+    profile.age !== savedProfile.age;
+  const problems = profileFieldProblems(profile);
+  const profileCanSave = !problems.name && !problems.email && !problems.age;
+  const shownProblem = (field: "name" | "email" | "age") => (touched[field] ? problems[field] : null);
+
+  function startEditing() {
+    setTouched({ name: false, email: false, age: false });
+    setEditing(true);
+  }
+
+  const draftValue = Number.parseInt(cardAlertDraft, 10);
+  const draftIsValid = Number.isInteger(draftValue) && draftValue >= 1 && draftValue <= 100;
+  const cardAlertProblem =
+    cardAlertDraft.trim().length === 0 || draftIsValid ? null : "A whole number between 1 and 100.";
 
   return (
     <div className="profile-page">
-      <div className="profile-menu profile-page-card" aria-label="Profile">
+      <div className="profile-menu profile-page-card">
         <div className="profile-card-header">
-          <div className="profile-avatar">{profile.name.trim().charAt(0).toUpperCase() || "₹"}</div>
-          <div>
+          <div className="profile-avatar" aria-hidden="true">
+            {profile.name.trim().charAt(0).toUpperCase() || "₹"}
+          </div>
+          <div className="profile-identity">
             <h2>{displayName}</h2>
             <p>{displayEmail}</p>
           </div>
+          {!editing && (
+            <button type="button" className="secondary-action profile-edit-button" onClick={startEditing}>
+              <Pencil size={16} />
+              Edit
+            </button>
+          )}
         </div>
 
-        <div className="profile-fields">
-          <label>
-            Name
-            <input
-              value={profile.name}
-              onChange={(event) => onProfileChange({ ...profile, name: event.target.value })}
-              placeholder="Add your name"
-              readOnly={!editing}
-            />
-          </label>
-          <label>
-            Email
-            <input
-              value={profile.email}
-              onChange={(event) => onProfileChange({ ...profile, email: event.target.value })}
-              placeholder="name@example.com"
-              readOnly={!editing}
-            />
-          </label>
-          <label>
-            Age
-            <input
-              value={profile.age}
-              inputMode="numeric"
-              onChange={(event) => onProfileChange({ ...profile, age: event.target.value })}
-              placeholder="Add age"
-              readOnly={!editing}
-            />
-          </label>
-          {editing ? (
-            <div className="profile-edit-actions">
-              <button
-                className={`profile-save-button ${profileCanSave ? "" : "blurred"} ${profileDirty ? "is-dirty" : ""}`}
-                onClick={async () => {
-                  await onSaveProfile();
-                  setEditing(false);
+        {editing ? (
+          <form
+            className="profile-fields"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              /* Pressing Save is what asks every field to speak. A Save that is simply dead
+                 while something is wrong tells you nothing about which something. */
+              setTouched({ name: true, email: true, age: true });
+              if (!profileCanSave) {
+                return;
+              }
+              await onSaveProfile();
+              setEditing(false);
+            }}
+          >
+            <label>
+              Name
+              <input
+                autoFocus
+                value={profile.name}
+                aria-invalid={shownProblem("name") ? true : undefined}
+                onChange={(event) => {
+                  setTouched((was) => ({ ...was, name: true }));
+                  onProfileChange({ ...profile, name: event.target.value });
                 }}
-                disabled={saving || !profileCanSave || !profileDirty}
-                title={
-                  !profileDirty
-                    ? "Nothing to save yet"
-                    : profileCanSave
-                      ? "Save profile"
-                      : "Enter a valid name, email, and age"
-                }
-              >
-                <Check size={16} />
-                {saving ? "Saving..." : profileDirty ? "Save changes" : "Save profile"}
-              </button>
+                placeholder="Add your name"
+              />
+              {shownProblem("name") ? <small className="field-problem">{shownProblem("name")}</small> : null}
+            </label>
+            <label>
+              Email
+              {/* inputMode, not type="email": the browser's own validation bubble fires on submit
+                  before this form's does, and it speaks about one field while the page has its
+                  own message for each of the three. */}
+              <input
+                inputMode="email"
+                autoComplete="email"
+                value={profile.email}
+                aria-invalid={shownProblem("email") ? true : undefined}
+                onChange={(event) => {
+                  setTouched((was) => ({ ...was, email: true }));
+                  onProfileChange({ ...profile, email: event.target.value });
+                }}
+                placeholder="name@example.com"
+              />
+              {shownProblem("email") ? <small className="field-problem">{shownProblem("email")}</small> : null}
+            </label>
+            <label>
+              Age
+              <input
+                value={profile.age}
+                inputMode="numeric"
+                aria-invalid={shownProblem("age") ? true : undefined}
+                onChange={(event) => {
+                  setTouched((was) => ({ ...was, age: true }));
+                  onProfileChange({ ...profile, age: event.target.value });
+                }}
+                placeholder="Add age"
+              />
+              {shownProblem("age") ? <small className="field-problem">{shownProblem("age")}</small> : null}
+            </label>
+            <div className="profile-edit-actions">
               <button
                 type="button"
                 className="secondary-action"
@@ -8034,43 +8323,58 @@ function ProfilePage({
               >
                 Cancel
               </button>
-            </div>
-          ) : (
-            <button type="button" className="secondary-action profile-edit-button" onClick={() => setEditing(true)}>
-              <Pencil size={16} />
-              Edit
-            </button>
-          )}
-        </div>
-
-        <div className="profile-settings" aria-label="Settings">
-          <h3>Settings</h3>
-          <div className="settings-row">
-            <span>Currency</span>
-            <strong>{settings.currency ?? "INR"}</strong>
-          </div>
-          <div className="settings-row intro-row">
-            <span>Intro</span>
-            <div className="intro-row-controls">
               <button
-                type="button"
-                role="switch"
-                aria-checked={introOnLaunch}
-                className="switch-control"
-                onClick={onToggleIntroOnLaunch}
+                type="submit"
+                className={`profile-save-button ${profileDirty ? "is-dirty" : ""}`}
+                disabled={saving || !profileDirty}
               >
-                <span className="switch-track" aria-hidden="true">
-                  <span className="switch-thumb" />
-                </span>
-                Play on launch
-              </button>
-              <button type="button" className="secondary-action" onClick={onPlayIntro}>
-                Watch intro
+                <Check size={16} />
+                {saving ? "Saving..." : profileDirty ? "Save changes" : "Nothing to save"}
               </button>
             </div>
-          </div>
-          <div className="settings-row">
-            <span>Holdings in a type</span>
+          </form>
+        ) : (
+          /* Read state as values, not as inputs. Fields that cannot be typed in should not look
+             like fields that can: the page used to show three read-only boxes. */
+          <dl className="profile-facts">
+            <div>
+              <dt>Name</dt>
+              <dd>{profile.name.trim() || "Not set"}</dd>
+            </div>
+            <div>
+              <dt>Email</dt>
+              <dd>{profile.email.trim() || "Not set"}</dd>
+            </div>
+            <div>
+              <dt>Age</dt>
+              <dd>{profile.age.trim() || "Not set"}</dd>
+            </div>
+          </dl>
+        )}
+
+        <ProfileSection title="Preferences">
+          <SettingsRow label="Dark theme" hint="Follows your system setting until you choose here.">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={theme === "dark"}
+              aria-label="Dark theme"
+              className="switch-control"
+              onClick={onThemeToggle}
+            >
+              <span className="switch-track" aria-hidden="true">
+                <span className="switch-thumb" />
+              </span>
+              {theme === "dark" ? "On" : "Off"}
+            </button>
+          </SettingsRow>
+          <SettingsRow label="Currency" hint="Every figure in this app is in rupees.">
+            <strong>{settings.currency ?? "INR"}</strong>
+          </SettingsRow>
+          <SettingsRow
+            label="Holdings in a type"
+            hint="How a type's holdings are listed when you open it on the Investments page."
+          >
             <select
               className="settings-select"
               aria-label="How holdings are listed inside an investment type"
@@ -8083,18 +8387,22 @@ function ProfilePage({
                 </option>
               ))}
             </select>
-            <small>How a type's holdings are listed when you open it on the Investments page.</small>
-          </div>
-          <div className="settings-row card-alert-row">
-            <span>Card utilization alert</span>
+          </SettingsRow>
+          <SettingsRow
+            label="Card utilization alert"
+            hint={cardAlertProblem ?? "Credit cards turn red when utilization crosses this value."}
+          >
             <div className="card-alert-controls">
               <input
                 aria-label="Card utilization alert percentage"
+                aria-invalid={cardAlertProblem ? true : undefined}
                 inputMode="numeric"
                 value={cardAlertDraft}
                 onChange={(event) => setCardAlertDraft(event.target.value)}
               />
-              <span className="card-alert-suffix">%</span>
+              <span className="card-alert-suffix" aria-hidden="true">
+                %
+              </span>
               <button
                 type="button"
                 className="secondary-action"
@@ -8104,31 +8412,58 @@ function ProfilePage({
                 Save
               </button>
             </div>
-            <small>Credit cards turn red when utilization crosses this value (1-100).</small>
-          </div>
-          <button className="settings-row" onClick={onDownloadReport} disabled={preparingReport}>
-            <span>Report</span>
-            <strong>{preparingReport ? "Preparing…" : "Download"}</strong>
-            <small>Every page as one document. Choose "Save as PDF" in the print dialog.</small>
-          </button>
-          {isOwner === true ? (
-            <div className="settings-row backup-row">
-              <span>Backups</span>
-              <strong>{formatBackupStatus(backupStatus)}</strong>
-              <small>{formatBackupDetail(backupStatus)}</small>
+          </SettingsRow>
+          <SettingsRow label="Intro film" hint="A short film about what this app does.">
+            <div className="intro-row-controls">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={introOnLaunch}
+                aria-label="Play the intro on launch"
+                className="switch-control"
+                onClick={onToggleIntroOnLaunch}
+              >
+                <span className="switch-track" aria-hidden="true">
+                  <span className="switch-thumb" />
+                </span>
+                On launch
+              </button>
+              <button type="button" className="secondary-action" onClick={onPlayIntro}>
+                Watch
+              </button>
             </div>
+          </SettingsRow>
+        </ProfileSection>
+
+        <ProfileSection title="Your data">
+          <SettingsRow
+            label="Report"
+            hint='Every page as one document. Choose "Save as PDF" in the print dialog.'
+          >
+            <button type="button" className="secondary-action" onClick={onDownloadReport} disabled={preparingReport}>
+              <Download size={16} />
+              {preparingReport ? "Preparing…" : "Download"}
+            </button>
+          </SettingsRow>
+          {isOwner === true ? (
+            <SettingsRow label="Backups" hint={formatBackupDetail(backupStatus)}>
+              <strong>{formatBackupStatus(backupStatus)}</strong>
+            </SettingsRow>
           ) : null}
-          <button className="settings-row theme-row" onClick={onThemeToggle}>
-            <span>{theme === "dark" ? "Light theme" : "Dark theme"}</span>
-            <strong>{theme === "dark" ? "Switch on" : "Switch on"}</strong>
-            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-          </button>
+        </ProfileSection>
+
+        <ProfileSection title="Your account">
           <PasswordRow />
-          <button className="settings-row" onClick={onSignOut}>
-            <span>Signed in</span>
-            <strong>Sign out</strong>
-          </button>
-        </div>
+          <SettingsRow
+            label="Signed in"
+            tone="danger"
+            hint={profile.email.trim() ? `As ${profile.email.trim()} in this browser.` : "In this browser."}
+          >
+            <button type="button" className="secondary-action is-danger" onClick={onSignOut}>
+              Sign out
+            </button>
+          </SettingsRow>
+        </ProfileSection>
       </div>
     </div>
   );
