@@ -2361,8 +2361,10 @@ button.mix-bar-head:hover > span {
   gap: 10px;
 }
 
+/* Both actions hug their labels. Save used to take the whole remaining row, which made Cancel
+   read as the smaller, lesser thing next to a button that said "Nothing to save". */
 .profile-edit-actions > .profile-save-button {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
 }
 
 .profile-edit-button {
@@ -2607,5 +2609,356 @@ button.mix-bar-head:hover > span {
 
   .ledger-row.transaction-row-card .row-actions {
     grid-area: 3 / 1 / 4 / -1;
+  }
+}
+
+/* ---------- Budget planner: last month, offered ---------- */
+/*
+ * A standing offer rather than an empty-state rescue. It sits above the lines on every month, so
+ * a month part-planned can take the rest of last month's plan without first being emptied.
+ */
+.budget-copy-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-4);
+  border-radius: var(--radius-card);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+  padding: 12px 14px;
+}
+
+/* Nothing to do: the row stays, and drops to the quiet surface so it stops asking to be pressed. */
+.budget-copy-row.is-settled {
+  background: var(--panel-soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.budget-copy-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 15rem;
+}
+
+.budget-copy-copy strong {
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.budget-copy-copy span {
+  color: var(--muted);
+  font-size: 0.79rem;
+  line-height: 1.4;
+}
+
+.budget-copy-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Last month's two figures, each a button that fills the amount in. */
+.budget-hint-chip {
+  display: inline-grid;
+  gap: 1px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--panel-soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+  padding: 5px 10px;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.budget-hint-chip > span {
+  font-size: 0.68rem;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.budget-hint-chip > strong {
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+button.budget-hint-chip:hover {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+button.budget-hint-chip:active {
+  transform: translateY(1px);
+}
+
+button.budget-hint-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Nothing there to use: the same shape, without the invitation. */
+.budget-hint-chip.is-empty {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.budget-hint-chip.is-empty > strong {
+  color: var(--muted);
+  font-weight: 560;
+}
+
+.budget-last-month-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* The dialog stacks label, figure chips, then actions. */
+.stack-form > .budget-last-month {
+  margin-top: -2px;
+}
+
+@media (max-width: 720px) {
+  .budget-copy-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .budget-copy-button {
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .budget-hint-chip {
+    transition: none;
+  }
+
+  button.budget-hint-chip:active {
+    transform: none;
+  }
+}
+
+/* ---------- What's new: two groups, so a reader can find the one they came for ---------- */
+.news-group + .news-group {
+  margin-top: var(--space-3);
+}
+
+.news-group-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.news-group-heading.is-new {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.news-group-heading.is-fixed {
+  background: var(--good-soft);
+  color: var(--good);
+}
+
+/* ---------- Profile: four groups instead of one list ---------- */
+/*
+ * The page was a header and then nine rows of unlike things in one undifferentiated column: a
+ * currency readout, a theme toggle and Sign out all wearing the same clothes. It is now the
+ * person at the top, then Preferences, Your data and Your account, each under its own heading.
+ */
+.profile-card-header {
+  gap: 14px;
+}
+
+.profile-identity {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.profile-card-header .profile-edit-button {
+  width: auto;
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+/* Read state: values, not boxes that look typeable and are not. */
+.profile-facts {
+  display: grid;
+  gap: 1px;
+  margin: var(--space-4) 0 0;
+  border-radius: var(--radius-card);
+  background: var(--line);
+  overflow: hidden;
+}
+
+.profile-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  background: var(--panel-soft);
+  padding: 11px 14px;
+}
+
+.profile-facts dt {
+  color: var(--muted);
+  font-size: 0.79rem;
+  font-weight: 650;
+}
+
+.profile-facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 560;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.profile-fields {
+  gap: var(--space-3);
+}
+
+.profile-fields label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+/* What is wrong with this field, under this field, instead of inside a tooltip nobody on a
+   phone can open. */
+.field-problem {
+  color: var(--danger);
+  font-size: 0.74rem;
+  font-weight: 560;
+  line-height: 1.35;
+}
+
+.profile-fields input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.profile-edit-actions {
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+.profile-section {
+  margin-top: var(--space-5);
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-4);
+}
+
+.profile-section h3 {
+  margin: 0 0 var(--space-3);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.profile-section-rows {
+  display: grid;
+  gap: 10px;
+}
+
+/* One row shape: label, control, and a line underneath when there is something to explain. */
+.settings-row-label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.settings-row-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.settings-row-control strong {
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 560;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-row-control .secondary-action,
+.settings-row-control select {
+  min-height: 36px;
+}
+
+/* Sign out: the one row on the page that cannot be undone by pressing it again. */
+.secondary-action.is-danger {
+  color: var(--danger);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 32%, transparent);
+}
+
+.secondary-action.is-danger:hover {
+  background: var(--danger-soft);
+}
+
+.settings-row.password-row {
+  gap: 10px;
+}
+
+.settings-row.password-row .password-actions {
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .profile-card-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .profile-card-header .profile-edit-button {
+    width: 100%;
+    justify-content: center;
+    align-self: stretch;
+  }
+
+  /* A phone has no room for a label and its control side by side once the control is a field. */
+  .settings-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-row-control {
+    justify-content: flex-start;
+  }
+
+  .profile-facts > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .profile-facts dd {
+    text-align: left;
   }
 }

@@ -303,6 +303,8 @@ export type BudgetStatus = "safe" | "watch" | "critical" | "over";
 export type BudgetScopeSummary = {
   /** What this category actually cost in the month before the one being planned. */
   previousActualPaise: number;
+  /** What it was budgeted in that month, or 0 if it had no budget line. */
+  previousBudgetPaise: number;
   scopeType: BudgetScopeType;
   scopeId: string;
   typeId: string;
@@ -352,6 +354,19 @@ export type BudgetPlan = {
   };
   lines: BudgetLineSummary[];
   availableScopes: BudgetScopeSummary[];
+  /**
+   * Last month's plan, as an offer rather than as history: how many lines it had, what they came
+   * to, and how much of it this month does not have yet. `missingCount` is what "same as last
+   * month" would actually add, counted by the same overlap rule the copy itself obeys, so the
+   * button's number and the result can't disagree.
+   */
+  previousPlan: {
+    month: string;
+    lineCount: number;
+    amountPaise: number;
+    missingCount: number;
+    missingAmountPaise: number;
+  };
 };
 
 type TransactionQuery = {
@@ -3083,14 +3098,32 @@ export async function getBudgetPlan(month = currentMonth(), asOfDate = localIsoD
   const previousActuals = await budgetActualMaps(
     await getMonthlyReport(undefined, previousMonth),
   );
+  // And what each was budgeted last month, which is the figure "same as last month" copies.
+  const previousRows = await listBudgetRows(previousMonth);
+  const previousBudgets = new Map(
+    previousRows.map((row) => [`${row.scope_type}:${row.scope_id}`, row.amount_paise])
+  );
+  const previousBudget = (scopeType: BudgetScopeType, scopeId: string) =>
+    previousBudgets.get(`${scopeType}:${scopeId}`) ?? 0;
   // Promise.all: budgetLineFromRow asks the database, so the map yields promises. Spreading one
   // would put `then` into the object and lose every field.
   const lines = await Promise.all(
     rows.map(async (row) => ({
       ...(await budgetLineFromRow(row, actuals, pace, history)),
-      previousActualPaise: scopeActual(previousActuals, row.scope_type, row.scope_id)
+      previousActualPaise: scopeActual(previousActuals, row.scope_type, row.scope_id),
+      previousBudgetPaise: previousBudget(row.scope_type, row.scope_id)
     }))
   );
+  /* What "same as last month" would add, asked of the same rule the copy obeys rather than
+     guessed from the line list -- a Type line last month can be blocked by a SubType line this
+     month, which no set comparison would catch. */
+  const blocks = await budgetOverlapRule(safeMonth);
+  const missing = [];
+  for (const row of previousRows) {
+    if (!(await blocks(row.scope_type, row.scope_id))) {
+      missing.push(row);
+    }
+  }
   const covered = new Set(lines.map((line) => `${line.scopeType}:${line.scopeId}`));
   const coveredTypeIds = new Set(lines.filter((line) =>line.scopeType === "type").map((line) =>line.typeId));
   const coveredSubcategoryIds = new Set(
@@ -3136,9 +3169,17 @@ export async function getBudgetPlan(month = currentMonth(), asOfDate = localIsoD
         .filter((scope) => !covered.has(`${scope.scopeType}:${scope.scopeId}`))
         .map(async (scope) => ({
           ...scope,
-          previousActualPaise: scopeActual(previousActuals, scope.scopeType, scope.scopeId)
+          previousActualPaise: scopeActual(previousActuals, scope.scopeType, scope.scopeId),
+          previousBudgetPaise: previousBudget(scope.scopeType, scope.scopeId)
         }))
-    )
+    ),
+    previousPlan: {
+      month: previousMonth,
+      lineCount: previousRows.length,
+      amountPaise: previousRows.reduce((sum, row) => sum + row.amount_paise, 0),
+      missingCount: missing.length,
+      missingAmountPaise: missing.reduce((sum, row) => sum + row.amount_paise, 0)
+    }
   };
 }
 
@@ -3174,8 +3215,12 @@ export async function createBudgetLine(input: CreateBudgetLineInput): Promise<Bu
 
 /**
  * Starts a month from last month's plan: copies every previous-month line this month doesn't
- * already cover. Lines whose Type/SubType was deleted, or that would overlap a line already
- * set this month, are skipped rather than failing the whole copy.
+ * already cover, at last month's amount.
+ *
+ * A line is skipped only for a reason this asks about first -- it overlaps something already set
+ * this month, or its category is gone. Anything else that goes wrong is a fault, and it is raised
+ * instead of being counted as a skip, because `skippedCount` is read by the page as "you already
+ * have these" and a database error reported as that is a lie the reader cannot see through.
  */
 export async function copyBudgetFromPreviousMonth(month: string) {
   const safeMonth = createBudgetLineSchema.shape.month.parse(month);
@@ -3184,26 +3229,32 @@ export async function copyBudgetFromPreviousMonth(month: string) {
   let skippedCount = 0;
 
   await transaction(async () => {
+    /* This month's lines are read once. Inserting one of last month's cannot change the answer
+       for another, because two lines that coexisted last month do not overlap each other -- the
+       same rule stopped them being created. `taken` is the belt to that braces: a pair of rows
+       that predates the rule still cannot be copied in twice. */
+    const blocks = await budgetOverlapRule(safeMonth);
+    const taken = new Set<string>();
     for (const row of await listBudgetRows(previousMonth)) {
-      try {
-        await ensureNoBudgetOverlap(safeMonth, row.scope_type, row.scope_id);
-        (await db.prepare(
-          `INSERT INTO budget_lines
-             (id, month, scope_type, scope_type_id, scope_subcategory_id, amount_paise, user_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(
-          randomUUID(),
-          safeMonth,
-          row.scope_type,
-          row.scope_type === "type" ? row.scope_id : null,
-          row.scope_type === "subcategory" ? row.scope_id : null,
-          row.amount_paise,
-          currentUserId()
-        ));
-        copiedCount += 1;
-      } catch {
+      if (taken.has(`${row.scope_type}:${row.scope_id}`) || (await blocks(row.scope_type, row.scope_id))) {
         skippedCount += 1;
+        continue;
       }
+      taken.add(`${row.scope_type}:${row.scope_id}`);
+      (await db.prepare(
+        `INSERT INTO budget_lines
+           (id, month, scope_type, scope_type_id, scope_subcategory_id, amount_paise, user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        randomUUID(),
+        safeMonth,
+        row.scope_type,
+        row.scope_type === "type" ? row.scope_id : null,
+        row.scope_type === "subcategory" ? row.scope_id : null,
+        row.amount_paise,
+        currentUserId()
+      ));
+      copiedCount += 1;
     }
   });
 
@@ -4124,6 +4175,7 @@ async function listBudgetScopes(month: string): Promise<BudgetScopeSummary[]> {
     if (!typeBudgetIds.has(type.id) && !subcategoryBudgetTypeIds.has(type.id)) {
       scopes.push({
         previousActualPaise: 0,
+        previousBudgetPaise: 0,
         scopeType: "type",
         scopeId: type.id,
         typeId: type.id,
@@ -4142,6 +4194,7 @@ async function listBudgetScopes(month: string): Promise<BudgetScopeSummary[]> {
         }
         scopes.push({
           previousActualPaise: 0,
+          previousBudgetPaise: 0,
           scopeType: "subcategory",
           scopeId: subcategory.id,
           typeId: type.id,
@@ -4166,8 +4219,9 @@ async function resolveBudgetScope(scopeType: BudgetScopeType, scopeId: string): 
       throw badRequest("Selected Type is not available for budgeting.");
     }
     return {
-      // The planner fills this in; a scope on its own has no month to compare against.
+      // The planner fills these in; a scope on its own has no month to compare against.
       previousActualPaise: 0,
+      previousBudgetPaise: 0,
       scopeType,
       scopeId:(await type).id,
       typeId:(await type).id,
@@ -4190,6 +4244,7 @@ async function resolveBudgetScope(scopeType: BudgetScopeType, scopeId: string): 
   }
   return {
     previousActualPaise: 0,
+    previousBudgetPaise: 0,
     scopeType,
     scopeId:(await subcategory).id,
     typeId:(await type).id,
@@ -4202,23 +4257,58 @@ async function resolveBudgetScope(scopeType: BudgetScopeType, scopeId: string): 
   };
 }
 
+/**
+ * The overlap rule for one month, with that month's own lines read and resolved once.
+ *
+ * One rule, asked two ways. `ensureNoBudgetOverlap` throws the answer when someone is adding a
+ * line; the planner asks the same question without throwing, of every one of last month's lines,
+ * to count how many "same as last month" would actually add. Reading it in both places is the
+ * point: a button that promises seven lines and copies five is worse than no button.
+ *
+ * Built as a closure rather than as one function per question because the planner asks it n
+ * times, and asking it n times used to re-read and re-resolve this month's m lines each time --
+ * n x m round trips on every load of a page that already asks plenty of the database.
+ */
+async function budgetOverlapRule(month: string, exceptId?: string) {
+  const existing: BudgetScopeSummary[] = [];
+  for (const row of (await listBudgetRows(month)).filter((row) => row.id !== exceptId)) {
+    try {
+      existing.push(await resolveBudgetScope(row.scope_type, row.scope_id));
+    } catch {
+      // A line left behind by a deleted category cannot overlap anything.
+    }
+  }
+
+  return async function reasonFor(scopeType: BudgetScopeType, scopeId: string): Promise<string | null> {
+    let next: BudgetScopeSummary;
+    try {
+      next = await resolveBudgetScope(scopeType, scopeId);
+    } catch {
+      // Deleted since, or no longer a Type that can be budgeted. Either way there is nothing to
+      // put the line on. resolveBudgetScope says which; this only needs to know that it failed.
+      return "That category can no longer be budgeted.";
+    }
+    for (const scope of existing) {
+      if (scope.scopeType === next.scopeType && scope.scopeId === next.scopeId) {
+        return `${next.name} already has a budget for ${month}.`;
+      }
+      if (scope.typeId === next.typeId && (scope.scopeType === "type" || next.scopeType === "type")) {
+        return "Budget scopes overlap. Choose either the Type or its SubTypes for this month.";
+      }
+    }
+    return null;
+  };
+}
+
 async function ensureNoBudgetOverlap(
   month: string,
   scopeType: BudgetScopeType,
   scopeId: string,
   exceptId?: string
 ) {
-  const nextScope = await resolveBudgetScope(scopeType, scopeId);
-  const rows = (await listBudgetRows(month)).filter((row) => row.id !== exceptId);
-
-  for (const row of rows) {
-    const existingScope = await resolveBudgetScope(row.scope_type, row.scope_id);
-    if (existingScope.scopeType ===nextScope.scopeType &&existingScope.scopeId ===nextScope.scopeId) {
-      throw badRequest(`${nextScope.name} already has a budget for ${month}.`);
-    }
-    if (existingScope.typeId ===nextScope.typeId && (existingScope.scopeType === "type" ||nextScope.scopeType === "type")) {
-      throw badRequest("Budget scopes overlap. Choose either the Type or its SubTypes for this month.");
-    }
+  const reason = await (await budgetOverlapRule(month, exceptId))(scopeType, scopeId);
+  if (reason) {
+    throw badRequest(reason);
   }
 }
 

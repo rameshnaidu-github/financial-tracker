@@ -3156,6 +3156,52 @@ test("a month can copy last month's budget without duplicates", async () => {
   assert((await services.copyBudgetFromPreviousMonth("2012-05")).copiedCount === 0, "Copying twice adds nothing.");
 });
 
+test("the plan says how much of last month's plan this month is missing", async () => {
+  const groceries = await subcategoryId("Expense", "Groceries");
+  const transport = await subcategoryId("Expense", "Transport");
+  await services.createBudgetLine({ month: "2013-04", scopeType: "subcategory", scopeId: groceries, amountPaise: 12_000_00 });
+  await services.createBudgetLine({ month: "2013-04", scopeType: "subcategory", scopeId: transport, amountPaise: 3_000_00 });
+  await services.createBudgetLine({ month: "2013-05", scopeType: "subcategory", scopeId: groceries, amountPaise: 15_000_00 });
+
+  const plan = await services.getBudgetPlan("2013-05", "2013-05-10");
+  assert(plan.previousPlan.month === "2013-04", "The offer should name the month before this one.");
+  assert(plan.previousPlan.lineCount === 2, "Last month had two lines.");
+  assert(plan.previousPlan.amountPaise === 15_000_00, "Last month's plan came to 15,000.");
+  assert(plan.previousPlan.missingCount === 1, "Only Transport is missing here.");
+  assert(plan.previousPlan.missingAmountPaise === 3_000_00, "And it is worth 3,000.");
+
+  // Each line and each offerable scope carries what it was budgeted last month.
+  const line = plan.lines.find((item) => item.subcategoryId === groceries);
+  assert(line?.previousBudgetPaise === 12_000_00, "A line should know last month's budget for its own category.");
+  const scope = plan.availableScopes.find((item) => item.subcategoryId === transport);
+  assert(scope?.previousBudgetPaise === 3_000_00, "An offerable scope should know last month's budget too.");
+
+  // Once it has been copied there is nothing left to offer, and the copy agrees.
+  const copied = await services.copyBudgetFromPreviousMonth("2013-05");
+  assert(copied.copiedCount === 1 && copied.skippedCount === 1, `Expected 1 copied and 1 skipped, got ${JSON.stringify(copied)}.`);
+  const settled = await services.getBudgetPlan("2013-05", "2013-05-10");
+  assert(settled.previousPlan.missingCount === 0, "Nothing should be missing once it has been copied.");
+  assert(settled.previousPlan.lineCount === 2, "Last month still had two lines.");
+});
+
+test("a budget line blocked by an overlap is not counted as missing", async () => {
+  // Last month budgeted a whole Type; this month budgets one SubType of it. The scopes differ,
+  // so a set comparison would call the Type line missing -- but copying it is forbidden.
+  const investmentType = await typeId("Investment");
+  const types = await services.listCategoryTypes();
+  const investment = types.find((type) => type.id === investmentType);
+  const sub = investment?.subcategories[0];
+  assert(sub, "Investment should have a SubType to block with.");
+  await services.createBudgetLine({ month: "2013-08", scopeType: "type", scopeId: investmentType, amountPaise: 40_000_00 });
+  await services.createBudgetLine({ month: "2013-09", scopeType: "subcategory", scopeId: sub.id, amountPaise: 9_000_00 });
+
+  const plan = await services.getBudgetPlan("2013-09", "2013-09-10");
+  assert(plan.previousPlan.lineCount === 1, "Last month had one line.");
+  assert(plan.previousPlan.missingCount === 0, "A line that cannot be copied is not missing.");
+  const copied = await services.copyBudgetFromPreviousMonth("2013-09");
+  assert(copied.copiedCount === 0 && copied.skippedCount === 1, `The copy should agree with the count, got ${JSON.stringify(copied)}.`);
+});
+
 test("correcting a starting balance shifts the balance by the same amount", async () => {
   const account = await services.createAccount({ name: "QA Reconcile Bank", type: "bank", startingBalancePaise: 10_000_00 });
   await services.createTransaction({

@@ -415,6 +415,8 @@ export type BudgetStatus = "safe" | "watch" | "critical" | "over";
 export type BudgetScope = {
   /** What this category actually cost in the month before the one being planned. */
   previousActualPaise: number;
+  /** What it was budgeted in that month, or 0 if it had no budget line. */
+  previousBudgetPaise: number;
   scopeType: BudgetScopeType;
   scopeId: string;
   typeId: string;
@@ -464,6 +466,14 @@ export type BudgetPlan = {
   };
   lines: BudgetLine[];
   availableScopes: BudgetScope[];
+  /** Last month's plan, offered for this one. `missingCount` is what copying would add. */
+  previousPlan: {
+    month: string;
+    lineCount: number;
+    amountPaise: number;
+    missingCount: number;
+    missingAmountPaise: number;
+  };
 };
 
 export type CreateTransactionPayload = {
