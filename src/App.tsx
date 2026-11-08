@@ -20,6 +20,7 @@ import {
   LayoutGrid,
   Loader2,
   Archive,
+  Megaphone,
   Moon,
   Pencil,
   PiggyBank,
@@ -41,7 +42,7 @@ import {
 } from "./ui-icons";
 import { FormEvent, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Api } from "./api";
+import { Api, withoutCleared } from "./api";
 import {
   MONTH_CHOICES,
   currentMonth,
@@ -66,6 +67,7 @@ import {
   yearChoices,
 } from "./format";
 import { IconGlyph } from "./icons";
+import { WHATS_NEW, hasUnreadNews, newestNewsDate, type NewsEntry } from "./whats-new";
 import { accountImpact } from "./account-impact";
 import { flushSync } from "react-dom";
 import { prefersReducedMotion, useCountUp, useScrollReveal } from "./motion";
@@ -122,7 +124,7 @@ import {
 // System Type that ties a refund to the purchase it came from (see shared/finance.ts).
 const REFUND_TYPE_ID = "type_refund";
 
-type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "cardEmis" | "vacations" | "subscriptions" | "categories" | "faq" | "profile";
+type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "cardEmis" | "vacations" | "subscriptions" | "categories" | "whatsNew" | "faq" | "profile";
 type Theme = "light" | "dark";
 type DonutSegment = {
   id: string;
@@ -166,6 +168,7 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home; group?: Na
   { page: "investments", label: "Investments", icon: TrendingUp, group: "Own & owe" },
   { page: "cardEmis", label: "EMI", icon: CreditCard, group: "Own & owe" },
   { page: "categories", label: "Categories", icon: Tags, group: "Setup" },
+  { page: "whatsNew", label: "What's new", icon: Megaphone, group: "Setup" },
   { page: "faq", label: "FAQ", icon: CircleHelp, group: "Setup" },
   { page: "profile", label: "Profile", icon: UserCircle }
 ];
@@ -242,6 +245,7 @@ const mobileLabels: Record<Page, string> = {
   vacations: "Trips",
   subscriptions: "Auto",
   categories: "Cats",
+  whatsNew: "New",
   faq: "FAQ",
   profile: "Me"
 };
@@ -259,6 +263,7 @@ const pagePaths: Record<Page, string> = {
   vacations: "/vacations",
   subscriptions: "/subscriptions",
   categories: "/categories",
+  whatsNew: "/whats-new",
   faq: "/faq",
   profile: "/profile"
 };
@@ -679,8 +684,24 @@ export default function App() {
     activePage !== "vacations" &&
     activePage !== "subscriptions" &&
     activePage !== "categories" &&
+    activePage !== "whatsNew" &&
     activePage !== "faq" &&
     activePage !== "profile";
+
+  /* Whether there is an entry on What's new that has not been read here. Kept per browser:
+     "have I read this" is a question about this device, not about the account. */
+  const [newsSeen, setNewsSeen] = useState<string | null>(() => storedNewsSeen());
+  const newsUnread = hasUnreadNews(WHATS_NEW, newsSeen);
+  const markNewsRead = useCallback(() => {
+    const newest = newestNewsDate(WHATS_NEW);
+    if (!newest) return;
+    setNewsSeen(newest);
+    try {
+      window.localStorage.setItem(NEWS_SEEN_KEY, newest);
+    } catch {
+      // Nothing to do: the mark simply stays on in a browser that keeps nothing.
+    }
+  }, []);
 
   useEffect(() => {
     setProfileDraft(profile);
@@ -883,6 +904,10 @@ export default function App() {
                       requestConfirm={requestConfirm}
                     />
         );
+      case "whatsNew":
+        return (
+        <WhatsNewPage entries={WHATS_NEW} onRead={markNewsRead} />
+        );
       case "faq":
         return (
         <FaqPage />
@@ -964,6 +989,9 @@ export default function App() {
                     >
                       <Icon size={18} />
                       <span>{item.label}</span>
+                      {item.page === "whatsNew" && newsUnread && (
+                        <span className="nav-dot" aria-label="Unread" />
+                      )}
                     </button>
                   );
                 })}
@@ -4972,7 +5000,8 @@ function LoanForm({
         emiDueDay: emiDueDay.trim() ? Number.parseInt(emiDueDay, 10) : null,
         // Only the EMI form sends a card. The Loans form omits it entirely, which is what keeps
         // an ordinary loan out of the EMI list.
-        ...(isCardEmi ? { accountId } : {})
+        // An EMI's card: sent as null when the dropdown is empty, which detaches it.
+        ...(isCardEmi ? { accountId: accountId || (loan ? null : undefined) } : {})
       };
 
       if (loan) {
@@ -5669,6 +5698,12 @@ function InvestmentForm({
         setSaving(false);
         return;
       }
+      /* On an edit, a section that is switched off is sent as null rather than left out: a
+         field the request does not carry cannot be told apart from a field nobody touched, and
+         that is why a fund moved back from SIP to lump sum used to keep its schedule. On a new
+         holding there is nothing to clear, so the keys are simply omitted. */
+      // Null is this section being switched off; a create drops those keys instead.
+      const off = null;
       const payload = {
         type,
         name: name.trim(),
@@ -5676,23 +5711,23 @@ function InvestmentForm({
         // A paying holding's current value is its principal plus what it has credited, which the
         // server works out from the credits themselves; sending a figure would only fight it.
         currentValuePaise: pays ? undefined : parseAmountToPaise(currentValue),
-        shares,
-        purchaseDate: purchaseDate || undefined,
-        payoutFrequency: pays ? payoutFrequency : undefined,
-        payoutAmountPaise: pays ? parseAmountToPaise(payoutAmount) : undefined,
-        payoutDay: pays ? Number(payoutDay) : undefined,
-        payoutAccountId: pays ? payoutAccountId : undefined,
-        payoutEndDate: pays ? payoutEndDate : undefined,
-        sipAmountPaise: isSip ? parseAmountToPaise(sipAmount) : undefined,
-        sipDay: isSip ? Number(sipDay) : undefined,
-        sipAccountId: isSip ? sipAccountId : undefined
+        shares: shares ?? off,
+        purchaseDate: purchaseDate || off,
+        payoutFrequency: pays ? payoutFrequency : off,
+        payoutAmountPaise: pays ? parseAmountToPaise(payoutAmount) : off,
+        payoutDay: pays ? Number(payoutDay) : off,
+        payoutAccountId: pays ? payoutAccountId : off,
+        payoutEndDate: pays ? payoutEndDate : off,
+        sipAmountPaise: isSip ? parseAmountToPaise(sipAmount) : off,
+        sipDay: isSip ? Number(sipDay) : off,
+        sipAccountId: isSip ? sipAccountId : off
       };
       if (investment) {
         // A note saved before this field was removed is left as it is.
         await Api.updateInvestment(investment.id, payload);
         await onSaved("Investment updated.");
       } else {
-        await Api.createInvestment(payload);
+        await Api.createInvestment(withoutCleared(payload));
         setName("");
         setInvested("");
         setCurrentValue("");
@@ -6454,15 +6489,16 @@ function SubscriptionForm({
         name,
         amountPaise: parseAmountToPaise(amount),
         startDate,
-        durationMonths: Number.parseInt(durationMonths, 10),
-        accountId: accountId || undefined
+        durationMonths: Number.parseInt(durationMonths, 10)
       };
 
       if (subscription) {
-        await Api.updateSubscription(subscription.id, payload);
+        // Empty means "no bank", which detaches it and stops it paying itself. A new
+        // subscription has nothing to detach, so the key is left out below.
+        await Api.updateSubscription(subscription.id, { ...payload, accountId: accountId || null });
         await onSaved("Subscription updated.");
       } else {
-        await Api.createSubscription(payload);
+        await Api.createSubscription({ ...payload, ...(accountId ? { accountId } : {}) });
         setName("");
         setAmount("");
         setStartDate(todayISO());
@@ -7598,6 +7634,49 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
       "Tick the rows on the Transactions page and a bar appears saying how many are selected, with a Delete that asks once before it acts. An EMI instalment that was settled as part of a card payment is refused on its own — it belongs to that payment — and the refusal is per row, so the rest of the batch still goes."
   }
 ];
+
+const NEWS_SEEN_KEY = "finance-whats-new-seen";
+
+function storedNewsSeen(): string | null {
+  try {
+    return window.localStorage.getItem(NEWS_SEEN_KEY);
+  } catch {
+    // A browser with site data blocked still gets the page; it just keeps showing the mark.
+    return null;
+  }
+}
+
+function WhatsNewPage({ entries, onRead }: { entries: NewsEntry[]; onRead: () => void }) {
+  useEffect(() => {
+    onRead();
+  }, [onRead]);
+
+  return (
+    <div className="page-grid">
+      <Panel title="What's new">
+        <p className="helper-text faq-intro">
+          What has changed in this app, newest first.
+        </p>
+        {entries.length === 0 ? (
+          <EmptyState text="Nothing new yet." />
+        ) : (
+          <ol className="news-list">
+            {entries.map((entry) => (
+              <li className="news-entry" key={entry.date}>
+                <h3>{formatDayHeading(entry.date)}</h3>
+                <ul>
+                  {entry.lines.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ol>
+        )}
+      </Panel>
+    </div>
+  );
+}
 
 function FaqPage() {
   return (
@@ -9115,5 +9194,6 @@ export {
   SubscriptionForm,
   SubscriptionsPage,
   VacationForm,
+  WhatsNewPage,
   VacationsPage
 };

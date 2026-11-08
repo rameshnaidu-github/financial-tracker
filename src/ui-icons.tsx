@@ -25,6 +25,7 @@ import { ForkKnife } from "@phosphor-icons/react/dist/csr/ForkKnife";
 import { House } from "@phosphor-icons/react/dist/csr/House";
 import { Info as PhInfo } from "@phosphor-icons/react/dist/csr/Info";
 import { MagnifyingGlass } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { Megaphone as PhMegaphone } from "@phosphor-icons/react/dist/csr/Megaphone";
 import { Moon as PhMoon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimple } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PiggyBank as PhPiggyBank } from "@phosphor-icons/react/dist/csr/PiggyBank";
@@ -57,6 +58,7 @@ function wrap(Glyph: PhosphorIcon, name: string): UiIcon {
 }
 
 export const Archive = wrap(PhArchive, "Archive");
+export const Megaphone = wrap(PhMegaphone, "Megaphone");
 export const ArrowDownUp = wrap(ArrowsDownUp, "ArrowDownUp");
 export const BarChart3 = wrap(ChartBar, "BarChart3");
 export const CalendarClock = wrap(CalendarCheck, "CalendarClock");
