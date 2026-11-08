@@ -4416,6 +4416,94 @@ test("a mutual fund bought as a SIP takes its instalment when the bank covers it
   );
 });
 
+test("what an edit switches off stays off", async () => {
+  // A field left out of a request cannot be told apart from a field nobody touched, so the forms
+  // send null and the update paths honour it. Before this, a fund moved back from SIP to lump sum
+  // kept its schedule, an EMI could not change card, and an AutoPay could not lose its bank.
+  const suffix = Date.now().toString().slice(-5);
+  const bank = await services.createAccount({
+    name: `QA Clear Bank ${suffix}`, type: "bank", startingBalancePaise: 50_000_00
+  });
+  const cardOne = await services.createAccount({
+    name: `QA Clear Card A ${suffix}`, type: "credit_card", startingBalancePaise: 0, creditLimitPaise: 3_00_000_00
+  });
+  const cardTwo = await services.createAccount({
+    name: `QA Clear Card B ${suffix}`, type: "credit_card", startingBalancePaise: 0, creditLimitPaise: 3_00_000_00
+  });
+
+  // A fund: lump sum -> SIP -> lump sum.
+  const fund = await services.createInvestment({
+    type: "mutual_funds", name: `QA Clear Fund ${suffix}`, investedPaise: 50_000_00, currentValuePaise: 50_000_00
+  });
+  await services.updateInvestment(fund.id, {
+    type: "mutual_funds", sipAmountPaise: 2_000_00, sipDay: 5, sipAccountId: bank.id
+  });
+  const withSip = (await services.listInvestments()).find((item) => item.id === fund.id);
+  assert(withSip?.sipAmountPaise === 2_000_00, "The SIP should be attached.");
+  await services.updateInvestment(fund.id, {
+    type: "mutual_funds", sipAmountPaise: null, sipDay: null, sipAccountId: null
+  });
+  const backToLumpSum = (await services.listInvestments()).find((item) => item.id === fund.id);
+  assert(
+    backToLumpSum?.sipAmountPaise === null && backToLumpSum?.sipDay === null && backToLumpSum?.sipAccountId === null,
+    `Going back to lump sum must drop the whole schedule, got ${JSON.stringify({
+      amount: backToLumpSum?.sipAmountPaise, day: backToLumpSum?.sipDay, bank: backToLumpSum?.sipAccountId
+    })}.`
+  );
+  const bankBefore = (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise;
+  assert((await services.catchUpSipInstalments()).paid === 0, "A fund with no schedule must take nothing.");
+  assert(
+    (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise === bankBefore,
+    "A fund with no schedule must leave the bank alone."
+  );
+
+  // An EMI's card: A -> B -> none, and losing the card makes it an ordinary loan again.
+  const emi = await services.createLoan({
+    name: `QA Clear EMI ${suffix}`, subcategoryId: await subcategoryId("Loan", "Other"),
+    principalAmountPaise: 60_000_00, startingOutstandingPaise: 60_000_00,
+    startMonth: currentIsoDateForTests().slice(0, 7), annualInterestRateBps: 1400,
+    tenureMonths: 12, monthlyEmiPaise: 5_400_00, accountId: cardOne.id
+  });
+  await services.updateLoan(emi.id, { accountId: cardTwo.id });
+  const moved = (await services.listLoans(true, "card-emi")).find((item) => item.id === emi.id);
+  assert(moved?.accountId === cardTwo.id, `An EMI should move card, got ${moved?.accountName}.`);
+  await services.updateLoan(emi.id, { accountId: null });
+  assert(
+    !(await services.listLoans(true, "card-emi")).some((item) => item.id === emi.id),
+    "An EMI with no card should leave the EMI tracker."
+  );
+  const asPlainLoan = (await services.listLoans(true)).find((item) => item.id === emi.id);
+  assert(asPlainLoan, "An EMI with no card should appear as an ordinary loan.");
+  assert(asPlainLoan.accountId === null, "And it should carry no card.");
+
+  // An AutoPay's bank: attached -> removed, and it stops paying itself.
+  const subscription = await services.createAutopaySubscription({
+    name: `QA Clear AutoPay ${suffix}`, amountPaise: 500_00,
+    startDate: currentIsoDateForTests(), durationMonths: 12, accountId: bank.id
+  });
+  await services.updateAutopaySubscription(subscription.id, { accountId: null });
+  const detached = (await services.listAutopaySubscriptions(true)).find((item) => item.id === subscription.id);
+  assert(detached?.accountId === null, "An AutoPay should be able to lose its bank.");
+  const afterDetach = (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise;
+  await services.catchUpAutopayDebits();
+  assert(
+    (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise === afterDetach,
+    "An AutoPay with no bank must not take a payment."
+  );
+
+  // And a holding's small optional fields.
+  const holding = await services.createInvestment({
+    type: "stocks", name: `QA Clear Shares ${suffix}`, investedPaise: 10_000_00,
+    currentValuePaise: 11_000_00, shares: 10, purchaseDate: "2025-04-01", note: "a note"
+  });
+  await services.updateInvestment(holding.id, { type: "stocks", shares: null, purchaseDate: null, note: null });
+  const bare = (await services.listInvestments()).find((item) => item.id === holding.id);
+  assert(
+    bare?.shares === null && bare?.purchaseDate === null && bare?.note === null,
+    "A holding's shares, date and note must all be clearable."
+  );
+});
+
 let failed = 0;
 
 // The suite exercises the services directly rather than over HTTP, so there is no request to

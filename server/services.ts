@@ -540,10 +540,15 @@ export async function updateLoan(id: string, input: UpdateLoanInput): Promise<Lo
     annualInterestRateBps: patch.annualInterestRateBps ??(await existing).annual_interest_rate_bps,
     tenureMonths: patch.tenureMonths ??(await existing).tenure_months,
     monthlyEmiPaise: patch.monthlyEmiPaise ??(await existing).monthly_emi_paise,
-    // `undefined` leaves the stored day alone; an explicit null clears the reminder.
-    emiDueDay: patch.emiDueDay === undefined ?(await existing).emi_due_day : patch.emiDueDay ?? null,
+    emiDueDay: patched(patch, "emiDueDay",(await existing).emi_due_day),
+    // The card an EMI runs on. It is what makes a loan an EMI, so taking it away moves the loan
+    // back to the Loans page -- which is the point of being able to take it away.
+    accountId: patched(patch, "accountId",(await existing).account_id),
     isArchived: patch.isArchived ?? Boolean((await existing).is_archived)
   };
+  if (merged.accountId) {
+    await requireCreditCard(merged.accountId);
+  }
 
   const parsed = createLoanSchema.parse({
     name: merged.name,
@@ -564,7 +569,7 @@ export async function updateLoan(id: string, input: UpdateLoanInput): Promise<Lo
       `UPDATE loans
        SET name = ?, subcategory_id = ?, principal_amount_paise = ?, starting_outstanding_paise = ?,
            start_month = ?, annual_interest_rate_bps = ?, tenure_months = ?, monthly_emi_paise = ?,
-           emi_due_day = ?, is_archived = ?, updated_at = CURRENT_TIMESTAMP
+           emi_due_day = ?, account_id = ?, is_archived = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND user_id = ?`
     ).run(
       parsed.name,
@@ -576,6 +581,7 @@ export async function updateLoan(id: string, input: UpdateLoanInput): Promise<Lo
       parsed.tenureMonths,
       parsed.monthlyEmiPaise,
       merged.emiDueDay ?? null,
+      merged.accountId ?? null,
       merged.isArchived ? 1 : 0,
       id,
       currentUserId()
@@ -686,18 +692,19 @@ export async function updateAutopaySubscription(
     amountPaise: patch.amountPaise ??(await existing).amount_paise,
     startDate: patch.startDate ??(await existing).start_date,
     durationMonths: patch.durationMonths ??(await existing).duration_months,
-    accountId: patch.accountId ??(await existing).account_id,
+    accountId: patched(patch, "accountId",(await existing).account_id),
     isArchived: patch.isArchived ?? Boolean((await existing).is_archived)
   };
-  if (patch.accountId) {
-    await requireDebitAccount(patch.accountId);
+  if (merged.accountId) {
+    await requireDebitAccount(merged.accountId);
   }
-  // A bank attached today starts paying today, not from the subscription's first month.
-  const debitedThrough =(await existing).account_id
-    ?(await existing).debited_through
-    : merged.accountId
-      ? previousDay(laterOf(merged.startDate, currentIsoDate()))
-      : null;
+  // A bank attached today starts paying today, not from the subscription's first month. A bank
+  // taken away loses the marker with it, so attaching one again later does not backfill.
+  const debitedThrough = !merged.accountId
+    ? null
+    :(await existing).account_id
+      ?(await existing).debited_through
+      : previousDay(laterOf(merged.startDate, currentIsoDate()));
 
   createAutopaySubscriptionSchema.parse({
     name: merged.name,
@@ -1040,19 +1047,17 @@ export async function updateInvestment(id: string, input: UpdateInvestmentInput)
     currentValuePaise: valueChanged ? (patch.currentValuePaise as number) :(await existing).current_value_paise,
     investedAsOf: investedChanged ? today :(await existing).invested_as_of,
     valueAsOf: valueChanged ? today :(await existing).value_as_of,
-    shares: Object.prototype.hasOwnProperty.call(patch, "shares") ? patch.shares ?? null :(await existing).shares,
-    purchaseDate: Object.prototype.hasOwnProperty.call(patch, "purchaseDate")
-      ? patch.purchaseDate ?? null
-      :(await existing).purchase_date,
-    note: Object.prototype.hasOwnProperty.call(patch, "note") ? patch.note ?? null :(await existing).note,
-    payoutFrequency: patch.payoutFrequency ??(await existing).payout_frequency,
-    payoutAmountPaise: patch.payoutAmountPaise ??(await existing).payout_amount_paise,
-    payoutDay: patch.payoutDay ??(await existing).payout_day,
-    payoutAccountId: patch.payoutAccountId ??(await existing).payout_account_id,
-    payoutEndDate: patch.payoutEndDate ??(await existing).payout_end_date,
-    sipAmountPaise: patch.sipAmountPaise ??(await existing).sip_amount_paise,
-    sipDay: patch.sipDay ??(await existing).sip_day,
-    sipAccountId: patch.sipAccountId ??(await existing).sip_account_id
+    shares: patched(patch, "shares",(await existing).shares),
+    purchaseDate: patched(patch, "purchaseDate",(await existing).purchase_date),
+    note: patched(patch, "note",(await existing).note),
+    payoutFrequency: patched(patch, "payoutFrequency",(await existing).payout_frequency),
+    payoutAmountPaise: patched(patch, "payoutAmountPaise",(await existing).payout_amount_paise),
+    payoutDay: patched(patch, "payoutDay",(await existing).payout_day),
+    payoutAccountId: patched(patch, "payoutAccountId",(await existing).payout_account_id),
+    payoutEndDate: patched(patch, "payoutEndDate",(await existing).payout_end_date),
+    sipAmountPaise: patched(patch, "sipAmountPaise",(await existing).sip_amount_paise),
+    sipDay: patched(patch, "sipDay",(await existing).sip_day),
+    sipAccountId: patched(patch, "sipAccountId",(await existing).sip_account_id)
   };
   if (patch.payoutAccountId) {
     await requirePayoutAccount(patch.payoutAccountId);
@@ -1082,11 +1087,12 @@ export async function updateInvestment(id: string, input: UpdateInvestmentInput)
     merged.sipAmountPaise,
     merged.sipDay,
     merged.sipAccountId,
-    // A schedule attached today starts today, not at the fund's first month.
-    (await existing).sip_through ??
-      (merged.sipAmountPaise
-        ? previousDay(laterOf(merged.purchaseDate ?? currentIsoDate(), currentIsoDate()))
-        : null),
+    // A schedule attached today starts today, not at the fund's first month -- and a schedule
+    // taken away loses its marker, so attaching one again later does not backfill the gap.
+    merged.sipAmountPaise
+      ?(await existing).sip_through ??
+        previousDay(laterOf(merged.purchaseDate ?? currentIsoDate(), currentIsoDate()))
+      : null,
     id,
     currentUserId()
   ));
@@ -4550,6 +4556,21 @@ async function requireLoanSubcategory(id: string) {
     throw badRequest("Loan must use a SubType under Type = Loan.");
   }
   return subcategory;
+}
+
+/**
+ * What a patch says about one field.
+ *
+ * A key the patch does not carry means nobody touched it, so the stored value stands. A key it
+ * does carry wins -- including when it is null, which is a form saying "switched off". Reading
+ * these two cases as one (`patch.x ?? stored`) is what made a cleared field come back.
+ */
+function patched<Stored>(patch: object, key: string, stored: Stored): Stored | null {
+  if (!Object.prototype.hasOwnProperty.call(patch, key)) {
+    return stored;
+  }
+  const given = (patch as Record<string, unknown>)[key];
+  return (given === undefined || given === null ? null : given) as Stored | null;
 }
 
 async function mapLoan(row: LoanRow): Promise<LoanSummary> {

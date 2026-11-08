@@ -5502,3 +5502,45 @@ a {
     padding-right: 14px;
   }
 }
+
+/* ---------- What's new ---------- */
+.nav-dot {
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent-strong);
+}
+
+.news-list {
+  display: grid;
+  gap: 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.news-entry h3 {
+  margin: 0 0 8px;
+  font-size: 0.88rem;
+  color: var(--accent-strong);
+  letter-spacing: 0.01em;
+}
+
+.news-entry ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+}
+
+.news-entry li {
+  line-height: 1.5;
+}
+
+.news-entry + .news-entry {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}

@@ -45,6 +45,24 @@ type InvestmentPayload = {
   sipAccountId?: string;
 };
 
+/**
+ * The same fields, but each one may also be null -- which only an edit can mean. The server
+ * reads a null as "switch this off" and an absent key as "nobody touched it". A new holding has
+ * nothing to switch off, so creating one takes the stricter shape above.
+ */
+type InvestmentUpdate = Partial<{ [Field in keyof InvestmentPayload]: InvestmentPayload[Field] | null }>;
+
+/**
+ * The same payload with every switched-off field dropped, for a create -- which has nothing to
+ * switch off, and whose schema refuses a null. One object is built either way so the two paths
+ * cannot drift apart.
+ */
+export function withoutCleared<Payload extends object>(payload: Payload) {
+  return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== null)) as {
+    [Field in keyof Payload]: Exclude<Payload[Field], null>;
+  };
+}
+
 type ApiOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
 };
@@ -166,6 +184,8 @@ export const Api = {
     tenureMonths: number;
     monthlyEmiPaise: number;
     emiDueDay: number | null;
+    /** The card an EMI runs on; null takes it off the card. */
+    accountId: string | null;
     isArchived: boolean;
   }>) => api<Loan>(`/api/loans/${id}`, { method: "PATCH", body }),
   archiveLoan: (id: string) =>
@@ -188,7 +208,8 @@ export const Api = {
       amountPaise: number;
       startDate: string;
       durationMonths: number;
-      accountId: string;
+      /** The bank it is taken from; null detaches it and it stops paying itself. */
+      accountId: string | null;
       isArchived: boolean;
     }>
   ) => api<AutopaySubscription>(`/api/subscriptions/${id}`, { method: "PATCH", body }),
@@ -197,7 +218,7 @@ export const Api = {
   investments: () => api<Investment[]>("/api/investments"),
   createInvestment: (body: InvestmentPayload) =>
     api<Investment>("/api/investments", { method: "POST", body }),
-  updateInvestment: (id: string, body: Partial<InvestmentPayload>) =>
+  updateInvestment: (id: string, body: InvestmentUpdate) =>
     api<Investment>(`/api/investments/${id}`, { method: "PATCH", body }),
   deleteInvestment: (id: string) => api<{ ok: true }>(`/api/investments/${id}`, { method: "DELETE" }),
   vacations: () => api<Vacation[]>("/api/vacations"),

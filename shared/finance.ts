@@ -292,6 +292,22 @@ const dateSchema = z
 const monthSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Enter a valid month.");
 const paiseSchema = z.number().int().min(0);
 const positivePaiseSchema = z.number().int().positive();
+/**
+ * A field an edit form can switch off.
+ *
+ * On an update, a key that is absent means "nobody touched this" and a key whose value is empty
+ * means "switch this off". Leaving the field merely optional made those two the same request,
+ * which is why a fund moved back from SIP to lump sum kept its schedule: the form had nothing
+ * left to send, so the server had nothing to act on. Empty is spelled null, or "" where a form
+ * control can only give back a string.
+ */
+function clearable<T extends z.ZodTypeAny>(schema: T) {
+  return z
+    .union([schema, z.literal(""), z.null()])
+    .optional()
+    .transform((value) => (value === undefined ? undefined : value === "" || value === null ? null : value));
+}
+
 const optionalTextSchema = z
   .string()
   .trim()
@@ -403,7 +419,9 @@ export const updateLoanSchema = z
     annualInterestRateBps: z.number().int().min(0).max(100_000).optional(),
     tenureMonths: z.number().int().positive().max(600).optional(),
     monthlyEmiPaise: positivePaiseSchema.optional(),
-    emiDueDay: dueDaySchema.nullish(),
+    emiDueDay: clearable(dueDaySchema),
+    /** The card an EMI runs on. Taking it away turns the EMI back into an ordinary loan. */
+    accountId: clearable(idSchema),
     isArchived: z.boolean().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "No loan changes provided.");
@@ -423,7 +441,7 @@ export const updateAutopaySubscriptionSchema = z
     amountPaise: positivePaiseSchema.optional(),
     startDate: dateSchema.optional(),
     durationMonths: z.number().int().positive().max(600).optional(),
-    accountId: z.union([idSchema, z.literal("")]).optional().transform((value) => value || undefined),
+    accountId: clearable(idSchema),
     isArchived: z.boolean().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "No subscription changes provided.");
@@ -472,7 +490,12 @@ export const SIP_INVESTMENT_TYPE = "mutual_funds";
  * purpose: it would look set up.
  */
 function checkSipFields(
-  value: { type?: string; sipAmountPaise?: number; sipDay?: number; sipAccountId?: string },
+  value: {
+    type?: string;
+    sipAmountPaise?: number | null;
+    sipDay?: number | null;
+    sipAccountId?: string | null;
+  },
   ctx: z.RefinementCtx
 ) {
   const parts = [
@@ -480,7 +503,8 @@ function checkSipFields(
     ["sipDay", value.sipDay, "the day it goes in"],
     ["sipAccountId", value.sipAccountId, "the bank it comes from"]
   ] as const;
-  const given = parts.filter(([, item]) => item !== undefined);
+  // Null is this field being switched off, which is the opposite of it being given.
+  const given = parts.filter(([, item]) => item !== undefined && item !== null);
 
   if (value.type !== SIP_INVESTMENT_TYPE) {
     for (const [path] of given) {
@@ -490,7 +514,7 @@ function checkSipFields(
   }
   if (!given.length) return;
   for (const [path, item, what] of parts) {
-    if (item === undefined) {
+    if (item === undefined || item === null) {
       ctx.addIssue({ code: "custom", path: [path], message: `A SIP needs ${what}.` });
     }
   }
@@ -503,12 +527,12 @@ function checkSipFields(
 function checkPayoutFields(
   value: {
     type?: string;
-    payoutFrequency?: string;
-    payoutAmountPaise?: number;
-    payoutDay?: number;
-    payoutAccountId?: string;
-    payoutEndDate?: string;
-    purchaseDate?: string;
+    payoutFrequency?: string | null;
+    payoutAmountPaise?: number | null;
+    payoutDay?: number | null;
+    payoutAccountId?: string | null;
+    payoutEndDate?: string | null;
+    purchaseDate?: string | null;
   },
   ctx: z.RefinementCtx,
   required: boolean
@@ -566,8 +590,26 @@ export const createInvestmentSchema = investmentObjectSchema.superRefine((value,
   }
 });
 
+/**
+ * Everything the investment form can switch off: the small optional fields, the whole payout
+ * schedule when a holding stops being one that pays, and the whole SIP schedule when a fund goes
+ * back to being bought in one go.
+ */
 export const updateInvestmentSchema = investmentObjectSchema
   .partial()
+  .extend({
+    shares: clearable(z.number().nonnegative()),
+    purchaseDate: clearable(dateSchema),
+    note: clearable(z.string().trim().max(160)),
+    payoutFrequency: clearable(payoutFrequencySchema),
+    payoutAmountPaise: clearable(positivePaiseSchema),
+    payoutDay: clearable(z.number().int().min(1).max(31)),
+    payoutAccountId: clearable(idSchema),
+    payoutEndDate: clearable(dateSchema),
+    sipAmountPaise: clearable(positivePaiseSchema),
+    sipDay: clearable(z.number().int().min(1).max(31)),
+    sipAccountId: clearable(idSchema)
+  })
   .superRefine((value, ctx) => checkSipFields(value, ctx))
   .refine((value) => Object.keys(value).length > 0, "No investment changes provided.");
 
