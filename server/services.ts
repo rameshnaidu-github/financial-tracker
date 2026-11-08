@@ -2721,10 +2721,19 @@ export type WealthSummary = {
 };
 
 async function computeNetWorthNow() {
-  // Archived accounts included, for the same reason archived loans are: archiving hides an
-  // account from the everyday screens, it does not hand the money to anyone. Leaving them out
-  // meant archiving a bank deleted its balance from net worth while archiving a debt did not.
-  const accounts = await listAccounts(true);
+  /* Archived accounts stay out.
+   *
+   * The reverse was tried -- "archiving only hides", to match archived debt, which does keep
+   * counting. Measured against the real database first, it would have added 3,61,873 to net
+   * worth, and 3,50,000 of that sat in two entries with no transaction against them ever: an
+   * opening balance typed in, never used, then archived to get rid of it. Archiving is being
+   * used here to mean "this should not exist", so counting it would invent money.
+   *
+   * That leaves the inconsistency the review named -- an archived asset disappears while an
+   * archived debt does not -- open on purpose, because closing it is a question about what
+   * archiving should mean, and that is the owner's to answer, not this function's.
+   */
+  const accounts = (await listAccounts(true)).filter((account) => !account.isArchived);
   const liquidPaise = accounts
     .filter((account) => account.type === "bank" || account.type === "food_card")
     .reduce((sum, account) => sum + account.balancePaise, 0);
