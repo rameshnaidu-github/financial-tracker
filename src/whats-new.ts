@@ -13,6 +13,19 @@ export type NewsEntry = {
 
 export const WHATS_NEW: NewsEntry[] = [
   {
+    date: "2026-11-09",
+    lines: [
+      "A review of every feature turned up nine gaps, and these are the fixes. Three of them change figures you already had on screen.",
+      "Archiving now only hides. An archived card EMI still counts as owed and an archived bank still counts as yours, the way an archived loan always did — so your net worth may move when you open this.",
+      "A credit balance on a card no longer reads as spending power: the available limit stops at the card's limit, and a card in credit is no longer counted as an asset.",
+      "A trip no longer counts spending that was refunded. A fully refunded trip expense now costs the trip nothing, as it already did in the reports.",
+      "A transaction can no longer be dated in the future — the ledger records what has happened, and a mistyped year was quietly moving your balance.",
+      "A transfer can only name another account when it is a self transfer or a card payment. On any other subtype the money used to leave one bank and arrive nowhere.",
+      "An AutoPay that cannot pay because its bank was archived now says so under Upcoming payments instead of stopping in silence.",
+      "The intro film no longer plays over the sign-in screen."
+    ]
+  },
+  {
     date: "2026-11-08",
     lines: [
       "What's new: this page. The speaker in Setup carries a dot until you have read the latest entry.",

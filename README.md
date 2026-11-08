@@ -68,8 +68,17 @@ There is no sign-up. An account exists only because the owner made one:
 node server/account.ts create someone@example.com
 ```
 
-Every row in every table carries whose it is, and the database enforces that with row-level security rather
-than trusting the application to remember — two people on the same deployment cannot see each other's money.
+Every row in every table carries whose it is, and three things keep one person's rows away from another:
+
+- **Every query names the person.** This is what actually does the work. A test in the suite reads every
+  statement the services hand to the database and fails if one touches a table carrying `user_id` without
+  naming it, so a forgotten clause is caught before it ships rather than after.
+- **Composite foreign keys**, so a row cannot point at another person's row even by accident.
+- **Row-level security is enabled on every table**, which denies anything that reaches the database by
+  another route. It does *not* constrain the application: the role it connects as carries `rolbypassrls`, so
+  for its own queries the scoping above is the protection. An earlier version of this README said the
+  database enforced the separation; that was wrong, and this says what is true.
+
 The local database files and the `backups/` folder are excluded from git, so only source code is
 version-controlled.
 
