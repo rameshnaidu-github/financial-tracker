@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -1409,7 +1409,7 @@ test("builds week-, month- and year-on-year trend reports per Type", async () =>
     kind: "expense"
   });
   await services.createTransaction({
-    date: `${currentMonth}-10`,
+    date: `${currentMonth}-01`,
     accountId: bank.id,
     method: "upi",
     merchant: "Trend groceries now",
@@ -1445,8 +1445,22 @@ test("builds week-, month- and year-on-year trend reports per Type", async () =>
     "Income trend for this account should be zero when only expenses exist."
   );
 
-  const weekly = await services.getTrendReport(bank.id, await typeId("Expense"), "week", currentMonth);
-  assert(weekly.month === currentMonth, "Week trend should echo the selected month.");
+  // Week buckets are checked in a month that is wholly in the past, so the day the suite runs
+  // cannot decide whether the 10th has happened yet.
+  await services.createTransaction({
+    date: "2019-06-10",
+    accountId: bank.id,
+    method: "upi",
+    merchant: "Trend groceries week two",
+    typeId: await typeId("Expense"),
+    subcategoryId: await subcategoryId("Expense", "Groceries"),
+    amountPaise: 2_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+
+  const weekly = await services.getTrendReport(bank.id, await typeId("Expense"), "week", "2019-06");
+  assert(weekly.month === "2019-06", "Week trend should echo the selected month.");
   assert(
     weekly.points.length >= 4 && weekly.points.length <= 5,
     "A month should split into 4–5 week buckets."
@@ -1476,7 +1490,7 @@ test("builds a budget-vs-actual trend for a SubType", async () => {
 
   await services.createBudgetLine({ month: cur, scopeType: "subcategory", scopeId: await grocSub, amountPaise: 5_000_00 });
   await services.createTransaction({
-    date: `${cur}-10`,
+    date: `${cur}-01`,
     accountId: bank.id,
     method: "upi",
     merchant: "Groceries over budget",
@@ -1610,14 +1624,14 @@ test("builds a monthly payment-history grid and rejects unknown sources", async 
     subcategoryId: await subcategoryId("Loan", "Personal"),
     principalAmountPaise: 12_000_000,
     startingOutstandingPaise: 12_000_000,
-    startMonth: "2029-01",
+    startMonth: "2009-01",
     annualInterestRateBps: 1000,
     tenureMonths: 24,
     monthlyEmiPaise: 500_000
   });
 
   await services.createTransaction({
-    date: "2029-03-10",
+    date: "2009-03-10",
     accountId: state.bankId,
     method: "bank_transfer",
     merchant: "QA history EMI",
@@ -1630,23 +1644,23 @@ test("builds a monthly payment-history grid and rejects unknown sources", async 
     loanPaymentType: "emi"
   });
 
-  const history = await services.getPaymentHistory("loan", loan.id, 2029);
+  const history = await services.getPaymentHistory("loan", loan.id, 2009);
   assert(history.months.length === 12, "Payment history should always have 12 months.");
   assert(history.months[2] === true, "March (index 2) should be marked paid.");
   assert(
     history.months.filter((paid) => paid).length === 1,
     "Only the paid month should be true."
   );
-  assert(history.year === 2029 && history.source === "loan", "History should echo its scope.");
+  assert(history.year === 2009 && history.source === "loan", "History should echo its scope.");
 
-  const otherYear = await services.getPaymentHistory("loan", loan.id, 2030);
+  const otherYear = await services.getPaymentHistory("loan", loan.id, 2010);
   assert(
     otherYear.months.every((paid) => paid === false),
     "A year with no payments should be all false."
   );
 
   await assertRejects("invalid payment history source", async () =>
-    await services.getPaymentHistory("stocks" as never, loan.id, 2029)
+    await services.getPaymentHistory("stocks" as never, loan.id, 2009)
   );
 });
 
@@ -1665,9 +1679,9 @@ test("scopes mutual-fund payment history to the linked holding only", async () =
     currentValuePaise: 2_900_00
   });
 
-  // A SIP into fund A during April 2031, explicitly linked to that holding.
+  // A SIP into fund A during April 2011, explicitly linked to that holding.
   await services.createTransaction({
-    date: "2031-04-12",
+    date: "2011-04-12",
     accountId: state.bankId,
     method: "upi",
     merchant: "QA SIP Alpha",
@@ -1681,7 +1695,7 @@ test("scopes mutual-fund payment history to the linked holding only", async () =
 
   // A mutual-fund investment that is NOT linked to any holding must not tick anyone.
   await services.createTransaction({
-    date: "2031-06-01",
+    date: "2011-06-01",
     accountId: state.bankId,
     method: "upi",
     merchant: "QA unlinked MF",
@@ -1692,14 +1706,14 @@ test("scopes mutual-fund payment history to the linked holding only", async () =
     kind: "investment"
   });
 
-  const alpha = await services.getPaymentHistory("mutual_fund", fundA.id, 2031);
+  const alpha = await services.getPaymentHistory("mutual_fund", fundA.id, 2011);
   assert(alpha.months[3] === true, "April (index 3) should tick for the linked fund.");
   assert(
     alpha.months.filter((paid) => paid).length === 1,
     "Only the linked month should tick for fund A."
   );
 
-  const beta = await services.getPaymentHistory("mutual_fund", fundB.id, 2031);
+  const beta = await services.getPaymentHistory("mutual_fund", fundB.id, 2011);
   assert(
     beta.months.every((paid) => paid === false),
     "A fund with no linked payments must show no ticks (not all funds)."
@@ -1707,7 +1721,7 @@ test("scopes mutual-fund payment history to the linked holding only", async () =
 
   await assertRejects("mutual-fund link requires the Mutual Funds subtype", async () =>
     await services.createTransaction({
-      date: "2031-04-15",
+      date: "2011-04-15",
       accountId: state.bankId!,
       method: "upi",
       merchant: "QA wrong subtype",
@@ -2266,21 +2280,23 @@ test("upcoming payments list AutoPay and EMIs due soon, skipping months already 
   const subscription = await services.createAutopaySubscription({
     name: `QA Upcoming Stream ${suffix}`,
     amountPaise: 649_00,
-    startDate: "2027-01-15",
-    durationMonths: 12
+    startDate: "2007-01-15",
+    // The whole scenario is read as of a date in 2007, but whether a subscription has expired is
+    // judged against today, so it needs a run long enough to still be going.
+    durationMonths: 600
   });
   const loan = await services.createLoan({
     name: `QA Upcoming Loan ${suffix}`,
     subcategoryId: await subcategoryId("Loan", "Vehicle"),
     principalAmountPaise: 5_00_000_00,
     startingOutstandingPaise: 5_00_000_00,
-    startMonth: "2027-01",
+    startMonth: "2007-01",
     annualInterestRateBps: 900,
     tenureMonths: 60,
     monthlyEmiPaise: 11_000_00
   });
   await services.createTransaction({
-    date: "2027-02-20",
+    date: "2007-02-20",
     accountId: state.bankId,
     method: "bank_transfer",
     typeId: await typeId("Loan"),
@@ -2292,11 +2308,11 @@ test("upcoming payments list AutoPay and EMIs due soon, skipping months already 
     loanPaymentType: "emi"
   });
 
-  const upcoming = await services.getUpcomingPayments(14, "2027-03-10");
+  const upcoming = await services.getUpcomingPayments(14, "2007-03-10");
   const stream = upcoming.items.find((item) => item.id === subscription.id);
   const emi = upcoming.items.find((item) => item.id === loan.id);
-  assert(stream?.dueDate === "2027-03-15" && stream.daysAway === 5, "AutoPay should be due on its billing day.");
-  assert(emi?.dueDate === "2027-03-20" && emi.daysAway === 10, "The EMI should follow the last EMI's day.");
+  assert(stream?.dueDate === "2007-03-15" && stream.daysAway === 5, "AutoPay should be due on its billing day.");
+  assert(emi?.dueDate === "2007-03-20" && emi.daysAway === 10, "The EMI should follow the last EMI's day.");
   assert(
     upcoming.totalPaise === upcoming.items.reduce((sum, item) => sum + item.amountPaise, 0),
     "The total should add up the listed payments."
@@ -2304,7 +2320,7 @@ test("upcoming payments list AutoPay and EMIs due soon, skipping months already 
 
   // Paying this month's AutoPay settles it; next month's charge is outside the 14-day window.
   await services.createTransaction({
-    date: "2027-03-05",
+    date: "2007-03-05",
     accountId: state.bankId,
     method: "upi",
     typeId: await typeId("Expense"),
@@ -2314,7 +2330,7 @@ test("upcoming payments list AutoPay and EMIs due soon, skipping months already 
     kind: "expense",
     subscriptionId: subscription.id
   });
-  const afterPaying = await services.getUpcomingPayments(14, "2027-03-10");
+  const afterPaying = await services.getUpcomingPayments(14, "2007-03-10");
   assert(
     !afterPaying.items.some((item) => item.id === subscription.id),
     "A month that already has its AutoPay payment must not show it as due."
@@ -2338,16 +2354,16 @@ test("the budget plan reports last month's spend per category", async () => {
     });
 
   // Two months of groceries, one month of dining.
-  spend("2028-01-06", 4_000_00, "Groceries");
-  await spend("2028-01-20", 2_500_00, "Groceries");
-  await spend("2028-01-11", 1_200_00, "Dining/Food");
-  await spend("2028-02-04", 900_00, "Groceries");
+  spend("2008-01-06", 4_000_00, "Groceries");
+  await spend("2008-01-20", 2_500_00, "Groceries");
+  await spend("2008-01-11", 1_200_00, "Dining/Food");
+  await spend("2008-02-04", 900_00, "Groceries");
 
   const groceries = await subcategoryId("Expense", "Groceries");
-  await services.createBudgetLine({ month: "2028-02", scopeType: "subcategory", scopeId: await groceries, amountPaise: 7_000_00 });
+  await services.createBudgetLine({ month: "2008-02", scopeType: "subcategory", scopeId: await groceries, amountPaise: 7_000_00 });
 
-  const plan = await services.getBudgetPlan("2028-02", "2028-02-10");
-  assert(plan.previousMonth === "2028-01", `The plan should name the previous month, got ${plan.previousMonth}.`);
+  const plan = await services.getBudgetPlan("2008-02", "2008-02-10");
+  assert(plan.previousMonth === "2008-01", `The plan should name the previous month, got ${plan.previousMonth}.`);
   const line = plan.lines.find((item) => item.scopeId === groceries);
   assert(line, "The groceries line should be planned.");
   assert(
@@ -2378,7 +2394,7 @@ test("the account editor payload saves a card's due day", async () => {
     creditLimitPaise: 1_00_000_00
   });
   await services.createTransaction({
-    date: "2027-04-02",
+    date: "2007-04-02",
     accountId: card.id,
     method: "credit_card",
     merchant: "QA editor spend",
@@ -2400,8 +2416,8 @@ test("the account editor payload saves a card's due day", async () => {
   assert(saved?.paymentDueDay === 21, `The editor should store the due day, got ${saved?.paymentDueDay}.`);
   assert(saved.outstandingPaise === 5_000_00, `Saving the editor must not disturb the balance, got ${saved.outstandingPaise}.`);
 
-  const due = (await services.getUpcomingPayments(14, "2027-04-15")).items.find((item) => item.id === card.id);
-  assert(due?.dueDate === "2027-04-21", `The saved day should drive the reminder, got ${due?.dueDate}.`);
+  const due = (await services.getUpcomingPayments(14, "2007-04-15")).items.find((item) => item.id === card.id);
+  assert(due?.dueDate === "2007-04-21", `The saved day should drive the reminder, got ${due?.dueDate}.`);
 
   // Editing again without mentioning the day keeps it; clearing it explicitly removes the reminder.
   await services.updateAccount(card.id, { name: `QA Editor Card ${suffix} renamed` });
@@ -2409,7 +2425,7 @@ test("the account editor payload saves a card's due day", async () => {
   await services.updateAccount(card.id, { paymentDueDay: null });
   assert((await services.listAccounts()).find((item) => item.id === card.id)?.paymentDueDay === null, "Clearing the day should be possible from the editor.");
   assert(
-    !(await services.getUpcomingPayments(14, "2027-04-15")).items.some((item) => item.id === card.id),
+    !(await services.getUpcomingPayments(14, "2007-04-15")).items.some((item) => item.id === card.id),
     "A card with no due day must not be listed."
   );
 });
@@ -2421,7 +2437,7 @@ test("the upcoming window can be narrowed to seven days", async () => {
     subcategoryId: await subcategoryId("Loan", "Personal"),
     principalAmountPaise: 1_00_000_00,
     startingOutstandingPaise: 1_00_000_00,
-    startMonth: "2027-01",
+    startMonth: "2007-01",
     annualInterestRateBps: 900,
     tenureMonths: 24,
     monthlyEmiPaise: 5_000_00,
@@ -2432,7 +2448,7 @@ test("the upcoming window can be narrowed to seven days", async () => {
     subcategoryId: await subcategoryId("Loan", "Personal"),
     principalAmountPaise: 1_00_000_00,
     startingOutstandingPaise: 1_00_000_00,
-    startMonth: "2027-01",
+    startMonth: "2007-01",
     annualInterestRateBps: 900,
     tenureMonths: 24,
     monthlyEmiPaise: 4_000_00,
@@ -2440,10 +2456,10 @@ test("the upcoming window can be narrowed to seven days", async () => {
   });
 
   // Ten days out: inside a fortnight, outside a week.
-  const week = await services.getUpcomingPayments(7, "2027-05-10");
+  const week = await services.getUpcomingPayments(7, "2007-05-10");
   assert(week.windowDays === 7, `The window should be reported as 7, got ${week.windowDays}.`);
   const inWeek = week.items.find((item) => item.id === near.id);
-  assert(inWeek?.dueDate === "2027-05-14" && inWeek.daysAway === 4, `The near EMI should be listed, got ${inWeek?.dueDate}.`);
+  assert(inWeek?.dueDate === "2007-05-14" && inWeek.daysAway === 4, `The near EMI should be listed, got ${inWeek?.dueDate}.`);
   assert(!week.items.some((item) => item.id === far.id), "An EMI 10 days away must not appear in a 7-day window.");
   assert(
     week.totalPaise === week.items.reduce((sum, item) => sum + item.amountPaise, 0),
@@ -2451,7 +2467,7 @@ test("the upcoming window can be narrowed to seven days", async () => {
   );
 
   // The same data over a fortnight still shows both, so only the window changed.
-  const fortnight = await services.getUpcomingPayments(14, "2027-05-10");
+  const fortnight = await services.getUpcomingPayments(14, "2007-05-10");
   assert(
     fortnight.items.some((item) => item.id === near.id) && fortnight.items.some((item) => item.id === far.id),
     "Both EMIs should still be listed over 14 days."
@@ -2465,7 +2481,7 @@ test("a loan reminds from its EMI due day", async () => {
     subcategoryId: await subcategoryId("Loan", "Vehicle"),
     principalAmountPaise: 5_00_000_00,
     startingOutstandingPaise: 5_00_000_00,
-    startMonth: "2027-01",
+    startMonth: "2007-01",
     annualInterestRateBps: 900,
     tenureMonths: 60,
     monthlyEmiPaise: 11_000_00,
@@ -2474,13 +2490,13 @@ test("a loan reminds from its EMI due day", async () => {
   assert((await services.listLoans(true)).find((item) => item.id === loan.id)?.emiDueDay === 12, "The EMI due day should be stored.");
 
   // No EMI has ever been recorded, so before this change the loan could not remind at all.
-  const soon = (await services.getUpcomingPayments(14, "2027-03-05")).items.find((item) => item.id === loan.id);
-  assert(soon?.dueDate === "2027-03-12" && soon.daysAway === 7, `The EMI should be due on the 12th, got ${soon?.dueDate}.`);
+  const soon = (await services.getUpcomingPayments(14, "2007-03-05")).items.find((item) => item.id === loan.id);
+  assert(soon?.dueDate === "2007-03-12" && soon.daysAway === 7, `The EMI should be due on the 12th, got ${soon?.dueDate}.`);
   assert(soon.kind === "loan" && soon.amountPaise === 11_000_00, "The reminder should carry the EMI amount.");
 
   // Outside the window it stays quiet, and a short month clamps to its last day.
   assert(
-    !(await services.getUpcomingPayments(3, "2027-03-05")).items.some((item) => item.id === loan.id),
+    !(await services.getUpcomingPayments(3, "2007-03-05")).items.some((item) => item.id === loan.id),
     "A due day beyond the window must not be listed."
   );
   const endOfMonth = await services.createLoan({
@@ -2488,18 +2504,18 @@ test("a loan reminds from its EMI due day", async () => {
     subcategoryId: await subcategoryId("Loan", "Vehicle"),
     principalAmountPaise: 1_00_000_00,
     startingOutstandingPaise: 1_00_000_00,
-    startMonth: "2027-01",
+    startMonth: "2007-01",
     annualInterestRateBps: 900,
     tenureMonths: 24,
     monthlyEmiPaise: 5_000_00,
     emiDueDay: 31
   });
-  const clamped = (await services.getUpcomingPayments(14, "2027-02-20")).items.find((item) => item.id === endOfMonth.id);
-  assert(clamped?.dueDate === "2027-02-28", `A 31st due day should fall on the last day of February, got ${clamped?.dueDate}.`);
+  const clamped = (await services.getUpcomingPayments(14, "2007-02-20")).items.find((item) => item.id === endOfMonth.id);
+  assert(clamped?.dueDate === "2007-02-28", `A 31st due day should fall on the last day of February, got ${clamped?.dueDate}.`);
 
   // Recording the month's EMI settles it.
   await services.createTransaction({
-    date: "2027-03-12",
+    date: "2007-03-12",
     accountId: state.bankId!,
     method: "bank_transfer",
     typeId: await typeId("Loan"),
@@ -2511,7 +2527,7 @@ test("a loan reminds from its EMI due day", async () => {
     loanPaymentType: "emi"
   });
   assert(
-    !(await services.getUpcomingPayments(14, "2027-03-05")).items.some((item) => item.id === loan.id),
+    !(await services.getUpcomingPayments(14, "2007-03-05")).items.some((item) => item.id === loan.id),
     "A month whose EMI is recorded must not still be listed as due."
   );
 
@@ -2522,7 +2538,7 @@ test("a loan reminds from its EMI due day", async () => {
       subcategoryId: await subcategoryId("Loan", "Vehicle"),
       principalAmountPaise: 1_00_000_00,
       startingOutstandingPaise: 1_00_000_00,
-      startMonth: "2027-01",
+      startMonth: "2007-01",
       annualInterestRateBps: 900,
       tenureMonths: 24,
       monthlyEmiPaise: 5_000_00,
@@ -2547,12 +2563,12 @@ test("a credit card reminds from its payment due day", async () => {
 
   // Nothing owed yet, so nothing is due.
   assert(
-    !(await services.getUpcomingPayments(14, "2027-03-10")).items.some((item) => item.id === card.id),
+    !(await services.getUpcomingPayments(14, "2007-03-10")).items.some((item) => item.id === card.id),
     "A card with no outstanding balance must not be listed."
   );
 
   await services.createTransaction({
-    date: "2027-03-02",
+    date: "2007-03-02",
     accountId: card.id,
     method: "credit_card",
     merchant: "QA card spend",
@@ -2562,14 +2578,14 @@ test("a credit card reminds from its payment due day", async () => {
     direction: "outflow",
     kind: "expense"
   });
-  const due = (await services.getUpcomingPayments(14, "2027-03-10")).items.find((item) => item.id === card.id);
+  const due = (await services.getUpcomingPayments(14, "2007-03-10")).items.find((item) => item.id === card.id);
   assert(due?.kind === "card", "A card bill should be its own kind of reminder.");
-  assert(due.dueDate === "2027-03-18" && due.daysAway === 8, `The card should be due on the 18th, got ${due.dueDate}.`);
+  assert(due.dueDate === "2007-03-18" && due.daysAway === 8, `The card should be due on the 18th, got ${due.dueDate}.`);
   assert(due.amountPaise === 7_500_00, `The reminder should carry what is owed, got ${due.amountPaise}.`);
 
   // Paying the bill settles this month.
   await services.createTransaction({
-    date: "2027-03-15",
+    date: "2007-03-15",
     accountId: state.bankId!,
     method: "bank_transfer",
     merchant: "QA card bill",
@@ -2580,7 +2596,7 @@ test("a credit card reminds from its payment due day", async () => {
     kind: "card_payment"
   });
   assert(
-    !(await services.getUpcomingPayments(14, "2027-03-10")).items.some((item) => item.id === card.id),
+    !(await services.getUpcomingPayments(14, "2007-03-10")).items.some((item) => item.id === card.id),
     "A card paid this month must not still be listed as due."
   );
 });
@@ -2592,14 +2608,14 @@ test("due days are optional and survive unrelated edits", async () => {
     subcategoryId: await subcategoryId("Loan", "Personal"),
     principalAmountPaise: 1_00_000_00,
     startingOutstandingPaise: 1_00_000_00,
-    startMonth: "2027-01",
+    startMonth: "2007-01",
     annualInterestRateBps: 900,
     tenureMonths: 24,
     monthlyEmiPaise: 5_000_00
   });
   assert((await services.listLoans(true)).find((item) => item.id === loan.id)?.emiDueDay === null, "A loan without a due day should store none.");
   assert(
-    !(await services.getUpcomingPayments(14, "2027-03-10")).items.some((item) => item.id === loan.id),
+    !(await services.getUpcomingPayments(14, "2007-03-10")).items.some((item) => item.id === loan.id),
     "A loan with no due day and no recorded EMI stays quiet, as before."
   );
 
@@ -2659,13 +2675,13 @@ test("a budget only projects once enough of the month has passed", async () => {
     startingBalancePaise: 1_00_000_00
   });
   await services.createBudgetLine({
-    month: "2026-12",
+    month: "1996-12",
     scopeType: "subcategory",
     scopeId: await subcategoryId("Expense", "Education"),
     amountPaise: 15_000_00
   });
   await services.createTransaction({
-    date: "2026-12-01",
+    date: "1996-12-01",
     accountId: bank.id,
     method: "upi",
     typeId: await typeId("Expense"),
@@ -2676,12 +2692,12 @@ test("a budget only projects once enough of the month has passed", async () => {
   });
 
   // Day 1: one ordinary purchase must not extrapolate to a month-end blow-out.
-  const dayOne = (await services.getBudgetPlan("2026-12", "2026-12-01")).lines[0];
+  const dayOne = (await services.getBudgetPlan("1996-12", "1996-12-01")).lines[0];
   assert(dayOne.projectedPaise === 1_000_00, "Too early in the month to project — show what was actually spent.");
   assert(dayOne.status !== "critical", "A single day-one purchase must not raise a 'likely to exceed' alarm.");
 
   // Mid-month the pace is meaningful again, so the projection kicks back in.
-  const midMonth = (await services.getBudgetPlan("2026-12", "2026-12-16")).lines[0];
+  const midMonth = (await services.getBudgetPlan("1996-12", "1996-12-16")).lines[0];
   assert(midMonth.projectedPaise > 1_000_00, "Once the month is underway the budget should project forward.");
 });
 
@@ -2713,7 +2729,7 @@ test("report outflow covers every non-inflow type and matches the overview", asy
   });
 
   await services.createTransaction({
-    date: "2028-04-05",
+    date: "2008-04-05",
     accountId: bank.id,
     method: "upi",
     typeId: await typeId("Expense"),
@@ -2723,7 +2739,7 @@ test("report outflow covers every non-inflow type and matches the overview", asy
     kind: "expense"
   });
   await services.createTransaction({
-    date: "2028-04-06",
+    date: "2008-04-06",
     accountId: bank.id,
     method: "bank_transfer",
     typeId: await typeId("Transfer"),
@@ -2733,7 +2749,7 @@ test("report outflow covers every non-inflow type and matches the overview", asy
     kind: "transfer"
   });
   await services.createTransaction({
-    date: "2028-04-07",
+    date: "2008-04-07",
     accountId: card.id,
     method: "credit_card",
     typeId: await typeId("Expense"),
@@ -2743,7 +2759,7 @@ test("report outflow covers every non-inflow type and matches the overview", asy
     kind: "expense"
   });
   await services.createTransaction({
-    date: "2028-04-08",
+    date: "2008-04-08",
     accountId: bank.id,
     method: "bank_transfer",
     typeId: await typeId("Credit Card Payment"),
@@ -2757,7 +2773,7 @@ test("report outflow covers every non-inflow type and matches the overview", asy
   // any other test writing a transaction into the same month breaks it -- which is what happened
   // when the month it used to name, 2026-10, became the current one and other tests started
   // dating their rows into it.
-  const report = await services.getMonthlyReport(undefined, "2028-04");
+  const report = await services.getMonthlyReport(undefined, "2008-04");
   const outflowFromTypes = cashflowPartsFromTypes(report.types as ReportType[], "out").reduce(
     (sum, part) => sum + part.amountPaise,
     0
@@ -2775,7 +2791,7 @@ test("report outflow covers every non-inflow type and matches the overview", asy
     "The outflow total must equal the Reports outflow breakdown."
   );
 
-  const overview = await services.getOverview(undefined, "2028-04");
+  const overview = await services.getOverview(undefined, "2008-04");
   assert(
     overview.summary.totalOutflowPaise === report.totalOutflowPaise,
     "The overview outflow must match the report outflow."
@@ -2786,9 +2802,10 @@ test("budget totals keep budgeted equal to used plus remaining", async () => {
   const suffix = Date.now().toString().slice(-5);
   // The figures below are exact, so this test needs a month nothing else in the suite spends in --
   // and one that can never be today's month, because another test budgets Groceries for whatever
-  // month that is. Ten years out clears every month pinned elsewhere, and keeps doing so as the
-  // clock moves: pinning a fixed month here is what broke this test the day the clock reached it.
-  const month = `${new Date().getFullYear() + 10}-09`;
+  // month that is. Thirty years back clears every month pinned elsewhere and keeps doing so as
+  // the clock moves. It was ten years forward until a transaction could no longer be dated in
+  // the future; the clock moves away from a past month just as reliably.
+  const month = `${new Date().getFullYear() - 30}-09`;
   const bank = await services.createAccount({
     name: `QA Budget Remaining Bank ${suffix}`,
     type: "bank",
@@ -2994,7 +3011,7 @@ test("budget projection uses the typical rest of month from recent history", asy
   // End to end: rent paid on the 3rd every month must not be extrapolated to double.
   assert(state.bankId, "Bank should exist.");
   const rentId = await subcategoryId("Expense", "Rent");
-  for (const date of ["2031-02-03", "2031-03-03", "2031-04-03", "2031-05-03"]) {
+  for (const date of ["2011-02-03", "2011-03-03", "2011-04-03", "2011-05-03"]) {
     await services.createTransaction({
       date,
       accountId: state.bankId,
@@ -3007,8 +3024,8 @@ test("budget projection uses the typical rest of month from recent history", asy
       kind: "expense"
     });
   }
-  await services.createBudgetLine({ month: "2031-05", scopeType: "subcategory", scopeId: await rentId, amountPaise: 26_000_00 });
-  const line = (await services.getBudgetPlan("2031-05", "2031-05-15")).lines.find((item) => item.subcategoryId === rentId);
+  await services.createBudgetLine({ month: "2011-05", scopeType: "subcategory", scopeId: await rentId, amountPaise: 26_000_00 });
+  const line = (await services.getBudgetPlan("2011-05", "2011-05-15")).lines.find((item) => item.subcategoryId === rentId);
   assert(line?.projectedPaise === 25_000_00, `Rent should project to 25,000, got ${line?.projectedPaise}.`);
   assert(line?.status !== "critical" && line?.status !== "over", "Rent paid in full should not raise an alarm.");
 });
@@ -3037,9 +3054,9 @@ test("weekly account impact shows the real direction of a card's outstanding", a
 test("the spending mix leaves investments out and reports them as invested", async () => {
   assert(state.bankId, "Bank should exist.");
   const base = { accountId: state.bankId, method: "upi" as const, direction: "outflow" as const };
-  await services.createTransaction({ ...base, date: "2032-02-05", typeId: await typeId("Expense"), subcategoryId: await subcategoryId("Expense", "Groceries"), amountPaise: 1_000_00, kind: "expense" });
-  await services.createTransaction({ ...base, date: "2032-02-06", typeId: await typeId("Investment"), subcategoryId: await subcategoryId("Investment", "Stocks"), amountPaise: 500_00, kind: "investment" });
-  const overview = await services.getOverview(undefined, "2032-02");
+  await services.createTransaction({ ...base, date: "2012-02-05", typeId: await typeId("Expense"), subcategoryId: await subcategoryId("Expense", "Groceries"), amountPaise: 1_000_00, kind: "expense" });
+  await services.createTransaction({ ...base, date: "2012-02-06", typeId: await typeId("Investment"), subcategoryId: await subcategoryId("Investment", "Stocks"), amountPaise: 500_00, kind: "investment" });
+  const overview = await services.getOverview(undefined, "2012-02");
   assert(overview.summary.investedPaise === 500_00, `Invested should be 500, got ${overview.summary.investedPaise}.`);
   assert(overview.summary.spendingPaise === 1_000_00, `Spending should exclude the investment, got ${overview.summary.spendingPaise}.`);
   assert(overview.summary.totalOutflowPaise === 1_500_00, "Outflow still includes the investment.");
@@ -3054,7 +3071,7 @@ test("a linked refund nets out of its purchase and cannot exceed it", async () =
   assert(state.cardId, "Card should exist.");
   const outstanding = async () => (await services.listAccounts()).find((account) => account.id === state.cardId)?.outstandingPaise ?? 0;
   const purchase = (await services.createTransaction({
-    date: "2032-03-08",
+    date: "2012-03-08",
     accountId: state.cardId,
     method: "credit_card",
     merchant: "QA headphones",
@@ -3068,7 +3085,7 @@ test("a linked refund nets out of its purchase and cannot exceed it", async () =
   const before = await outstanding();
   const refund = async (amountPaise: number) =>
     (await services.createTransaction({
-      date: "2032-03-12",
+      date: "2012-03-12",
       accountId: state.cardId as string,
       method: "credit_card",
       merchant: "QA headphones refund",
@@ -3081,7 +3098,7 @@ test("a linked refund nets out of its purchase and cannot exceed it", async () =
   const first = await refund(2_000_00);
   assert(first?.status === "categorized", `A linked refund is categorized, got ${first?.status}.`);
   assert(await outstanding() === before - 2_000_00, "A card refund lowers the outstanding.");
-  const report = await services.getMonthlyReport(undefined, "2032-03");
+  const report = await services.getMonthlyReport(undefined, "2012-03");
   const subcategoryId3 = await subcategoryId("Expense", "Shopping");
   const shopping = report.categories.find((category) => category.subcategoryId === subcategoryId3);
   assert(shopping?.amountPaise === 3_499_00, `Shopping should net to 3,499, got ${shopping?.amountPaise}.`);
@@ -3095,7 +3112,7 @@ test("a linked refund nets out of its purchase and cannot exceed it", async () =
   );
 
   const split = (await services.createTransaction({
-    date: "2032-03-14",
+    date: "2012-03-14",
     accountId: state.cardId,
     method: "credit_card",
     merchant: "QA split basket",
@@ -3112,7 +3129,7 @@ test("a linked refund nets out of its purchase and cannot exceed it", async () =
     "refund of a split",
     async () =>
       await services.createTransaction({
-        date: "2032-03-15",
+        date: "2012-03-15",
         accountId: state.cardId as string,
         method: "credit_card",
         typeId: "type_refund",
@@ -3128,21 +3145,21 @@ test("a linked refund nets out of its purchase and cannot exceed it", async () =
 test("a month can copy last month's budget without duplicates", async () => {
   const groceries = await subcategoryId("Expense", "Groceries");
   const transport = await subcategoryId("Expense", "Transport");
-  await services.createBudgetLine({ month: "2032-04", scopeType: "subcategory", scopeId: await groceries, amountPaise: 12_000_00 });
-  await services.createBudgetLine({ month: "2032-04", scopeType: "subcategory", scopeId: await transport, amountPaise: 3_000_00 });
-  await services.createBudgetLine({ month: "2032-05", scopeType: "subcategory", scopeId: await groceries, amountPaise: 15_000_00 });
-  const result = await services.copyBudgetFromPreviousMonth("2032-05");
+  await services.createBudgetLine({ month: "2012-04", scopeType: "subcategory", scopeId: await groceries, amountPaise: 12_000_00 });
+  await services.createBudgetLine({ month: "2012-04", scopeType: "subcategory", scopeId: await transport, amountPaise: 3_000_00 });
+  await services.createBudgetLine({ month: "2012-05", scopeType: "subcategory", scopeId: await groceries, amountPaise: 15_000_00 });
+  const result = await services.copyBudgetFromPreviousMonth("2012-05");
   assert(result.copiedCount === 1 && result.skippedCount === 1, `Expected 1 copied and 1 skipped, got ${JSON.stringify(result)}.`);
-  const lines = (await services.getBudgetPlan("2032-05", "2032-05-01")).lines;
+  const lines = (await services.getBudgetPlan("2012-05", "2012-05-01")).lines;
   assert(lines.find((line) => line.subcategoryId === groceries)?.amountPaise === 15_000_00, "An existing line keeps its amount.");
   assert(lines.find((line) => line.subcategoryId === transport)?.amountPaise === 3_000_00, "A missing line is copied.");
-  assert((await services.copyBudgetFromPreviousMonth("2032-05")).copiedCount === 0, "Copying twice adds nothing.");
+  assert((await services.copyBudgetFromPreviousMonth("2012-05")).copiedCount === 0, "Copying twice adds nothing.");
 });
 
 test("correcting a starting balance shifts the balance by the same amount", async () => {
   const account = await services.createAccount({ name: "QA Reconcile Bank", type: "bank", startingBalancePaise: 10_000_00 });
   await services.createTransaction({
-    date: "2032-06-02",
+    date: "2012-06-02",
     accountId: account.id,
     method: "upi",
     typeId: await typeId("Expense"),
@@ -3161,9 +3178,9 @@ test("correcting a starting balance shifts the balance by the same amount", asyn
 test("the transaction list filters to uncategorized rows", async () => {
   assert(state.bankId, "Bank should exist.");
   const base = { accountId: state.bankId, method: "upi" as const, direction: "outflow" as const, kind: "expense" as const };
-  await services.createTransaction({ ...base, date: "2032-07-03", merchant: "QA mystery UPI", amountPaise: 321_00 });
-  await services.createTransaction({ ...base, date: "2032-07-04", merchant: "QA known shop", typeId: await typeId("Expense"), subcategoryId: await subcategoryId("Expense", "Groceries"), amountPaise: 400_00 });
-  const query = { status: "uncategorized", from: "2032-07-01", to: "2032-07-31" };
+  await services.createTransaction({ ...base, date: "2012-07-03", merchant: "QA mystery UPI", amountPaise: 321_00 });
+  await services.createTransaction({ ...base, date: "2012-07-04", merchant: "QA known shop", typeId: await typeId("Expense"), subcategoryId: await subcategoryId("Expense", "Groceries"), amountPaise: 400_00 });
+  const query = { status: "uncategorized", from: "2012-07-01", to: "2012-07-31" };
   const rows = await services.listTransactions(query);
   assert(rows.length === 1 && rows[0].merchant === "QA mystery UPI", "Only the uncategorized row should be listed.");
   assert((await services.summarizeTransactions(query)).count === 1, "Totals should use the same filter.");
@@ -3210,15 +3227,21 @@ test("linked SIPs after the entered figures grow invested and current value once
     investedPaise: 1_20_000_00,
     currentValuePaise: 1_38_500_00
   });
-  // Already in the entered figures: a backfilled SIP from last month and one from today.
-  logSip(fund.id, isoDaysFromToday(-30), 10_000_00);
-  await logSip(fund.id, isoDaysFromToday(0), 10_000_00);
+  /* The rule is about SIPs dated after the figures were entered, not about the future. The
+     as-of dates are wound back so there is room on both sides of them inside the past, which
+     is where every transaction now has to live. */
+  (await dbModule.db.prepare("UPDATE investments SET invested_as_of = ?, value_as_of = ? WHERE id = ? AND user_id = ?")
+    .run(isoDaysFromToday(-40), isoDaysFromToday(-40), fund.id, dbModule.currentUserId()));
+
+  // Already in the entered figures: two SIPs from before the day they were typed in.
+  await logSip(fund.id, isoDaysFromToday(-50), 10_000_00);
+  await logSip(fund.id, isoDaysFromToday(-40), 10_000_00);
   let item = await holding(fund.id);
-  assert((await item).investedPaise === 1_20_000_00 &&(await  item).currentValuePaise === 1_38_500_00, "SIPs up to today are already in the entered figures.");
+  assert((await item).investedPaise === 1_20_000_00 &&(await  item).currentValuePaise === 1_38_500_00, "SIPs up to the as-of date are already in the entered figures.");
   assert((await item).sipsSinceCount === 0, "Nothing should be counted as added yet.");
 
-  await logSip(fund.id, isoDaysFromToday(1), 10_000_00);
-  await logSip(fund.id, isoDaysFromToday(32), 5_000_00);
+  await logSip(fund.id, isoDaysFromToday(-20), 10_000_00);
+  await logSip(fund.id, isoDaysFromToday(-5), 5_000_00);
   item = await holding(fund.id);
   assert((await item).investedPaise === 1_35_000_00, `Invested should grow by 15,000, got ${(await item).investedPaise}.`);
   assert((await item).currentValuePaise === 1_53_500_00, `Current value should grow by 15,000, got ${(await item).currentValuePaise}.`);
@@ -3260,7 +3283,11 @@ test("editing a holding resets only the figure that changed", async () => {
   assert((await revalued).valueAsOf === isoDaysFromToday(0), "The value baseline moves to today.");
   assert((await revalued).investedPaise === 55_000_00 &&(await  revalued).investedAsOf === enteredOn, "Invested still counts the SIP.");
 
-  await logSip(fund.id, isoDaysFromToday(1), 5_000_00);
+  /* "Later" means after the baseline, which a transaction can only be inside the past now. The
+     value baseline is nudged back a day so today's SIP sits after it. */
+  (await dbModule.db.prepare("UPDATE investments SET value_as_of = ? WHERE id = ? AND user_id = ?")
+    .run(isoDaysFromToday(-1), fund.id, dbModule.currentUserId()));
+  await logSip(fund.id, isoDaysFromToday(0), 5_000_00);
   const later = await holding(fund.id);
   assert((await later).currentValuePaise === 67_000_00 &&(await  later).investedPaise === 60_000_00, "A later SIP lifts both figures again.");
 });
@@ -3689,7 +3716,7 @@ test("nothing in the app shows a second person's rows", async () => {
       ["upcoming", await services.getUpcomingPayments()],
       ["budgets", await services.getBudgetPlan(month)],
       ["one transaction", await services.getTransaction(rows.transaction)],
-      ["their batch", await services.getCurrentBatch("2029-01-01", "2029-01-07")]
+      ["their batch", await services.getCurrentBatch("2009-01-01", "2009-01-07")]
     ];
 
     for (const [where, answer] of answers) {
@@ -3856,7 +3883,7 @@ async function cardWithTwoEmis(label: string) {
     name: `QA ${label} Card`, type: "credit_card", startingBalancePaise: 0, creditLimitPaise: 2_00_000_00
   });
   await services.createTransaction({
-    date: "2033-05-02", accountId: card.id, method: "credit_card", merchant: `QA ${label} shopping`,
+    date: "2013-05-02", accountId: card.id, method: "credit_card", merchant: `QA ${label} shopping`,
     typeId: await typeId("Expense"), subcategoryId: await subcategoryId("Expense", "Groceries"),
     amountPaise: 20_000_00, direction: "outflow", kind: "expense"
   });
@@ -3864,7 +3891,7 @@ async function cardWithTwoEmis(label: string) {
     await services.createLoan({
       name: `QA ${label} ${name}`, subcategoryId: await subcategoryId("Loan", "Vehicle"),
       accountId: card.id, principalAmountPaise: outstandingPaise,
-      startingOutstandingPaise: outstandingPaise, startMonth: "2033-04",
+      startingOutstandingPaise: outstandingPaise, startMonth: "2013-04",
       annualInterestRateBps: 1200, tenureMonths: 10, monthlyEmiPaise: Math.round(outstandingPaise / 10)
     });
   return { bank, card, first: await emi("EMI one", 10_000_00), second: await emi("EMI two", 20_000_00) };
@@ -3881,7 +3908,7 @@ test("a card payment settles the EMIs on that card, and the money leaves the ban
 
   // 20,000 of spending plus the two monthly installments of 1,000 and 2,000.
   const payment = await services.createTransaction({
-    date: "2033-05-10", accountId: bank.id, method: "bank_transfer", merchant: "QA card bill",
+    date: "2013-05-10", accountId: bank.id, method: "bank_transfer", merchant: "QA card bill",
     typeId: await typeId("Credit Card Payment"), amountPaise: 23_000_00, direction: "outflow",
     kind: "card_payment", transferAccountId: card.id,
     cardEmiPayments: [
@@ -3904,7 +3931,7 @@ test("a card payment settles the EMIs on that card, and the money leaves the ban
 
   // The installments are spending in their own right, which is the point of charging them to the
   // card rather than folding them into the payment: a payment is left out of every report.
-  const report = await services.getMonthlyReport(undefined, "2033-05");
+  const report = await services.getMonthlyReport(undefined, "2013-05");
   const loanLine = report.types.find((type) => type.behavior === "loan");
   assert(loanLine?.amountPaise === 3_000_00, `May's Loan total should be the two installments, got ${loanLine?.amountPaise}.`);
 });
@@ -3913,7 +3940,7 @@ test("an installment settled by a card payment moves and vanishes with that paym
   const { bank, card, first, second } = await cardWithTwoEmis("Undo");
   const bill = async (amountPaise: number, cardEmiPayments: Array<{ loanId: string; amountPaise: number }>) =>
     await services.createTransaction({
-      date: "2033-05-10", accountId: bank.id, method: "bank_transfer", merchant: "QA card bill",
+      date: "2013-05-10", accountId: bank.id, method: "bank_transfer", merchant: "QA card bill",
       typeId: await typeId("Credit Card Payment"), amountPaise, direction: "outflow",
       kind: "card_payment", transferAccountId: card.id, cardEmiPayments
     });
@@ -3931,7 +3958,7 @@ test("an installment settled by a card payment moves and vanishes with that paym
   );
   const elsewhere = await services.createLoan({
     name: "QA Undo Home Loan", subcategoryId: await subcategoryId("Loan", "Vehicle"),
-    principalAmountPaise: 5_00_000_00, startingOutstandingPaise: 5_00_000_00, startMonth: "2033-04",
+    principalAmountPaise: 5_00_000_00, startingOutstandingPaise: 5_00_000_00, startMonth: "2013-04",
     annualInterestRateBps: 900, tenureMonths: 120, monthlyEmiPaise: 7_000_00
   });
   await assertRejectsWithMessage(
@@ -3945,7 +3972,7 @@ test("an installment settled by a card payment moves and vanishes with that paym
     { loanId: second.id, amountPaise: 2_000_00 }
   ]);
   const installments = async () =>
-    (await services.listTransactions({ from: "2033-05-01", to: "2033-05-31", accountId: card.id }))
+    (await services.listTransactions({ from: "2013-05-01", to: "2013-05-31", accountId: card.id }))
       .filter((row) => row.kind === "emi");
   assert((await installments()).length === 2, "The payment should have charged both installments to the card.");
 
@@ -4129,7 +4156,7 @@ test("deletes a purchase a refund links to, keeping the refund and clearing its 
     startingBalancePaise: 1_000_00
   });
   const purchase = (await services.createTransaction({
-    date: "2033-07-04",
+    date: "2013-07-04",
     accountId: account.id,
     method: "upi",
     merchant: "QA unlink headphones",
@@ -4141,7 +4168,7 @@ test("deletes a purchase a refund links to, keeping the refund and clearing its 
   })).transaction;
   assert(purchase, "The purchase should be created.");
   const refund = (await services.createTransaction({
-    date: "2033-07-09",
+    date: "2013-07-09",
     accountId: account.id,
     method: "upi",
     merchant: "QA unlink refund",
@@ -4173,7 +4200,7 @@ test("deletes a purchase a refund links to, keeping the refund and clearing its 
   // 1,000 starting, 500 spent and refunded 200; with the purchase gone the refund still counts.
   const balance = (await services.listAccounts()).find((item) => item.id === account.id)?.balancePaise;
   assert(balance === 1_200_00, `The refund should still move the balance, got ${balance}.`);
-  const report = await services.getMonthlyReport(undefined, "2033-07");
+  const report = await services.getMonthlyReport(undefined, "2013-07");
   assert(report.totalInflowPaise === 200_00, `An unlinked refund is money in, got ${report.totalInflowPaise}.`);
   assert(
     !(await services.listTransactions({ status: "uncategorized" })).some((item) => item.id === refund.id),
@@ -4186,7 +4213,7 @@ test("deletes an entry batch, keeping its transactions and clearing their batch"
   const owner = dbModule.currentUserId();
   const account = await services.createAccount({ name: "QA Unbatch Bank", type: "bank", startingBalancePaise: 0 });
   const spend = (await services.createTransaction({
-    date: "2033-08-01",
+    date: "2013-08-01",
     accountId: account.id,
     method: "upi",
     merchant: "QA unbatch spend",
@@ -4501,6 +4528,64 @@ test("what an edit switches off stays off", async () => {
   assert(
     bare?.shares === null && bare?.purchaseDate === null && bare?.note === null,
     "A holding's shares, date and note must all be clearable."
+  );
+});
+
+test("every query against a table that carries a person is scoped to that person", async () => {
+  /* What actually keeps one person's rows from another is this, and only this.
+     Row-level security is switched on for every table, but the role the application connects as
+     carries rolbypassrls, so the database never applies it to these queries. The separation is
+     the `user_id` in each statement below, which makes a missing one a silent cross-account read
+     with nothing behind it. This test is that missing backstop: it reads every statement the
+     services hand to the database and fails on any that touches a person's table without
+     naming the person. */
+  const source = readFileSync(new URL("../server/services.ts", import.meta.url), "utf8");
+
+  const unscopedTables = new Set(["schema_state", "app_settings", "users"]);
+  const statements: string[] = [];
+  const marker = ".prepare(";
+  for (let at = source.indexOf(marker); at >= 0; at = source.indexOf(marker, at + 1)) {
+    const open = source.indexOf("`", at);
+    if (open < 0) continue;
+    const close = source.indexOf("`", open + 1);
+    if (close < 0) continue;
+    statements.push(source.slice(open + 1, close));
+  }
+  assert(statements.length > 60, `Only ${statements.length} statements were read; the scan is not finding them.`);
+
+  // `UPDATE ... SET` and the like are not table names.
+  const keywords = new Set(["set", "select", "values", "where", "and", "or"]);
+  /* A statement may carry its scope in an interpolated fragment instead of inline. Only one
+     fragment is allowed to stand for it, and the assertion below proves that fragment always
+     begins with the person. */
+  assert(
+    /const filters: string\[\] = \["t\.user_id = \?"\]/.test(source),
+    "buildTransactionFilters no longer starts every filter list with the person, so ${where} can no longer be trusted to carry it."
+  );
+
+  const offenders: string[] = [];
+  for (const statement of statements) {
+    const tables = [...statement.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE)\s+([a-z_]+)/gi)]
+      .map((match) => match[1].toLowerCase())
+      .filter((table) => !keywords.has(table));
+    const touchesAPerson = tables.some((table) => !unscopedTables.has(table));
+    if (!touchesAPerson) continue;
+    if (/user_id/.test(statement)) continue;
+    if (/\$\{where\}/.test(statement)) continue;
+    offenders.push(statement.replace(/\s+/g, " ").trim().slice(0, 110));
+  }
+
+  assert(
+    offenders.length === 0,
+    `These statements touch a person's table without naming the person:\n  ${offenders.join("\n  ")}`
+  );
+
+  // The check has to be able to fail, or it is decoration.
+  const planted = "SELECT amount_paise FROM transactions WHERE id = ?";
+  const plantedTables = [...planted.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE)\s+([a-z_]+)/gi)].map((match) => match[1]);
+  assert(
+    plantedTables.includes("transactions") && !/user_id/.test(planted),
+    "The detector should see an unscoped read of a person's table."
   );
 });
 

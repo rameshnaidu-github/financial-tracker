@@ -260,6 +260,8 @@ export type UpcomingPayment = {
   amountPaise: number;
   /** Set when an AutoPay fell due and its bank did not cover it, naming that bank. */
   notCoveredBy?: string;
+  /** Why it was not taken: the bank was short, or the bank has been archived. */
+  heldBecause?: "short" | "archived";
 };
 
 export type UpcomingPayments = {

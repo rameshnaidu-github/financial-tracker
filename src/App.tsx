@@ -726,9 +726,10 @@ export default function App() {
   }
 
   if (signedIn === false) {
+    // No film in front of the sign-in. It is a tour of somebody's money, shown to whoever opens
+    // the address; it belongs behind the password, not in front of it.
     return (
       <>
-        {introOpen && <IntroVideo onClose={closeIntro} />}
         <SignInScreen
           onSignedIn={() => {
             setSignedIn(true);
@@ -1850,7 +1851,8 @@ function WeeklyEntryPage({
                   value={form.date}
                   onChange={(event) => setForm({ ...form, date: event.target.value })}
                   min={EARLIEST_DATE}
-                  max={LATEST_DATE}
+                  /* A transaction records what happened, so the picker stops at today. */
+                  max={todayISO()}
                   required
                 />
               </label>
@@ -2945,7 +2947,7 @@ function TransactionsPage({
                         value={refundDraft.date}
                         onChange={(event) => setRefundDraft({ ...refundDraft, date: event.target.value })}
                         min={EARLIEST_DATE}
-                        max={LATEST_DATE}
+                        max={todayISO()}
                       />
                     </label>
                     <div className="refund-form-actions">
@@ -3127,7 +3129,7 @@ function TransactionEditRow({
         <label>
           Date
           <input
-            type="date" min={EARLIEST_DATE} max={LATEST_DATE}
+            type="date" min={EARLIEST_DATE} max={todayISO()}
             value={draft.date}
             onChange={(event) => onChange({ ...draft, date: event.target.value })}
           />
@@ -7556,7 +7558,7 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "Where is my data stored, and who else can see it?",
     answer:
-      "This copy runs on the web, so your accounts, transactions, budgets and settings live in a hosted Postgres database rather than on your phone or laptop. Getting in needs your email and password, and there is no sign-up: an account only exists because the owner created one with the account command. Every row carries whose it is, and the database itself refuses to hand one person's rows to another, so two people using the same copy never see each other's money. You can also run the app on your own machine instead, which keeps the database in a file under the project and reaches nothing outside it."
+      "This copy runs on the web, so your accounts, transactions, budgets and settings live in a hosted Postgres database rather than on your phone or laptop. Getting in needs your email and password, and there is no sign-up: an account only exists because the owner created one with the account command. Every row carries whose it is, and every question the app asks the database names the person asking — there is a test that reads every one of those questions and fails if a single one forgets, which is what stops two people on the same copy ever seeing each other's money. The tables also refuse to let one person's row point at another's. You can also run the app on your own machine instead, which keeps the database in a file under the project and reaches nothing outside it."
   },
   {
     question: "How is 'Available cash' calculated?",
@@ -8612,7 +8614,9 @@ function UpcomingPaymentsList({
                       disappearing: nothing was recorded, so this is the only sign it is owed. */}
                   <small>
                     {item.notCoveredBy
-                      ? `Due ${formatShortDate(item.dueDate)} · not enough in ${item.notCoveredBy}`
+                      ? item.heldBecause === "archived"
+                        ? `Due ${formatShortDate(item.dueDate)} · ${item.notCoveredBy} is archived`
+                        : `Due ${formatShortDate(item.dueDate)} · not enough in ${item.notCoveredBy}`
                       : dueLabel(item.daysAway, item.dueDate)}
                   </small>
                 </div>

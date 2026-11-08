@@ -782,11 +782,21 @@ export async function catchUpAutopayDebits(today = currentIsoDate()) {
   );
 
   let paid = 0;
-  const skipped: Array<{ id: string; dueDate: string }> = [];
+  const skipped: Array<{ id: string; dueDate: string; reason: "short" | "archived" }> = [];
   for (const subscription of subscriptions) {
     const row = await requireAutopayRow(subscription.id);
     const due = autopayDueDates(row, autopayDebitedThrough(row, today), today);
     if (!due.length) continue;
+
+    /* A bank that has been archived cannot be taken from, and saying nothing about it is how a
+       subscription came to stop paying with nothing on any screen to say why. */
+    // getAccountRow, not requireAccount: the latter hands back a promise of a promise here, and
+    // reading a field off it gives undefined rather than the row.
+    const fundingAccount = await getAccountRow(row.account_id as string);
+    if (!fundingAccount || fundingAccount.is_archived) {
+      skipped.push({ id: row.id, dueDate: due[0], reason: "archived" });
+      continue;
+    }
 
     const paidMonths = new Set(
       asRecords<{ month: string }>(
@@ -810,7 +820,7 @@ export async function catchUpAutopayDebits(today = currentIsoDate()) {
       // there to take, and a balance that has since been spent cannot be taken from.
       const balance = (await mapAccountWithBalance(await requireAccount(row.account_id as string))).balancePaise;
       if (balance < row.amount_paise) {
-        skipped.push({ id: row.id, dueDate: date });
+        skipped.push({ id: row.id, dueDate: date, reason: "short" });
         break;
       }
       await transaction(async () => {
@@ -1534,7 +1544,16 @@ async function vacationSpendByVacation(): Promise<Map<string, VacationSpend>> {
   const totals = asRecords<{ vacation_id: string; total: number; cnt: number }>(
     (await db
       .prepare(
-        `SELECT ve.vacation_id AS vacation_id, SUM(t.amount_paise) AS total, COUNT(*) AS cnt
+        // Less whatever came back. A refund tied to a purchase reduces that purchase
+        // everywhere else; a trip used to be the one place that still counted the full amount.
+        `SELECT ve.vacation_id AS vacation_id,
+                SUM(t.amount_paise - COALESCE((
+                  SELECT SUM(r.amount_paise) FROM transactions r
+                  WHERE r.linked_transaction_id = t.id
+                    AND r.user_id = t.user_id
+                    AND r.kind IN ('refund', 'reversal')
+                ), 0)) AS total,
+                COUNT(*) AS cnt
          FROM vacation_expenses ve
          JOIN transactions t ON t.id = ve.transaction_id AND t.user_id = ve.user_id
          WHERE ve.user_id = ?
@@ -1562,7 +1581,12 @@ async function vacationSpendByVacation(): Promise<Map<string, VacationSpend>> {
         `SELECT ve.vacation_id AS vacation_id,
                 COALESCE(ts.subcategory_id, t.subcategory_id) AS subcategory_id,
                 sc.name AS name, sc.icon AS icon, sc.color AS color,
-                SUM(COALESCE(ts.amount_paise, t.amount_paise)) AS amount
+                SUM(COALESCE(ts.amount_paise, t.amount_paise) - COALESCE((
+                  SELECT SUM(r.amount_paise) FROM transactions r
+                  WHERE r.linked_transaction_id = t.id
+                    AND r.user_id = t.user_id
+                    AND r.kind IN ('refund', 'reversal')
+                ), 0) * COALESCE(ts.amount_paise, t.amount_paise) / NULLIF(t.amount_paise, 0)) AS amount
          FROM vacation_expenses ve
          JOIN transactions t ON t.id = ve.transaction_id AND t.user_id = ve.user_id
          LEFT JOIN transaction_splits ts ON ts.transaction_id = t.id AND ts.user_id = t.user_id
@@ -2697,13 +2721,26 @@ export type WealthSummary = {
 };
 
 async function computeNetWorthNow() {
-  const accounts = (await listAccounts()).filter((account) => !account.isArchived);
+  /* Archived accounts stay out.
+   *
+   * The reverse was tried -- "archiving only hides", to match archived debt, which does keep
+   * counting. Measured against the real database first, it would have added 3,61,873 to net
+   * worth, and 3,50,000 of that sat in two entries with no transaction against them ever: an
+   * opening balance typed in, never used, then archived to get rid of it. Archiving is being
+   * used here to mean "this should not exist", so counting it would invent money.
+   *
+   * That leaves the inconsistency the review named -- an archived asset disappears while an
+   * archived debt does not -- open on purpose, because closing it is a question about what
+   * archiving should mean, and that is the owner's to answer, not this function's.
+   */
+  const accounts = (await listAccounts(true)).filter((account) => !account.isArchived);
   const liquidPaise = accounts
     .filter((account) => account.type === "bank" || account.type === "food_card")
     .reduce((sum, account) => sum + account.balancePaise, 0);
+  // A card carrying a credit balance owes nothing; it is not a negative debt.
   const creditPaise = accounts
     .filter((account) => account.type === "credit_card")
-    .reduce((sum, account) => sum + account.outstandingPaise, 0);
+    .reduce((sum, account) => sum + Math.max(account.outstandingPaise, 0), 0);
   // Not currentValuePaise: a paying holding's value includes credits already counted in the bank
   // balance below, and the same money must not be added twice.
   const investmentsPaise = (await listInvestments()).reduce((sum, item) => sum + item.netWorthValuePaise, 0);
@@ -2797,12 +2834,14 @@ export type UpcomingPayment = {
   daysAway: number;
   amountPaise: number;
   /**
-   * Set when an AutoPay fell due and its bank did not cover it, naming that bank.
+   * Set when an AutoPay fell due and was not taken, naming the bank it would have come from.
    *
    * It stays listed rather than passing by silently: nothing was written, so without this the
    * month would simply look as though the subscription had never been due.
    */
   notCoveredBy?: string;
+  /** Why it was not taken: the bank was short, or the bank has been archived. */
+  heldBecause?: "short" | "archived";
 };
 
 export type UpcomingPayments = {
@@ -2836,9 +2875,14 @@ async function heldBackAutopay(
   if (!due.length) return null;
   const account = await getAccountRow(subscription.accountId);
   if (!account) return null;
+  // An archived bank cannot be taken from however much is in it, so it is held for that reason
+  // rather than for being short -- and it is held rather than passing by in silence.
+  if (account.is_archived) {
+    return { dueDate: due[0], accountName: account.name, reason: "archived" as const };
+  }
   const balance = (await mapAccountWithBalance(account)).balancePaise;
   if (balance >= subscription.amountPaise) return null;
-  return { dueDate: due[0], accountName: account.name };
+  return { dueDate: due[0], accountName: account.name, reason: "short" as const };
 }
 
 function nextMonthlyDueDate(
@@ -2903,10 +2947,21 @@ export async function getUpcomingPayments(windowDays = 14, today = currentIsoDat
         amountPaise: subscription.amountPaise,
         dueDate: held.dueDate,
         daysAway: daysBetween(today, held.dueDate),
-        notCoveredBy: held.accountName
+        notCoveredBy: held.accountName,
+        heldBecause: held.reason
       });
     } else if (due) {
-      items.push({ id: subscription.id, kind: "autopay", name: subscription.name, amountPaise: subscription.amountPaise, ...due });
+      /* A bank that has been archived will not cover the next one either, whether or not this
+         month happens to be settled, so the listing says so rather than looking ordinary. */
+      const funding = subscription.accountId ? await getAccountRow(subscription.accountId) : null;
+      items.push({
+        id: subscription.id,
+        kind: "autopay",
+        name: subscription.name,
+        amountPaise: subscription.amountPaise,
+        ...due,
+        ...(funding?.is_archived ? { notCoveredBy: funding.name, heldBecause: "archived" as const } : {})
+      });
     }
   }
 
@@ -5354,6 +5409,27 @@ async function validateTransactionAgainstAccounts(input: CreateTransactionInput,
     throw badRequest("Credit-card account transactions must use the Credit card method.");
   }
 
+  /* A ledger records what happened. A date in the future used to be accepted and counted
+     straight into the balance while the month figures left it out, so the balance and the
+     spending that should explain it disagreed -- and a mistyped year moved the balance with
+     nothing on screen to say why. */
+  if (input.date > currentIsoDate()) {
+    throw badRequest("A transaction cannot be dated in the future. Record it on the day it happens.");
+  }
+
+  /* Only two kinds of transaction can deliver money to another account: a self transfer and a
+     card payment. Any other subtype carrying a destination used to be accepted, take the money
+     out of the source, and deliver it nowhere. */
+  if (
+    input.transferAccountId &&
+    input.kind !== "card_payment" &&
+    input.subcategoryId !== SELF_TRANSFER_SUBCATEGORY_ID
+  ) {
+    throw badRequest(
+      "Only a self transfer or a credit-card payment can move money to another account. Choose SubType = Self transfer, or leave the account blank."
+    );
+  }
+
   if (input.kind === "card_payment") {
     if (account.type !== "bank") {
       throw badRequest("Card payments must be paid from a bank account.");
@@ -5996,7 +6072,8 @@ async function findDuplicateCandidates(input: {
         `SELECT ${transactionSelectFields}
          FROM transactions t
          ${transactionJoins}
-WHERE t.id != ?
+         WHERE t.user_id = ?
+           AND t.id != ?
            AND t.account_id = ?
            AND t.amount_paise = ?
            AND t.direction = ?
@@ -6004,7 +6081,7 @@ WHERE t.id != ?
          ORDER BY t.date DESC, t.id DESC
          LIMIT 5`
       )
-      .all(input.id, input.accountId, input.amountPaise, input.direction, input.date))
+      .all(currentUserId(), input.id, input.accountId, input.amountPaise, input.direction, input.date))
   );
 
   return rows.map(mapTransaction);
@@ -6018,7 +6095,9 @@ WHERE t.id != ?
  */
 async function cardEmiOutstandingByAccount(): Promise<Map<string, number>> {
   const totals = new Map<string, number>();
-  for (const emi of await listLoans(false, "card-emi")) {
+  // Archived too. Archiving hides an EMI from the tracker; the card still owes what it owes,
+  // and leaving it out here quietly raised net worth by the balance of anything archived.
+  for (const emi of await listLoans(true, "card-emi")) {
     if (!emi.accountId) continue;
     totals.set(emi.accountId, (totals.get(emi.accountId) ?? 0) + emi.outstandingPaise);
   }
@@ -6062,7 +6141,9 @@ async function mapAccountWithBalance(account: AccountRow, emiByCard?: Map<string
       emiOutstandingPaise: emiOutstanding,
       // A card has an outstanding rather than a balance; the minimum does not apply.
       minimumBalancePaise: 0,
-      availableLimitPaise: Math.max(creditLimit - outstanding, 0),
+      // Never more than the card's own limit: paying a card more than it owes, or a credit
+      // landing on it, used to read as spending power the bank has not given.
+      availableLimitPaise: Math.min(Math.max(creditLimit - outstanding, 0), creditLimit),
       paymentDueDay: account.payment_due_day ?? null,
       isArchived: Boolean(account.is_archived)
     };
