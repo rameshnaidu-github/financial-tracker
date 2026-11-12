@@ -370,6 +370,10 @@ function withPageTransition(update: () => void) {
 }
 
 const NAV_GROUPS: NavGroup[] = ["Daily", "Plan", "Own & owe", "Setup"];
+
+/* Pages that draw their own header. The shell prints the page's name in the top bar for every
+   other one; these say it in their own body instead, and must not be told twice. */
+const PAGES_WITH_OWN_HEADER: Page[] = ["budgets"];
 const THEME_KEY = "finance-theme";
 const INTRO_ON_LAUNCH_KEY = "finance-intro-on-launch";
 
@@ -881,16 +885,6 @@ export default function App() {
 
   const canOpen = useCallback((page: Page) => pageAllowedIn(page, simpleMode), [simpleMode]);
 
-  /* The skin rides on the document rather than on the shell, beside the theme: dialogs and the
-     toast are portalled to the body, and a skin set further in would stop at them. */
-  useEffect(() => {
-    if (simpleMode) {
-      document.documentElement.dataset.skin = "simple";
-    } else {
-      delete document.documentElement.dataset.skin;
-    }
-  }, [simpleMode]);
-
   const saveSimpleMode = useCallback(
     async (next: boolean) => {
       try {
@@ -1260,7 +1254,9 @@ export default function App() {
       <main className="main-shell">
         <header className="topbar" key={activePage}>
           <div>
-            <h1>{navItems.find((item) => item.page === activePage)?.label}</h1>
+            {!PAGES_WITH_OWN_HEADER.includes(activePage) && (
+              <h1>{navItems.find((item) => item.page === activePage)?.label}</h1>
+            )}
           </div>
           <div className="topbar-actions">
             {showAccountFilter && (
@@ -4582,6 +4578,139 @@ export function PreviousMonthHints({
  * question "is the copy action offered on a month that already has lines" is answered by handing
  * this a plan that has lines, which is not a question the fetching page can be asked.
  */
+/**
+ * A page's own header: what it is, how it is going, and what can be done here.
+ *
+ * The shell prints the page's name in the top bar for every other page; a page that renders this
+ * is named once, in its own body, the way the reference has it.
+ */
+export function PageHeader({
+  title,
+  summary,
+  actions
+}: {
+  title: string;
+  summary?: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <header className="page-header">
+      <div className="page-header-copy">
+        <h1>{title}</h1>
+        {summary ? <p>{summary}</p> : null}
+      </div>
+      {actions ? <div className="page-header-actions">{actions}</div> : null}
+    </header>
+  );
+}
+
+/**
+ * Days of the planned month still to spend in, counting today.
+ *
+ * `dayOfMonth` is 0 for a month that has not started and pins to the last day for one already
+ * finished, so the month's own end date is what separates "the last day" from "long over".
+ */
+export function budgetDaysLeft(plan: BudgetPlan): number {
+  if (plan.asOfDate > plan.end) {
+    return 0;
+  }
+  if (plan.dayOfMonth === 0) {
+    return plan.daysInMonth;
+  }
+  return plan.daysInMonth - plan.dayOfMonth + 1;
+}
+
+/** What is left, spread over the days left -- zero when there is nothing left or nowhere to put it. */
+export function budgetPerDayPaise(plan: BudgetPlan): number {
+  const days = budgetDaysLeft(plan);
+  if (days <= 0 || plan.totals.remainingPaise <= 0) {
+    return 0;
+  }
+  return Math.round(plan.totals.remainingPaise / days);
+}
+
+/**
+ * The line under the title: where the month has got to, what is off plan, and where the plan
+ * lands if nothing changes. The projection used to be a fifth tile; the reference has four, and
+ * this is where the reading of it goes instead.
+ */
+export function budgetSummaryLine(plan: BudgetPlan): string {
+  const month = formatMonth(plan.month);
+  if (plan.lines.length === 0) {
+    return `Nothing planned for ${month} yet.`;
+  }
+  const where =
+    plan.dayOfMonth === 0
+      ? `${month} has not started.`
+      : budgetDaysLeft(plan) === 0
+        ? `${month} is done.`
+        : `${plan.dayOfMonth} of ${plan.daysInMonth} days into ${month}.`;
+  const over = plan.lines.filter((line) => line.status === "over").length;
+  const standing =
+    over === 0 ? "Nothing is over." : over === 1 ? "1 budget is over." : `${over} budgets are over.`;
+  return `${where} ${standing} On this pace it ends near ${formatINRWhole(plan.totals.projectedPaise)}.`;
+}
+
+/** The note under each of the four tiles, worked out from the plan rather than written in. */
+export function budgetTileNotes(plan: BudgetPlan) {
+  const daysLeft = budgetDaysLeft(plan);
+  const ofPlan =
+    plan.totals.amountPaise > 0
+      ? Math.round((plan.totals.actualPaise / plan.totals.amountPaise) * 100)
+      : 0;
+  return {
+    budgeted: plan.lines.length === 1 ? "1 category" : `${plan.lines.length} categories`,
+    spent:
+      plan.totals.amountPaise > 0
+        ? `${ofPlan}% of the plan, ${plan.elapsedPercent}% of the month`
+        : `${plan.elapsedPercent}% of the month`,
+    left: daysLeft === 0 ? "the month is done" : daysLeft === 1 ? "for 1 day" : `for ${daysLeft} days`,
+    perDay:
+      plan.totals.remainingPaise <= 0
+        ? "already past the plan"
+        : daysLeft === 0
+          ? "the month is done"
+          : "to land on plan"
+  };
+}
+
+/**
+ * The word on the pill. The application keeps four statuses and the reference's pill has three
+ * colours, so the two middle ones share a word -- the longer label stays as the title, for
+ * anyone who wants to know which of the two it is.
+ */
+export function budgetPillWord(status: BudgetLine["status"]): string {
+  return status === "over" ? "Over" : status === "safe" ? "On track" : "Close";
+}
+
+/**
+ * The name on a card's face: the SubType alone.
+ *
+ * A line's full name is "Expense / Groceries", and at a quarter of the page width the Type in
+ * front of it wraps every card onto two lines for a word that is "Expense" on all of them. The
+ * full name stays on the card's own label and on the dialog that edits it.
+ */
+export function budgetCardName(line: BudgetLine): string {
+  if (line.scopeType !== "subcategory") {
+    return line.name;
+  }
+  const cut = line.name.lastIndexOf(" / ");
+  return cut === -1 ? line.name : line.name.slice(cut + 3);
+}
+
+/** What one line leaves to spend a day, or the plain fact that it leaves nothing. */
+export function budgetCardRate(line: BudgetLine, daysLeft: number): string {
+  if (line.remainingPaise <= 0) {
+    return "Nothing left this month";
+  }
+  if (daysLeft <= 0) {
+    return "The month is done";
+  }
+  /* Whole rupees. A rate is an answer to "roughly how much a day", and ₹1,947.37 answers a
+     question nobody asked. */
+  return `${formatINRWhole(Math.round(line.remainingPaise / daysLeft))} a day`;
+}
+
 export function BudgetPlanBody({
   plan,
   saving,
@@ -4595,8 +4724,7 @@ export function BudgetPlanBody({
   onAddingChange,
   onAdd,
   onCopyPreviousMonth,
-  onStartEdit,
-  onDelete
+  onStartEdit
 }: {
   plan: BudgetPlan;
   saving: boolean;
@@ -4611,87 +4739,120 @@ export function BudgetPlanBody({
   onAdd: (event: FormEvent) => void;
   onCopyPreviousMonth: () => void;
   onStartEdit: (line: BudgetLine) => void;
-  onDelete: (line: BudgetLine) => void;
 }) {
+  const notes = budgetTileNotes(plan);
+  const daysLeft = budgetDaysLeft(plan);
   return (
     <>
-      <p className="helper-text budget-range">
-        {formatShortDate(plan.start)} to {formatShortDate(plan.end)} · Day {plan.dayOfMonth} of {plan.daysInMonth}
-      </p>
-      <div className="summary-grid report-summary">
-        <SummaryCard label="Budgeted" value={formatINRWhole(plan.totals.amountPaise)} countPaise={plan.totals.amountPaise} icon={<PiggyBank />} />
-        <SummaryCard label="Used" value={formatINRWhole(plan.totals.actualPaise)} countPaise={plan.totals.actualPaise} icon={<BarChart3 />} tone={budgetSummaryTone(plan)} />
+      <div className="summary-grid budget-tiles">
         <SummaryCard
-          label="Remaining"
-          value={formatINRWhole(plan.totals.remainingPaise)} countPaise={plan.totals.remainingPaise}
+          label="Budgeted"
+          value={formatINRWhole(plan.totals.amountPaise)}
+          countPaise={plan.totals.amountPaise}
+          icon={<PiggyBank />}
+          note={<small>{notes.budgeted}</small>}
+        />
+        <SummaryCard
+          label="Spent"
+          value={formatINRWhole(plan.totals.actualPaise)}
+          countPaise={plan.totals.actualPaise}
+          icon={<BarChart3 />}
+          tone={budgetSummaryTone(plan)}
+          note={<small>{notes.spent}</small>}
+        />
+        <SummaryCard
+          label="Left"
+          value={formatINRWhole(plan.totals.remainingPaise)}
+          countPaise={plan.totals.remainingPaise}
           icon={<WalletCards />}
           tone={plan.totals.remainingPaise < 0 ? "warning" : "good"}
+          note={<small>{notes.left}</small>}
         />
-        <SummaryCard label="Projected" value={formatINRWhole(plan.totals.projectedPaise)} countPaise={plan.totals.projectedPaise} icon={<TrendingUp />} tone={plan.totals.projectedPaise > plan.totals.amountPaise ? "warning" : "neutral"} />
+        <SummaryCard
+          label="Per day"
+          value={formatINRWhole(budgetPerDayPaise(plan))}
+          countPaise={budgetPerDayPaise(plan)}
+          icon={<TrendingUp />}
+          note={<small>{notes.perDay}</small>}
+        />
       </div>
 
       <CopyLastMonthRow previousPlan={plan.previousPlan} busy={saving} onCopy={onCopyPreviousMonth} />
 
-      {plan.lines.length === 0 ? (
-        <EmptyState
-          text={
-            plan.previousPlan.lineCount > 0
-              ? "No budget lines for this month yet. Take last month's plan above, or add a line below."
-              : "No budget lines for this month yet. Add one below."
-          }
-        />
-      ) : (
-        <div className="budget-line-list">
-          {plan.lines.map((line) => (
-            <BudgetLineCard
-              key={line.id}
-              line={line}
-              onStartEdit={() => onStartEdit(line)}
-              onDelete={() => onDelete(line)}
-            />
-          ))}
-        </div>
-      )}
+      {/* The budgets, and the way to start another one, in one grid -- the reference puts its
+          dashed card after the last budget rather than in a section of its own. */}
+      <div className="budget-grid">
+        {plan.lines.map((line) => (
+          <BudgetLineCard
+            key={line.id}
+            line={line}
+            elapsedPercent={plan.elapsedPercent}
+            daysLeft={daysLeft}
+            onStartEdit={() => onStartEdit(line)}
+          />
+        ))}
+        <button type="button" className="budget-add-card" onClick={() => onAddingChange(true)}>
+          <Plus size={20} />
+          <strong>Add a budget</strong>
+          <span>Groceries, rent, anything</span>
+        </button>
+      </div>
 
-      <CollapsibleForm title="Add budget line" variant="inset" open={adding} onToggle={onAddingChange}>
-        <form className="budget-add-form" onSubmit={onAdd}>
-          <label>
-            SubType
-            <select value={subKey} onChange={(event) => onSubKeyChange(event.target.value)} disabled={!subScopes.length}>
-              {subScopes.length === 0 && <option value="">No SubTypes available</option>}
-              {subScopes.map((scope) => (
-                <option key={budgetScopeKey(scope)} value={budgetScopeKey(scope)}>
-                  {budgetSubLabel(scope)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Amount
-            <input
-              inputMode="decimal"
-              value={amount}
-              onChange={(event) => onAmountChange(event.target.value)}
-              placeholder="25000"
-            />
-          </label>
-          <button className="primary-action" type="submit" disabled={saving || !subScopes.length}>
-            <Plus size={17} />
-            Add
-          </button>
-          {/* Its own row: inside a field this note made that column taller and the row went ragged. */}
-          {selectedScope && (
-            <div className="budget-add-note">
+      {adding && (
+        <FormDialog title="New budget" onClose={() => onAddingChange(false)}>
+          {/* stack-form alone: budget-add-form is the three-column row this used to be laid out
+              as inline, and inside a dialog it put the fields shoulder to shoulder. */}
+          <form className="stack-form" onSubmit={onAdd}>
+            <label>
+              SubType
+              <select
+                autoFocus
+                value={subKey}
+                onChange={(event) => onSubKeyChange(event.target.value)}
+                disabled={!subScopes.length}
+              >
+                {subScopes.length === 0 && <option value="">No SubTypes available</option>}
+                {subScopes.map((scope) => (
+                  <option key={budgetScopeKey(scope)} value={budgetScopeKey(scope)}>
+                    {budgetSubLabel(scope)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Amount for {formatMonth(plan.month)}
+              <input
+                inputMode="decimal"
+                value={amount}
+                onChange={(event) => onAmountChange(event.target.value)}
+                placeholder="25000"
+              />
+            </label>
+            {selectedScope && (
               <PreviousMonthHints
                 month={plan.previousMonth}
                 budgetPaise={selectedScope.previousBudgetPaise}
                 actualPaise={selectedScope.previousActualPaise}
                 onUse={(paise) => onAmountChange(budgetAmountInput(paise))}
               />
+            )}
+            <div className="loan-form-actions">
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => onAddingChange(false)}
+                disabled={saving}
+              >
+                Cancel
+              </button>
+              <button className="primary-action" type="submit" disabled={saving || !subScopes.length}>
+                <Plus size={17} />
+                Add budget
+              </button>
             </div>
-          )}
-        </form>
-      </CollapsibleForm>
+          </form>
+        </FormDialog>
+      )}
     </>
   );
 }
@@ -4848,198 +5009,237 @@ function BudgetPlannerPage({
 
   return (
     <div className="page-grid budget-page">
-      <Panel
-        title="Monthly Budget"
-        action={
-          <div className="budget-month-picker">
-            <label className="control-field budget-month-control">
-              <span className="control-label">Month</span>
-              <select
-                value={splitMonth(month).month}
-                onChange={(event) => setMonth(monthValue(splitMonth(month).year, Number(event.target.value)))}
-              >
-                {MONTH_CHOICES.map((choice) => (
-                  <option key={choice.value} value={choice.value}>
-                    {choice.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="control-field budget-year-control">
-              <span className="control-label">Year</span>
-              <select
-                value={splitMonth(month).year}
-                onChange={(event) => setMonth(monthValue(Number(event.target.value), splitMonth(month).month))}
-              >
-                {yearChoices(splitMonth(month).year).map((year) => (
-                  <option key={year} value={year}>
-                    {year}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        }
-      >
-        {error ? (
-          <div className="stacked-empty-state">
-            <EmptyState text={error} />
-            <button type="button" className="secondary-action" onClick={() => setRetryKey((key) => key + 1)}>
-              <RotateCcw size={17} />
-              Retry
+      <PageHeader
+        title="Budget Planner"
+        summary={plan ? budgetSummaryLine(plan) : undefined}
+        actions={
+          <>
+            <div className="budget-month-picker">
+              <label className="control-field budget-month-control">
+                <span className="control-label">Month</span>
+                <select
+                  value={splitMonth(month).month}
+                  onChange={(event) => setMonth(monthValue(splitMonth(month).year, Number(event.target.value)))}
+                >
+                  {MONTH_CHOICES.map((choice) => (
+                    <option key={choice.value} value={choice.value}>
+                      {choice.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="control-field budget-year-control">
+                <span className="control-label">Year</span>
+                <select
+                  value={splitMonth(month).year}
+                  onChange={(event) => setMonth(monthValue(Number(event.target.value), splitMonth(month).month))}
+                >
+                  {yearChoices(splitMonth(month).year).map((year) => (
+                    <option key={year} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <button
+              type="button"
+              className="primary-action"
+              onClick={() => setAdding(true)}
+              disabled={!plan || !subScopes.length}
+            >
+              <Plus size={17} />
+              New budget
             </button>
-          </div>
-        ) : !plan ? (
-          <PanelLoader label="Loading budget" />
-        ) : (
-          <BudgetPlanBody
-            plan={plan}
-            saving={saving}
-            subScopes={subScopes}
-            subKey={subKey}
-            selectedScope={selectedScope}
-            amount={amount}
-            adding={adding}
-            onSubKeyChange={setSubKey}
-            onAmountChange={setAmount}
-            onAddingChange={setAdding}
-            onAdd={addBudget}
-            onCopyPreviousMonth={() => void copyPreviousMonth()}
-            onStartEdit={(line) => {
-              setEditingId(line.id);
-              setEditAmount(budgetAmountInput(line.amountPaise));
-            }}
-            onDelete={remove}
-          />
-        )}
-      </Panel>
+          </>
+        }
+      />
+
+      {error ? (
+        <div className="stacked-empty-state">
+          <EmptyState text={error} />
+          <button type="button" className="secondary-action" onClick={() => setRetryKey((key) => key + 1)}>
+            <RotateCcw size={17} />
+            Retry
+          </button>
+        </div>
+      ) : !plan ? (
+        <PanelLoader label="Loading budget" />
+      ) : (
+        <BudgetPlanBody
+          plan={plan}
+          saving={saving}
+          subScopes={subScopes}
+          subKey={subKey}
+          selectedScope={selectedScope}
+          amount={amount}
+          adding={adding}
+          onSubKeyChange={setSubKey}
+          onAmountChange={setAmount}
+          onAddingChange={setAdding}
+          onAdd={addBudget}
+          onCopyPreviousMonth={() => void copyPreviousMonth()}
+          onStartEdit={(line) => {
+            setEditingId(line.id);
+            setEditAmount(budgetAmountInput(line.amountPaise));
+          }}
+        />
+      )}
 
       {editingLine && (
-        <FormDialog title={`Edit ${editingLine.name} budget`} onClose={cancelEdit}>
-          <form
-            className="stack-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void saveEdit(editingLine);
-            }}
-          >
-            <label>
-              Budget for {formatMonth(editingLine.month)}
-              <input
-                autoFocus
-                aria-label={`Budget amount for ${editingLine.name}`}
-                inputMode="decimal"
-                value={editAmount}
-                onChange={(event) => setEditAmount(event.target.value)}
-              />
-            </label>
-            <PreviousMonthHints
-              month={previousMonthOf(editingLine.month)}
-              budgetPaise={editingLine.previousBudgetPaise}
-              actualPaise={editingLine.previousActualPaise}
-              onUse={(paise) => setEditAmount(budgetAmountInput(paise))}
-            />
-            <div className="loan-form-actions">
-              <button type="button" className="secondary-action" onClick={cancelEdit} disabled={saving}>
-                Cancel
-              </button>
-              <button type="submit" className="primary-action" disabled={saving}>
-                <Check size={16} />
-                {saving ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </form>
-        </FormDialog>
+        <BudgetEditDialog
+          line={editingLine}
+          amount={editAmount}
+          saving={saving}
+          onAmountChange={setEditAmount}
+          onSave={() => void saveEdit(editingLine)}
+          /* The editor closes before the question is asked. Stacked on top of the dialog the
+             confirmation could be seen but not pressed -- its button took a mousedown, the
+             dialog's focus trap pulled focus back, and no click ever landed. Driving it is what
+             found that; one modal at a time is the fix and the better thing besides. */
+          onDelete={() => {
+            const target = editingLine;
+            cancelEdit();
+            remove(target);
+          }}
+          onClose={cancelEdit}
+        />
       )}
     </div>
   );
 }
 
-
-function BudgetLineCard({
+/**
+ * One budget, as the reference draws it: everything on the face, nothing behind a disclosure.
+ *
+ * The bar carries two things -- how much of the budget has gone, and how much of the month has.
+ * A fill short of the marker is a line running under; a fill past it is one running ahead.
+ */
+export function BudgetLineCard({
   line,
-  onStartEdit,
-  onDelete
+  elapsedPercent,
+  daysLeft,
+  onStartEdit
 }: {
   line: BudgetLine;
+  elapsedPercent: number;
+  daysLeft: number;
   onStartEdit: () => void;
-  onDelete: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const progress = Math.min(line.usedPercent, 100);
+  const filled = Math.min(Math.max(line.usedPercent, 0), 100);
+  const over = line.remainingPaise < 0;
   return (
-    <article className={`budget-line-card ${line.status}`}>
-      <div className="budget-line-header">
-        <div className="loan-title">
-          <span className="loan-icon" style={{ background: `${line.color}18`, color: line.color }}>
-            <IconGlyph name={line.icon} size={20} />
-          </span>
-          <div>
-            <strong>{line.name}</strong>
-            <span>{line.scopeType === "type" ? "Type budget" : "SubType budget"}</span>
-          </div>
+    <article className={`budget-card ${line.status}`}>
+      <div className="budget-card-head">
+        <span className="budget-card-icon" style={{ background: `${line.color}22`, color: line.color }}>
+          <IconGlyph name={line.icon} size={19} />
+        </span>
+        <div className="budget-card-name">
+          <strong title={line.name}>{budgetCardName(line)}</strong>
+          <span>{formatINR(line.amountPaise)} a month</span>
         </div>
-        <div className="loan-header-actions">
-          <span className={`budget-status ${line.status}`}>{line.statusLabel}</span>
-          <button
-            type="button"
-            className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
-            aria-label={expanded ? `Collapse ${line.name}` : `Expand ${line.name}`}
-            aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            <ChevronDown size={18} />
-          </button>
-        </div>
+        <span className={`status-pill ${line.status}`} title={line.statusLabel}>
+          <i aria-hidden="true" />
+          {budgetPillWord(line.status)}
+        </span>
       </div>
 
-      <p className="budget-last-month">
-        {line.previousActualPaise > 0 ? (
-          <>
-            Last month: <strong>{formatINR(line.previousActualPaise)}</strong>
-            {line.amountPaise > 0 && (
-              <span className={gainToneClass(line.previousActualPaise - line.amountPaise)}>
-                {line.amountPaise > line.previousActualPaise
-                  ? ` (planning ${formatINR(line.amountPaise - line.previousActualPaise)} more)`
-                  : line.amountPaise < line.previousActualPaise
-                    ? ` (planning ${formatINR(line.previousActualPaise - line.amountPaise)} less)`
-                    : " (same as planned)"}
-              </span>
-            )}
-          </>
-        ) : (
-          <>Nothing spent here last month</>
-        )}
+      <p className="budget-card-figure">
+        <strong>{formatINRWhole(Math.abs(line.remainingPaise))}</strong>
+        <span>{over ? "over" : "left"}</span>
       </p>
 
-      <div className="budget-progress">
-        <div>
-          <span>{line.usedPercent}% used</span>
-          <strong>{formatINR(line.actualPaise)} / {formatINR(line.amountPaise)}</strong>
-        </div>
-        <div className="budget-progress-bar" aria-label={`${line.name} budget usage`}>
-          <span className={line.status} style={{ width: `${progress}%` }} />
-        </div>
+      <div
+        className="budget-bar"
+        role="img"
+        aria-label={`${line.name}: ${formatINR(line.actualPaise)} of ${formatINR(line.amountPaise)} spent, ${elapsedPercent}% of the month gone`}
+      >
+        <span className={`budget-bar-fill ${line.status}`} style={{ width: `${filled}%` }} />
+        {/* Where the month has got to. A month that has not started has nothing to mark. */}
+        {elapsedPercent > 0 && (
+          <span className="budget-bar-marker" style={{ left: `${Math.min(elapsedPercent, 100)}%` }} />
+        )}
       </div>
 
-      {expanded && <>
-      <div className="budget-line-metrics">
-        <Metric label="Remaining" value={formatINR(line.remainingPaise)} warning={line.remainingPaise < 0} />
-        <Metric label="Projection" value={formatINR(line.projectedPaise)} warning={line.projectedPaise > line.amountPaise} />
+      <div className="budget-card-foot">
+        <span>{formatINR(line.actualPaise)} spent</span>
+        <span>{budgetCardRate(line, daysLeft)}</span>
       </div>
 
-      <div className="budget-line-actions">
-        <button type="button" className="secondary-action" onClick={onStartEdit}>
-          <Pencil size={16} />
-          Edit
-        </button>
-        <button type="button" className="secondary-action danger-action" onClick={onDelete}>
-          <Trash2 size={16} />
-          Remove
-        </button>
-      </div>
-      </>}
+      <button type="button" className="budget-card-edit" onClick={onStartEdit}>
+        <Pencil size={15} />
+        Edit
+      </button>
     </article>
+  );
+}
+
+/**
+ * Editing one budget, and the only place it can be removed from.
+ *
+ * Remove used to sit on the card beside Edit. The reference's card carries one action, so it
+ * moved in here -- where the amount it would throw away is on screen, which is a better place to
+ * ask the question from than a row of cards.
+ */
+export function BudgetEditDialog({
+  line,
+  amount,
+  saving,
+  onAmountChange,
+  onSave,
+  onDelete,
+  onClose
+}: {
+  line: BudgetLine;
+  amount: string;
+  saving: boolean;
+  onAmountChange: (value: string) => void;
+  onSave: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <FormDialog title={`Edit ${line.name} budget`} onClose={onClose}>
+      <form
+        className="stack-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave();
+        }}
+      >
+        <label>
+          Budget for {formatMonth(line.month)}
+          <input
+            autoFocus
+            aria-label={`Budget amount for ${line.name}`}
+            inputMode="decimal"
+            value={amount}
+            onChange={(event) => onAmountChange(event.target.value)}
+          />
+        </label>
+        <PreviousMonthHints
+          month={previousMonthOf(line.month)}
+          budgetPaise={line.previousBudgetPaise}
+          actualPaise={line.previousActualPaise}
+          onUse={(paise) => onAmountChange(budgetAmountInput(paise))}
+        />
+        <div className="budget-dialog-actions">
+          <button type="button" className="secondary-action danger-action" onClick={onDelete} disabled={saving}>
+            <Trash2 size={16} />
+            Remove
+          </button>
+          <div className="budget-dialog-close">
+            <button type="button" className="secondary-action" onClick={onClose} disabled={saving}>
+              Cancel
+            </button>
+            <button type="submit" className="primary-action" disabled={saving}>
+              <Check size={16} />
+              {saving ? "Saving..." : "Save"}
+            </button>
+          </div>
+        </div>
+      </form>
+    </FormDialog>
   );
 }
 

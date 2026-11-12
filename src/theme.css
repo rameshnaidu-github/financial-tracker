@@ -10,24 +10,29 @@
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
 
-  --bg: #f3f4f7;
-  --bg-deep: #e9ebf0;
+  --bg: #f1f4f1;
+  --bg-deep: #e7ebe7;
   --panel: #ffffff;
-  --panel-soft: #f7f8fa;
-  --text: #121826;
-  --muted: #5f6878;
-  --line: #e3e6ec;
-  --line-strong: #cdd2db;
-  --accent: #3a55b4;
-  --accent-strong: #2c4494;
-  --accent-soft: #eaeefa;
-  --accent-blue: #3a55b4;
-  --good: #18774e;
-  --good-soft: #e6f4ec;
-  --danger: #c2413a;
+  --panel-soft: #f5f8f5;
+  --text: #11211a;
+  --muted: #5c6b61;
+  --line: #e1e8e2;
+  --line-strong: #c9d4cc;
+  --accent: #10794e;
+  --accent-strong: #0b5c3b;
+  --accent-soft: #e4f3ea;
+  --accent-blue: #10794e;
+  /* What sits on a filled accent. Measured: the reference's light theme puts white on its deep
+     green, and near-black on the mint it uses in the dark. */
+  --on-accent: #ffffff;
+  --good: #10794e;
+  --good-soft: #e4f3ea;
+  --danger: #b03a26;
   --danger-soft: #fbeceb;
   --warning: #8a5a12;
   --warning-soft: #fbf3e4;
+  /* The track a progress bar runs in, named because three different bars drew their own. */
+  --track: #e1e8e2;
 
   /* Shadows carry the ink hue instead of flat black, from one light source above. */
   --shadow-soft: 0 1px 2px rgba(18, 24, 38, 0.04), 0 8px 24px -14px rgba(34, 48, 92, 0.18);
@@ -63,31 +68,37 @@
 }
 
 :root[data-theme="dark"] {
-  --bg: #0b0e14;
-  --bg-deep: #080a0f;
-  --panel: #131823;
-  --panel-soft: #0f131c;
-  --text: #e8ecf4;
-  --muted: #98a2b4;
-  --line: #222938;
-  --line-strong: #323b4d;
-  --accent: #8fa3ea;
-  --accent-strong: #b4c2f3;
-  --accent-soft: #1b2341;
-  --accent-blue: #8fa3ea;
-  --good: #4cc38a;
-  --good-soft: #10271d;
-  --danger: #f0837b;
-  --danger-soft: #2c1513;
-  --warning: #e3b25a;
-  --warning-soft: #2a2011;
+  /* Sampled from the reference's own frames over rectangles, not points: its chrome is
+     translucent over a photograph, so a single pixel lands wherever that photo is bright. The
+     accent is #7de2af across 1481 samples of a primary button, and the same colour carries its
+     active navigation pill. "Close" is #f5d082 over 785. */
+  --bg: #0e1a12;
+  --bg-deep: #0a140e;
+  --panel: #142116;
+  --panel-soft: #1a2a1d;
+  --text: #e4ece5;
+  --muted: #93a797;
+  --line: #263a2b;
+  --line-strong: #35503c;
+  --accent: #7de2af;
+  --accent-strong: #9aecc2;
+  --accent-soft: #15301f;
+  --accent-blue: #7de2af;
+  --on-accent: #06150d;
+  --good: #7de2af;
+  --good-soft: #15301f;
+  --danger: #f8b49f;
+  --danger-soft: #30201c;
+  --warning: #f5d082;
+  --warning-soft: #2e2817;
+  --track: #3a4840;
 
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 26px -16px rgba(0, 0, 0, 0.6);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 26px 52px -26px rgba(0, 0, 0, 0.75);
-  --bezel-shell: rgba(255, 255, 255, 0.035);
-  --bezel-ring: rgba(255, 255, 255, 0.07);
-  --bezel-core-ring: rgba(255, 255, 255, 0.05);
-  --bezel-highlight: rgba(255, 255, 255, 0.06);
+  --bezel-shell: rgba(223, 255, 237, 0.035);
+  --bezel-ring: rgba(223, 255, 237, 0.07);
+  --bezel-core-ring: rgba(223, 255, 237, 0.05);
+  --bezel-highlight: rgba(223, 255, 237, 0.06);
 
   color: var(--text);
   background: var(--bg);
@@ -2085,15 +2096,15 @@ button.donut-legend-item:hover {
  * the washes are faint enough that text keeps AA contrast even where all three overlap.
  */
 :root {
-  --wash-1: rgba(58, 85, 180, 0.06);
-  --wash-2: rgba(24, 119, 78, 0.035);
-  --wash-3: rgba(99, 124, 214, 0.045);
+  --wash-1: rgba(16, 121, 78, 0.06);
+  --wash-2: rgba(16, 121, 78, 0.035);
+  --wash-3: rgba(52, 140, 102, 0.045);
 }
 
 :root[data-theme="dark"] {
-  --wash-1: rgba(143, 163, 234, 0.1);
-  --wash-2: rgba(76, 195, 138, 0.05);
-  --wash-3: rgba(143, 163, 234, 0.06);
+  --wash-1: rgba(125, 226, 175, 0.09);
+  --wash-2: rgba(125, 226, 175, 0.05);
+  --wash-3: rgba(125, 226, 175, 0.05);
 }
 
 body,
@@ -2984,89 +2995,38 @@ button.budget-hint-chip:focus-visible {
 }
 
 /* ==========================================================================
-   Simple mode's skin
+   The shell the reference draws
    --------------------------------------------------------------------------
-   Direction taken from a reference the owner supplied as a screen recording:
-   a near-black green ground, panels a shade above it, one soft mint accent
-   carrying the active navigation item as a filled pill with dark text, status
-   in mint/amber/rose, and page content that fades up out of a blur, staggered.
-
-   The mint is #5fd99b, within a point or two of the #6fdea7 and #73dfaa read
-   off the reference's own active pill. Dark mode takes the green ground too;
-   light mode keeps its own surfaces and takes a darker mint, because the one
-   above is 1.4:1 on white and would be a label nobody could read.
-
-   Every pair below is measured, not judged by eye.
+   Taken from 109 frames the owner supplied. These were written under a
+   [data-skin="simple"] attribute while the look was behind a switch; the owner
+   asked for the whole application to wear it, so the attribute is gone and
+   these are simply how the application looks.
    ========================================================================== */
-:root[data-skin="simple"] {
-  --accent: #107a52;
-  --accent-strong: #0b5c3d;
-  --accent-soft: #e2f6ed;
-  --accent-blue: #107a52;
-  /* What goes on top of a filled accent. Light mode fills with the dark mint. */
-  --on-accent: #ffffff;
-  --good: #107a52;
-  --good-soft: #e2f6ed;
-  --warning: #7a5212;
-  --warning-soft: #fbf1df;
-  --danger: #a93226;
-  --danger-soft: #fbeceb;
-}
 
-:root[data-skin="simple"][data-theme="dark"] {
-  /* The ground, sampled: #162016, #1c261c and #192319 were the three commonest
-     colours across a settled frame. */
-  --bg: #111a13;
-  --bg-deep: #0b120e;
-  --panel: #18211a;
-  --panel-soft: #1d271f;
-  --text: #dce2dd;
-  --muted: #8ea396;
-  --line: #26322a;
-  --line-strong: #35463a;
-
-  --accent: #5fd99b;
-  --accent-strong: #7ae5ad;
-  --accent-soft: #1b2f24;
-  --accent-blue: #5fd99b;
-  /* Dark text on the mint, the way the reference sets its pill. */
-  --on-accent: #0b1410;
-  --good: #5fd99b;
-  --good-soft: #1b2f24;
-  --warning: #f4cc84;
-  --warning-soft: #2e2719;
-  --danger: #f08a7a;
-  --danger-soft: #30201d;
-
-  --bezel-shell: rgba(223, 255, 237, 0.04);
-  --bezel-ring: rgba(223, 255, 237, 0.08);
-  --bezel-core-ring: rgba(223, 255, 237, 0.07);
-}
-
-/* The active destination is a filled pill, in both navigations, the way the
-   reference carries it. `--on-accent` is what makes it legible either side of
-   the theme: white on the dark mint, near-black on the light one. */
-:root[data-skin="simple"] .nav-item.active,
-:root[data-skin="simple"] .mobile-nav button.active {
+/* The active destination is a filled pill. --on-accent is what makes it legible
+   either side of the theme: white on the light theme's deep green, near-black
+   on the dark theme's mint. */
+.nav-item.active,
+.mobile-nav button.active {
   background-color: var(--accent);
   color: var(--on-accent);
 }
 
-:root[data-skin="simple"] .nav-item.active svg,
-:root[data-skin="simple"] .mobile-nav button.active svg {
+.nav-item.active svg,
+.mobile-nav button.active svg {
   color: var(--on-accent);
 }
 
-:root[data-skin="simple"] .nav-item.active {
+.nav-item.active {
   box-shadow: 0 6px 18px -10px color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
 /* Content arrives out of a blur rather than only out of a slide. The stagger is
-   already 60ms a step; this keeps it and adds the focus pull.
+   the application's own 60ms a step; this adds the focus pull.
 
    `filter` makes an element the containing block for anything fixed inside it,
-   exactly as `transform` does -- which is why overlays in this application are
-   portalled to the body. Keep them there. */
+   exactly as `transform` does -- which is why overlays here are portalled to
+   the body. Keep them there. */
 @keyframes rise-in-focus {
   from {
     opacity: 0;
@@ -3080,105 +3040,374 @@ button.budget-hint-chip:focus-visible {
   }
 }
 
-:root[data-skin="simple"] .content-area > *,
-:root[data-skin="simple"] .content-area > .page-grid > *,
-:root[data-skin="simple"] .content-area > .two-column > *,
-:root[data-skin="simple"] .summary-grid > * {
+.content-area > *,
+.content-area > .page-grid > *,
+.content-area > .two-column > *,
+.summary-grid > * {
   animation-name: rise-in-focus;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root[data-skin="simple"] .content-area > *,
-  :root[data-skin="simple"] .content-area > .page-grid > *,
-  :root[data-skin="simple"] .content-area > .two-column > *,
-  :root[data-skin="simple"] .summary-grid > * {
+  .content-area > *,
+  .content-area > .page-grid > *,
+  .content-area > .two-column > *,
+  .summary-grid > * {
     animation-name: none;
     filter: none;
   }
 }
 
-/* The base dark theme fills several surfaces with a hardcoded blue-black rather than a token --
-   #0f1722 on fields, #111927 on quiet buttons, #101822 on ledger rows, and a translucent
-   rgba(18,24,33) behind panels. Against a green ground each of those reads as a blue patch. They
-   are named here rather than changed where they live, so the ordinary application is untouched.
-
-   Found by walking the running page for any painted background whose blue channel sat more than
-   six points above its green, not by reading the stylesheet and hoping. */
-:root[data-skin="simple"][data-theme="dark"] input,
-:root[data-skin="simple"][data-theme="dark"] select,
-:root[data-skin="simple"][data-theme="dark"] textarea {
-  background-color: var(--bg-deep);
-}
-
-/* A labelled filter field draws its own box and its own chevron, and the control inside it is
-   just the line of text. Giving that control a fill of its own puts a dark pill inside a lighter
-   box: two frames around one value. On the application's old greys the two colours were a couple
-   of points apart and nobody saw it; on the green they are far enough apart to look like a
-   mistake, which it always was. The field keeps the box; the control sits in it. */
-:root[data-skin="simple"] .control-field > input,
-:root[data-skin="simple"] .control-field > select,
-:root[data-skin="simple"] .control-field > textarea,
-:root[data-skin="simple"][data-theme="dark"] .control-field > input,
-:root[data-skin="simple"][data-theme="dark"] .control-field > select,
-:root[data-skin="simple"][data-theme="dark"] .control-field > textarea {
+/* A labelled filter field draws its own box and its own chevron; the control
+   inside it is just the line of text. Two fills would be two frames around one
+   value. */
+/* The dark theme fills every input and select at (0,2,1); this has to out-specify that or the
+   field gets a second box inside it. It used to carry a [data-skin] in front and won by accident. */
+.control-field > input,
+.control-field > select,
+.control-field > textarea,
+:root[data-theme="dark"] .control-field > input,
+:root[data-theme="dark"] .control-field > select,
+:root[data-theme="dark"] .control-field > textarea {
   background-color: transparent;
   border-color: transparent;
 }
 
-:root[data-skin="simple"][data-theme="dark"] .panel-action button,
-:root[data-skin="simple"][data-theme="dark"] .toolbar button,
-:root[data-skin="simple"][data-theme="dark"] .secondary-action,
-:root[data-skin="simple"][data-theme="dark"] .icon-button,
-:root[data-skin="simple"][data-theme="dark"] .category-shortcuts button,
-:root[data-skin="simple"][data-theme="dark"] .inline-editor-header button,
-:root[data-skin="simple"][data-theme="dark"] .control-field {
-  background-color: var(--panel-soft);
-}
-
-:root[data-skin="simple"][data-theme="dark"] .ledger-row,
-:root[data-skin="simple"][data-theme="dark"] .inline-editor,
-:root[data-skin="simple"][data-theme="dark"] .transaction-edit-row,
-:root[data-skin="simple"][data-theme="dark"] .taxonomy-subtype-row,
-:root[data-skin="simple"][data-theme="dark"] .transaction-table .table-row:nth-child(odd) {
-  background-color: var(--panel-soft);
-}
-
-:root[data-skin="simple"][data-theme="dark"] .transaction-table .table-row:nth-child(even) {
-  background-color: color-mix(in srgb, var(--accent) 7%, transparent);
-}
-
-:root[data-skin="simple"][data-theme="dark"] .summary-card,
-:root[data-skin="simple"][data-theme="dark"] .panel,
-:root[data-skin="simple"][data-theme="dark"] .sidebar,
-:root[data-skin="simple"][data-theme="dark"] .mobile-nav {
-  background-color: color-mix(in srgb, var(--panel) 96%, transparent);
-}
-
-/* A field and a button were coming out identical in the skin -- same fill, same 1px line -- so
-   Apply sat in a row of filter fields looking like a fifth one. The edge is what separates them:
-   a control you type into keeps the quiet line, a control you press takes the stronger one. */
-:root[data-skin="simple"][data-theme="dark"] .panel-action button,
-:root[data-skin="simple"][data-theme="dark"] .toolbar button,
-:root[data-skin="simple"][data-theme="dark"] .secondary-action,
-:root[data-skin="simple"][data-theme="dark"] .icon-button,
-:root[data-skin="simple"][data-theme="dark"] .category-shortcuts button,
-:root[data-skin="simple"][data-theme="dark"] .inline-editor-header button {
+/* A field and a button were coming out identical -- same fill, same 1px line.
+   The edge is what separates them: what you type into keeps the quiet line,
+   what you press takes the stronger one. */
+:root[data-theme="dark"] .panel-action button,
+:root[data-theme="dark"] .toolbar button,
+:root[data-theme="dark"] .secondary-action,
+:root[data-theme="dark"] .icon-button,
+:root[data-theme="dark"] .category-shortcuts button,
+:root[data-theme="dark"] .inline-editor-header button {
   border-color: var(--line-strong);
 }
 
-:root[data-skin="simple"][data-theme="dark"] .panel-action button:hover,
-:root[data-skin="simple"][data-theme="dark"] .toolbar button:hover,
-:root[data-skin="simple"][data-theme="dark"] .secondary-action:hover,
-:root[data-skin="simple"][data-theme="dark"] .icon-button:hover {
+:root[data-theme="dark"] .panel-action button:hover,
+:root[data-theme="dark"] .toolbar button:hover,
+:root[data-theme="dark"] .secondary-action:hover,
+:root[data-theme="dark"] .icon-button:hover {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong));
   background-color: var(--accent-soft);
 }
 
-/* The primary action's drop shadow is tinted with the accent. On the ink blue that reads as
-   weight; on a mint this luminous it reads as a halo bleeding into the panel. Kept, quieter. */
-:root[data-skin="simple"] .primary-action,
-:root[data-skin="simple"] .profile-save-button {
+/* The primary action's drop shadow is tinted with the accent; on a mint this
+   luminous it reads as a halo unless it is kept quiet. */
+.primary-action,
+.profile-save-button {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.16),
     0 4px 10px -8px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* ==========================================================================
+   The budget page, as the reference draws it
+   ========================================================================== */
+
+/* A page that names itself: the title, a line on how the month is going, and the actions. */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+}
+
+.page-header-copy {
+  min-width: 0;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: clamp(1.9rem, 1.3rem + 2vw, 2.6rem);
+  font-weight: 620;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+
+.page-header-copy p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+/* The four tiles. A note under each figure, which is what the reference's carry. */
+.summary-grid.budget-tiles {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.budget-tiles .summary-card small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.73rem;
+  line-height: 1.35;
+}
+
+/* The budgets, and the way to start another, in one grid. */
+.budget-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.budget-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  border-radius: var(--radius-card);
+  background-color: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--line), var(--shadow-soft);
+  padding: 16px 16px 14px;
+}
+
+.budget-card-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.budget-card-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 11px;
+}
+
+.budget-card-name {
+  min-width: 0;
+}
+
+.budget-card-name strong {
+  display: block;
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 620;
+  overflow-wrap: anywhere;
+}
+
+.budget-card-name span {
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 0.73rem;
+}
+
+/* Status as a dot and a word, the three the reference uses. */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 9px 3px 7px;
+  font-size: 0.7rem;
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.status-pill i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentcolor;
+}
+
+.status-pill.safe {
+  background-color: var(--good-soft);
+  color: var(--good);
+}
+
+.status-pill.watch,
+.status-pill.critical {
+  background-color: var(--warning-soft);
+  color: var(--warning);
+}
+
+.status-pill.over {
+  background-color: var(--danger-soft);
+  color: var(--danger);
+}
+
+.budget-card-figure {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 2px 0 0;
+}
+
+.budget-card-figure strong {
+  color: var(--text);
+  font-size: 1.65rem;
+  font-weight: 560;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.budget-card-figure span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* Two readings on one bar: how much of the budget has gone, and how much of the month. */
+.budget-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background-color: var(--track);
+  overflow: hidden;
+}
+
+.budget-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background-color: var(--good);
+  transition: width var(--dur-slow) var(--ease-out);
+}
+
+.budget-bar-fill.watch,
+.budget-bar-fill.critical {
+  background-color: var(--warning);
+}
+
+.budget-bar-fill.over {
+  background-color: var(--danger);
+}
+
+.budget-bar-marker {
+  position: absolute;
+  inset-block: -2px;
+  width: 2px;
+  border-radius: 1px;
+  background-color: var(--text);
+  opacity: 0.55;
+  transform: translateX(-1px);
+}
+
+.budget-card-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.budget-card-edit {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 9px;
+  background-color: var(--panel-soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+  padding: 0 11px;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 560;
+  cursor: pointer;
+}
+
+.budget-card-edit:hover {
+  background-color: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* The way to start another, at the end of the grid rather than in a section of its own. */
+.budget-add-card {
+  display: grid;
+  gap: 3px;
+  place-content: center;
+  justify-items: center;
+  min-height: 150px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-card);
+  background-color: transparent;
+  padding: 18px;
+  color: var(--muted);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease-out), background-color var(--dur) var(--ease-out);
+}
+
+.budget-add-card strong {
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 620;
+}
+
+.budget-add-card span {
+  font-size: 0.74rem;
+}
+
+.budget-add-card:hover {
+  border-color: var(--accent);
+  background-color: var(--accent-soft);
+}
+
+.budget-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.budget-dialog-close {
+  display: flex;
+  gap: 10px;
+}
+
+@media (max-width: 1240px) {
+  .summary-grid.budget-tiles,
+  .budget-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .summary-grid.budget-tiles,
+  .budget-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .page-header-actions {
+    width: 100%;
+  }
+
+  .page-header-actions .primary-action {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+}
+
+/* The reference tints each tile by what it means -- green on what is planned and left, amber on
+   what is going. Kept to a wash: the figure is what should carry the eye, not the box. */
+.budget-tiles .summary-card.good {
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--good) 11%, transparent), transparent 62%);
+}
+
+.budget-tiles .summary-card.warning {
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--warning) 12%, transparent), transparent 62%);
+}
+
+.budget-tiles .summary-card:first-child {
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 62%);
 }
