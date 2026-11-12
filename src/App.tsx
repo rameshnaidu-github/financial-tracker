@@ -881,6 +881,16 @@ export default function App() {
 
   const canOpen = useCallback((page: Page) => pageAllowedIn(page, simpleMode), [simpleMode]);
 
+  /* The skin rides on the document rather than on the shell, beside the theme: dialogs and the
+     toast are portalled to the body, and a skin set further in would stop at them. */
+  useEffect(() => {
+    if (simpleMode) {
+      document.documentElement.dataset.skin = "simple";
+    } else {
+      delete document.documentElement.dataset.skin;
+    }
+  }, [simpleMode]);
+
   const saveSimpleMode = useCallback(
     async (next: boolean) => {
       try {
