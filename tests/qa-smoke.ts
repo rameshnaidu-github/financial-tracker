@@ -3202,6 +3202,37 @@ test("a budget line blocked by an overlap is not counted as missing", async () =
   assert(copied.copiedCount === 0 && copied.skippedCount === 1, `The copy should agree with the count, got ${JSON.stringify(copied)}.`);
 });
 
+test("simple mode is stored as the app writes it, and saved on its own", async () => {
+  const before = await services.getSettings();
+  assert(before.simple_mode === undefined || before.simple_mode === "0" || before.simple_mode === "1",
+    "simple_mode should only ever hold what the app writes.");
+
+  await services.updateAppSettings({ cardUtilizationAlertPercent: 55, holdingGrouping: "month" });
+  await services.updateAppSettings({ simpleMode: true });
+  const on = await services.getSettings();
+  assert(on.simple_mode === "1", "Turning simple mode on should store exactly \"1\".");
+  assert(on.card_utilization_alert_percent === "55", "Saving simple mode must not disturb the card alert.");
+  assert(on.holding_grouping === "month", "Saving simple mode must not disturb the holdings grouping.");
+
+  await services.updateAppSettings({ cardUtilizationAlertPercent: 42 });
+  assert((await services.getSettings()).simple_mode === "1", "Saving another setting must not disturb simple mode.");
+
+  await services.updateAppSettings({ simpleMode: false });
+  assert((await services.getSettings()).simple_mode === "0", "Turning it off should store exactly \"0\".");
+});
+
+test("a settings change the app did not write is refused", async () => {
+  const before = (await services.getSettings()).simple_mode;
+  await assertRejects("a simple mode that is not a boolean", async () =>
+    services.updateAppSettings({ simpleMode: "yes" } as never)
+  );
+  await assertRejects("a settings change carrying nothing", async () => services.updateAppSettings({}));
+  assert(
+    (await services.getSettings()).simple_mode === before,
+    "A refused settings change must leave the stored value where it was."
+  );
+});
+
 test("correcting a starting balance shifts the balance by the same amount", async () => {
   const account = await services.createAccount({ name: "QA Reconcile Bank", type: "bank", startingBalancePaise: 10_000_00 });
   await services.createTransaction({

@@ -651,6 +651,8 @@ export const updateSettingsSchema = z
   .object({
     cardUtilizationAlertPercent: z.number().int().min(1).max(100).optional(),
     holdingGrouping: z.enum(HOLDING_GROUPING_IDS).optional(),
+    /** Simple mode: the application cut down to a handful of sections, on every screen. */
+    simpleMode: z.boolean().optional(),
   })
   // Both became optional so either can be saved without the other; without this, an empty object
   // would be accepted and quietly change nothing.

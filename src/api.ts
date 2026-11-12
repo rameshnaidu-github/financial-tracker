@@ -116,7 +116,11 @@ export const Api = {
   profile: () => api<UserProfile>("/api/profile"),
   updateProfile: (body: Partial<UserProfile>) =>
     api<UserProfile>("/api/profile", { method: "PATCH", body }),
-  updateSettings: (body: { cardUtilizationAlertPercent?: number; holdingGrouping?: HoldingGrouping }) =>
+  updateSettings: (body: {
+    cardUtilizationAlertPercent?: number;
+    holdingGrouping?: HoldingGrouping;
+    simpleMode?: boolean;
+  }) =>
     api<Record<string, string>>("/api/settings", { method: "PATCH", body }),
   wealth: () => api<WealthSummary>("/api/wealth"),
   upcoming: (windowDays = 7) =>

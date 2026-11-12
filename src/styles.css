@@ -4349,7 +4349,11 @@ a {
     left: calc(12px + var(--safe-left));
     z-index: 30;
     display: grid;
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    /* One row, however many buttons it is handed. It used to name the count -- eight here, five
+       on a phone -- and simple mode, which hands it six, wrapped the last one onto a second row
+       under the others. Columns that flow take whatever arrives. */
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
     border: 1px solid var(--line);
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.94);
@@ -4899,9 +4903,7 @@ a {
 }
 
 @media (max-width: 1120px) {
-  .mobile-nav {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
+
 
   .main-shell {
     padding-bottom: calc(104px + var(--safe-bottom));

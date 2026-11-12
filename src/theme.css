@@ -2962,3 +2962,179 @@ button.budget-hint-chip:focus-visible {
     text-align: left;
   }
 }
+
+/* ---------- Simple mode: the way to the entry form, when it is not in the navigation ---------- */
+.transactions-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.transactions-title h2 {
+  margin: 0;
+}
+
+.record-action {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding-inline: 14px;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Simple mode's skin
+   --------------------------------------------------------------------------
+   Direction taken from a reference the owner supplied as a screen recording:
+   a near-black green ground, panels a shade above it, one soft mint accent
+   carrying the active navigation item as a filled pill with dark text, status
+   in mint/amber/rose, and page content that fades up out of a blur, staggered.
+
+   The mint is #5fd99b, within a point or two of the #6fdea7 and #73dfaa read
+   off the reference's own active pill. Dark mode takes the green ground too;
+   light mode keeps its own surfaces and takes a darker mint, because the one
+   above is 1.4:1 on white and would be a label nobody could read.
+
+   Every pair below is measured, not judged by eye.
+   ========================================================================== */
+:root[data-skin="simple"] {
+  --accent: #107a52;
+  --accent-strong: #0b5c3d;
+  --accent-soft: #e2f6ed;
+  --accent-blue: #107a52;
+  /* What goes on top of a filled accent. Light mode fills with the dark mint. */
+  --on-accent: #ffffff;
+  --good: #107a52;
+  --good-soft: #e2f6ed;
+  --warning: #7a5212;
+  --warning-soft: #fbf1df;
+  --danger: #a93226;
+  --danger-soft: #fbeceb;
+}
+
+:root[data-skin="simple"][data-theme="dark"] {
+  /* The ground, sampled: #162016, #1c261c and #192319 were the three commonest
+     colours across a settled frame. */
+  --bg: #111a13;
+  --bg-deep: #0b120e;
+  --panel: #18211a;
+  --panel-soft: #1d271f;
+  --text: #dce2dd;
+  --muted: #8ea396;
+  --line: #26322a;
+  --line-strong: #35463a;
+
+  --accent: #5fd99b;
+  --accent-strong: #7ae5ad;
+  --accent-soft: #1b2f24;
+  --accent-blue: #5fd99b;
+  /* Dark text on the mint, the way the reference sets its pill. */
+  --on-accent: #0b1410;
+  --good: #5fd99b;
+  --good-soft: #1b2f24;
+  --warning: #f4cc84;
+  --warning-soft: #2e2719;
+  --danger: #f08a7a;
+  --danger-soft: #30201d;
+
+  --bezel-shell: rgba(223, 255, 237, 0.04);
+  --bezel-ring: rgba(223, 255, 237, 0.08);
+  --bezel-core-ring: rgba(223, 255, 237, 0.07);
+}
+
+/* The active destination is a filled pill, in both navigations, the way the
+   reference carries it. `--on-accent` is what makes it legible either side of
+   the theme: white on the dark mint, near-black on the light one. */
+:root[data-skin="simple"] .nav-item.active,
+:root[data-skin="simple"] .mobile-nav button.active {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+:root[data-skin="simple"] .nav-item.active svg,
+:root[data-skin="simple"] .mobile-nav button.active svg {
+  color: var(--on-accent);
+}
+
+:root[data-skin="simple"] .nav-item.active {
+  box-shadow: 0 6px 18px -10px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+/* Content arrives out of a blur rather than only out of a slide. The stagger is
+   already 60ms a step; this keeps it and adds the focus pull.
+
+   `filter` makes an element the containing block for anything fixed inside it,
+   exactly as `transform` does -- which is why overlays in this application are
+   portalled to the body. Keep them there. */
+@keyframes rise-in-focus {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+    filter: blur(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+:root[data-skin="simple"] .content-area > *,
+:root[data-skin="simple"] .content-area > .page-grid > *,
+:root[data-skin="simple"] .content-area > .two-column > *,
+:root[data-skin="simple"] .summary-grid > * {
+  animation-name: rise-in-focus;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-skin="simple"] .content-area > *,
+  :root[data-skin="simple"] .content-area > .page-grid > *,
+  :root[data-skin="simple"] .content-area > .two-column > *,
+  :root[data-skin="simple"] .summary-grid > * {
+    animation-name: none;
+    filter: none;
+  }
+}
+
+/* The base dark theme fills several surfaces with a hardcoded blue-black rather than a token --
+   #0f1722 on fields, #111927 on quiet buttons, #101822 on ledger rows, and a translucent
+   rgba(18,24,33) behind panels. Against a green ground each of those reads as a blue patch. They
+   are named here rather than changed where they live, so the ordinary application is untouched.
+
+   Found by walking the running page for any painted background whose blue channel sat more than
+   six points above its green, not by reading the stylesheet and hoping. */
+:root[data-skin="simple"][data-theme="dark"] input,
+:root[data-skin="simple"][data-theme="dark"] select,
+:root[data-skin="simple"][data-theme="dark"] textarea {
+  background: var(--bg-deep);
+}
+
+:root[data-skin="simple"][data-theme="dark"] .panel-action button,
+:root[data-skin="simple"][data-theme="dark"] .toolbar button,
+:root[data-skin="simple"][data-theme="dark"] .secondary-action,
+:root[data-skin="simple"][data-theme="dark"] .icon-button,
+:root[data-skin="simple"][data-theme="dark"] .category-shortcuts button,
+:root[data-skin="simple"][data-theme="dark"] .inline-editor-header button,
+:root[data-skin="simple"][data-theme="dark"] .control-field {
+  background: var(--panel-soft);
+}
+
+:root[data-skin="simple"][data-theme="dark"] .ledger-row,
+:root[data-skin="simple"][data-theme="dark"] .inline-editor,
+:root[data-skin="simple"][data-theme="dark"] .transaction-edit-row,
+:root[data-skin="simple"][data-theme="dark"] .taxonomy-subtype-row,
+:root[data-skin="simple"][data-theme="dark"] .transaction-table .table-row:nth-child(odd) {
+  background: var(--panel-soft);
+}
+
+:root[data-skin="simple"][data-theme="dark"] .transaction-table .table-row:nth-child(even) {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+:root[data-skin="simple"][data-theme="dark"] .summary-card,
+:root[data-skin="simple"][data-theme="dark"] .panel,
+:root[data-skin="simple"][data-theme="dark"] .sidebar,
+:root[data-skin="simple"][data-theme="dark"] .mobile-nav {
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+}
