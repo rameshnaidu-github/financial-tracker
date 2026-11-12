@@ -373,7 +373,7 @@ const NAV_GROUPS: NavGroup[] = ["Daily", "Plan", "Own & owe", "Setup"];
 
 /* Pages that draw their own header. The shell prints the page's name in the top bar for every
    other one; these say it in their own body instead, and must not be told twice. */
-const PAGES_WITH_OWN_HEADER: Page[] = ["budgets"];
+const PAGES_WITH_OWN_HEADER: Page[] = ["budgets", "accounts"];
 const THEME_KEY = "finance-theme";
 const INTRO_ON_LAUNCH_KEY = "finance-intro-on-launch";
 
@@ -5262,6 +5262,228 @@ function budgetSummaryTone(plan: BudgetPlan): "neutral" | "warning" | "good" {
   return plan.lines.length > 0 ? "good" : "neutral";
 }
 
+/**
+ * One account, on the budget card's pattern: everything on the face, nothing behind a disclosure.
+ *
+ * The bar belongs to a credit card alone. Its utilisation has a natural nought-to-a-hundred and
+ * the owner's own alert to mark on it, the way a budget's bar marks how far through the month it
+ * is. A bank balance has no such scale, and drawing one would be a picture rather than a reading.
+ */
+export function AccountCard({
+  account,
+  alertPercent,
+  onStartEdit
+}: {
+  account: Account;
+  alertPercent: number;
+  onStartEdit: () => void;
+}) {
+  const isCard = account.type === "credit_card";
+  const standing = accountStanding(account, alertPercent);
+  const limit = account.creditLimitPaise ?? 0;
+  const usage = cardUsagePercent(account);
+  const available = account.availableLimitPaise ?? Math.max(limit - account.outstandingPaise, 0);
+  const minimum = account.minimumBalancePaise ?? 0;
+
+  const headline = isCard ? Math.max(account.outstandingPaise, 0) : account.balancePaise;
+  const headlineWord = isCard ? "owed" : "available";
+  const under = isCard
+    ? limit > 0
+      ? `${formatINR(limit)} limit${account.paymentDueDay ? ` · due on the ${account.paymentDueDay}th` : ""}`
+      : accountTypeLabel(account.type)
+    : accountTypeLabel(account.type);
+
+  return (
+    <article className={`budget-card account-card-v2 ${standing?.tone ?? "plain"}`}>
+      <div className="budget-card-head">
+        <span className={`budget-card-icon account-icon ${accountIconTone(account.type)}`}>
+          {accountIconForType(account.type, 19)}
+        </span>
+        <div className="budget-card-name">
+          <strong title={account.name}>{account.name}</strong>
+          <span>{under}</span>
+        </div>
+        {standing && (
+          <span className={`status-pill ${standing.tone === "over" ? "over" : standing.tone}`} title={standing.detail}>
+            <i aria-hidden="true" />
+            {standing.word}
+          </span>
+        )}
+      </div>
+
+      <p className="budget-card-figure">
+        <strong>{formatINRWhole(headline)}</strong>
+        <span>{headlineWord}</span>
+      </p>
+
+      {isCard && limit > 0 && (
+        <div
+          className="budget-bar"
+          role="img"
+          aria-label={`${account.name}: ${usage}% of its ${formatINR(limit)} limit used, your alert is at ${alertPercent}%`}
+        >
+          <span
+            className={`budget-bar-fill ${standing?.tone === "over" ? "over" : standing?.tone === "watch" ? "watch" : "safe"}`}
+            style={{ width: `${Math.min(usage, 100)}%` }}
+          />
+          {/* Where the owner asked to be warned, not a figure chosen here. */}
+          <span className="budget-bar-marker" style={{ left: `${Math.min(alertPercent, 100)}%` }} />
+        </div>
+      )}
+
+      <div className="budget-card-foot">
+        {isCard ? (
+          <>
+            <span>{limit > 0 ? `${usage}% of ${formatINRWhole(limit)}` : "No limit set"}</span>
+            <span>{limit > 0 ? `${formatINRWhole(available)} left` : "Set one to see utilisation"}</span>
+          </>
+        ) : (
+          <>
+            <span>Opened at {formatINRWhole(account.startingBalancePaise)}</span>
+            <span>{minimum > 0 ? `${formatINRWhole(minimum)} minimum` : "No minimum set"}</span>
+          </>
+        )}
+      </div>
+
+      <button type="button" className="budget-card-edit" onClick={onStartEdit}>
+        <Pencil size={15} />
+        Edit
+      </button>
+    </article>
+  );
+}
+
+/** The accounts that count: archived ones are out of the tracker and out of every figure here. */
+export function liveAccounts(accounts: Account[]): Account[] {
+  return accounts.filter((account) => !account.isArchived);
+}
+
+/**
+ * The four figures the page opens with.
+ *
+ * `cardDebtPaise` takes `max(outstanding, 0)` for each card: a card carrying a credit balance
+ * owes nothing, and counting it as a negative debt would quietly add that credit to what you are
+ * worth. That is the rule fixes-23 established against the real database.
+ */
+export function accountTotals(accounts: Account[]) {
+  const live = liveAccounts(accounts);
+  const cards = live.filter((account) => account.type === "credit_card");
+  const cashPaise = live
+    .filter((account) => account.type === "bank" || account.type === "food_card")
+    .reduce((sum, account) => sum + account.balancePaise, 0);
+  const cardDebtPaise = cards.reduce((sum, account) => sum + Math.max(account.outstandingPaise, 0), 0);
+  const limitPaise = cards.reduce((sum, account) => sum + (account.creditLimitPaise ?? 0), 0);
+  const availableCreditPaise = cards.reduce(
+    (sum, account) => sum + (account.availableLimitPaise ?? Math.max((account.creditLimitPaise ?? 0) - account.outstandingPaise, 0)),
+    0
+  );
+  return {
+    cashPaise,
+    cardDebtPaise,
+    limitPaise,
+    availableCreditPaise,
+    netPaise: cashPaise - cardDebtPaise,
+    cashCount: live.filter((account) => account.type === "bank" || account.type === "food_card").length,
+    cardCount: cards.length
+  };
+}
+
+/** How much of its limit a card is using, as a whole percent. A card with no limit uses none. */
+export function cardUsagePercent(account: Account): number {
+  const limit = account.creditLimitPaise ?? 0;
+  if (limit <= 0) {
+    return 0;
+  }
+  return Math.round((Math.max(account.outstandingPaise, 0) / limit) * 100);
+}
+
+/**
+ * Where an account stands, or null when it stands against nothing.
+ *
+ * A card is measured against the alert the owner set in Profile; a bank against the minimum
+ * balance they set on it. An account with neither has no status, and gets no pill -- a badge
+ * that reads "Healthy" whatever the figures is decoration.
+ */
+export function accountStanding(
+  account: Account,
+  alertPercent: number
+): { tone: "safe" | "watch" | "over"; word: string; detail: string } | null {
+  if (account.type === "credit_card") {
+    const limit = account.creditLimitPaise ?? 0;
+    if (limit <= 0) {
+      return null;
+    }
+    const usage = cardUsagePercent(account);
+    if (usage > alertPercent) {
+      return { tone: "over", word: "Over alert", detail: `${usage}% of the limit, past your ${alertPercent}%` };
+    }
+    if (usage >= alertPercent - 10) {
+      return { tone: "watch", word: "Close", detail: `${usage}% of the limit, near your ${alertPercent}%` };
+    }
+    return { tone: "safe", word: "Healthy", detail: `${usage}% of the limit` };
+  }
+  const minimum = account.minimumBalancePaise ?? 0;
+  if (minimum <= 0) {
+    return null;
+  }
+  if (account.balancePaise < minimum) {
+    return { tone: "over", word: "Below minimum", detail: `under the ${formatINR(minimum)} you set` };
+  }
+  if (account.balancePaise < Math.round(minimum * 1.1)) {
+    return { tone: "watch", word: "Close", detail: `near the ${formatINR(minimum)} you set` };
+  }
+  return { tone: "safe", word: "Healthy", detail: `above the ${formatINR(minimum)} you set` };
+}
+
+/** The note under each of the four tiles, worked out from the accounts rather than written in. */
+export function accountTileNotes(accounts: Account[], alertPercent: number) {
+  const totals = accountTotals(accounts);
+  const usedPercent = totals.limitPaise > 0 ? Math.round((totals.cardDebtPaise / totals.limitPaise) * 100) : 0;
+  const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  return {
+    cash: totals.cashCount === 0 ? "no accounts yet" : `across ${plural(totals.cashCount, "account", "accounts")}`,
+    cardDebt:
+      totals.cardCount === 0
+        ? "no cards yet"
+        : totals.limitPaise > 0
+          ? `${usedPercent}% of your ${formatINRWhole(totals.limitPaise)} limit`
+          : `on ${plural(totals.cardCount, "card", "cards")}, no limit set`,
+    availableCredit:
+      totals.cardCount === 0 ? "no cards yet" : `left of ${formatINRWhole(totals.limitPaise)}`,
+    net: totals.cardDebtPaise === 0 ? "nothing owed on cards" : "cash less what the cards owe"
+  };
+}
+
+/** The line under the title: what is held, what is owed, and anything asking for attention. */
+export function accountSummaryLine(accounts: Account[], alertPercent: number): string {
+  const live = liveAccounts(accounts);
+  if (live.length === 0) {
+    return "No accounts or cards yet. Add one to start tracking.";
+  }
+  const totals = accountTotals(accounts);
+  const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  const held =
+    totals.cardCount === 0
+      ? `${plural(totals.cashCount, "account", "accounts")}.`
+      : totals.cashCount === 0
+        ? `${plural(totals.cardCount, "card", "cards")}.`
+        : `${plural(totals.cashCount, "account", "accounts")} and ${plural(totals.cardCount, "card", "cards")}.`;
+  const money =
+    totals.cardDebtPaise === 0
+      ? `${formatINRWhole(totals.cashPaise)} in cash, nothing owed.`
+      : `${formatINRWhole(totals.cashPaise)} in cash, ${formatINRWhole(totals.cardDebtPaise)} owed.`;
+  const flagged = live.filter((account) => accountStanding(account, alertPercent)?.tone === "over").length;
+  const archived = accounts.length - live.length;
+  const parts = [held, money];
+  if (flagged > 0) {
+    parts.push(flagged === 1 ? "One needs a look." : `${flagged} need a look.`);
+  }
+  if (archived > 0) {
+    parts.push(`${plural(archived, "archived", "archived")}.`);
+  }
+  return parts.join(" ");
+}
+
 function AccountsPage({
   accounts,
   cardAlertPercent,
@@ -5276,11 +5498,15 @@ function AccountsPage({
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
   const [adding, setAdding] = useState(false);
-  const activeAccounts = accounts.filter((account) => !account.isArchived);
+  const [editingId, setEditingId] = useState("");
+  const activeAccounts = liveAccounts(accounts);
+  const editingAccount = activeAccounts.find((account) => account.id === editingId) ?? null;
   const cardSegments = cardUtilisationSegments(activeAccounts);
   const cardOutstandingPaise = cardSegments.reduce((sum, segment) => sum + segment.amountPaise, 0);
+  const notes = accountTileNotes(accounts, cardAlertPercent);
+  const totals = accountTotals(accounts);
 
-  async function remove(account: Account) {
+  function remove(account: Account) {
     requestConfirm({
       message: "Are you sure you want to delete this?",
       detail: `${account.name} will disappear from the app. Existing transaction history is preserved when history is linked to this account.`,
@@ -5299,56 +5525,117 @@ function AccountsPage({
   }
 
   return (
-    <div className="page-grid">
-      <div className="two-column accounts-page">
-      <Panel title="Accounts & cards">
-        {activeAccounts.length === 0 ? (
-          <EmptyState text="No active accounts or cards. Add one to keep tracking." />
-        ) : (
-          <div className="account-stack">
-            {activeAccounts.map((account) => (
-              <AccountManagerLine
-                key={account.id}
-                account={account}
-                alertPercent={cardAlertPercent}
-                onRemove={remove}
-                onSaved={async (message) => {
-                  await refresh();
-                  showNotice(message);
-                }}
-                onError={showNotice}
-              />
-            ))}
-          </div>
-        )}
-        <p className="helper-text">
-          Deleting an unused account removes it permanently. Accounts with linked transactions are hidden so reports keep their history.
-        </p>
-      </Panel>
+    <div className="page-grid accounts-page">
+      <PageHeader
+        title="Accounts"
+        summary={accountSummaryLine(accounts, cardAlertPercent)}
+        actions={
+          <button type="button" className="primary-action" onClick={() => setAdding(true)}>
+            <Plus size={17} />
+            New account
+          </button>
+        }
+      />
 
-
-      <Panel title="Card utilisation">
-        <MixChart
-          segments={cardSegments}
-          totalPaise={cardOutstandingPaise}
-          ariaLabel="Credit card utilisation"
-          centerLabel="Card debt"
-          centerValue={formatINRWhole(cardOutstandingPaise)}
-          className="overview-donut-chart"
-          emptyText="No credit card owes anything right now."
+      <div className="summary-grid budget-tiles">
+        <SummaryCard
+          label="Cash"
+          value={formatINRWhole(totals.cashPaise)}
+          countPaise={totals.cashPaise}
+          icon={<Landmark />}
+          note={<small>{notes.cash}</small>}
         />
-      </Panel>
+        <SummaryCard
+          label="Card debt"
+          value={formatINRWhole(totals.cardDebtPaise)}
+          countPaise={totals.cardDebtPaise}
+          icon={<CreditCard />}
+          tone={totals.cardDebtPaise > 0 ? "warning" : "neutral"}
+          note={<small>{notes.cardDebt}</small>}
+        />
+        <SummaryCard
+          label="Available credit"
+          value={formatINRWhole(totals.availableCreditPaise)}
+          countPaise={totals.availableCreditPaise}
+          icon={<WalletCards />}
+          tone="good"
+          note={<small>{notes.availableCredit}</small>}
+        />
+        <SummaryCard
+          label="Net"
+          value={formatINRWhole(totals.netPaise)}
+          countPaise={totals.netPaise}
+          icon={<TrendingUp />}
+          tone={totals.netPaise < 0 ? "warning" : "neutral"}
+          note={<small>{notes.net}</small>}
+        />
       </div>
 
-      <CollapsibleForm title="Add account" open={adding} onToggle={setAdding}>
-        <AccountForm
-          onCreated={async () => {
-            setAdding(false);
+      <div className="budget-grid">
+        {activeAccounts.map((account) => (
+          <AccountCard
+            key={account.id}
+            account={account}
+            alertPercent={cardAlertPercent}
+            onStartEdit={() => setEditingId(account.id)}
+          />
+        ))}
+        <button type="button" className="budget-add-card" onClick={() => setAdding(true)}>
+          <Plus size={20} />
+          <strong>Add an account</strong>
+          <span>A bank, a card, a food card</span>
+        </button>
+      </div>
+
+      {/* Kept from before: the same card debt cut by card. The budget page has no second panel,
+          but dropping a view the owner already has to tighten a resemblance is the wrong trade. */}
+      {cardOutstandingPaise > 0 && (
+        <Panel title="Card utilisation">
+          <MixChart
+            segments={cardSegments}
+            totalPaise={cardOutstandingPaise}
+            ariaLabel="Credit card utilisation"
+            centerLabel="Card debt"
+            centerValue={formatINRWhole(cardOutstandingPaise)}
+            className="overview-donut-chart"
+            emptyText="No credit card owes anything right now."
+          />
+        </Panel>
+      )}
+
+      {adding && (
+        <FormDialog title="New account" onClose={() => setAdding(false)}>
+          <AccountForm
+            onCreated={async () => {
+              setAdding(false);
+              await refresh();
+              showNotice("Account added.");
+            }}
+          />
+        </FormDialog>
+      )}
+
+      {editingAccount && (
+        <AccountEditDialog
+          account={editingAccount}
+          onClose={() => setEditingId("")}
+          onSaved={async (message) => {
+            setEditingId("");
             await refresh();
-            showNotice("Account added.");
+            showNotice(message);
+          }}
+          onError={showNotice}
+          /* The editor closes before the question is asked. Stacked on the dialog a confirmation
+             can be seen and not pressed -- the dialog's focus trap eats the click, which
+             budgets-29 found by driving it. One modal at a time. */
+          alertPercent={cardAlertPercent}
+          onDelete={() => {
+            const target = editingAccount;
+            setEditingId("");
+            remove(target);
           }}
         />
-      </CollapsibleForm>
+      )}
     </div>
   );
 }
@@ -8938,50 +9225,54 @@ export function ProfilePage({
   );
 }
 
-function AccountManagerLine({
+/**
+ * Editing one account, and the only place it can be deleted from.
+ *
+ * Delete used to sit on the card beside Edit, behind a disclosure. The budget card carries one
+ * action, so it moved in here -- where the name and the figures it would take away are already
+ * on screen, which is a better place to ask the question from than a row of cards.
+ */
+export function AccountEditDialog({
   account,
   alertPercent,
-  onRemove,
+  onClose,
   onSaved,
-  onError
+  onError,
+  onDelete
 }: {
   account: Account;
+  onClose: () => void;
+  onSaved: (message: string) => Promise<void> | void;
+  onError: (message: string) => void;
+  onDelete: () => void;
+  /** Only to show the card's own reading above the fields; nothing here changes it. */
   alertPercent: number;
-  onRemove?: (account: Account) => void;
-  onSaved?: (message: string) => Promise<void>;
-  onError?: (message: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [editing, setEditing] = useState(false);
+  const isCard = account.type === "credit_card";
   const [saving, setSaving] = useState(false);
-  const [draft, setDraft] = useState({ name: "", opening: "", limit: "", dueDay: "" });
-
-  function startEdit() {
-    setDraft({
-      name: account.name,
-      opening: amountInputFromPaise(account.startingBalancePaise),
-      limit: account.creditLimitPaise === null ? "" : amountInputFromPaise(account.creditLimitPaise),
-      dueDay: account.paymentDueDay ? String(account.paymentDueDay) : ""
-    });
-    setEditing(true);
-  }
+  const [draft, setDraft] = useState(() => ({
+    name: account.name,
+    opening: amountInputFromPaise(account.startingBalancePaise),
+    limit: account.creditLimitPaise === null ? "" : amountInputFromPaise(account.creditLimitPaise),
+    dueDay: account.paymentDueDay ? String(account.paymentDueDay) : ""
+  }));
 
   async function save(event: FormEvent) {
     event.preventDefault();
     const openingPaise = parseAmountToPaise(draft.opening || "0");
-    const limitPaise = isCardAccount ? parseAmountToPaise(draft.limit || "0") : undefined;
+    const limitPaise = isCard ? parseAmountToPaise(draft.limit || "0") : undefined;
     if (draft.name.trim().length < 2) {
-      onError?.("Give the account a name of at least 2 characters.");
+      onError("Give the account a name of at least 2 characters.");
       return;
     }
     if (openingPaise < 0 || (limitPaise !== undefined && limitPaise < 0)) {
-      onError?.("Amounts can't be negative.");
+      onError("Amounts can't be negative.");
       return;
     }
     const typedDueDay = draft.dueDay.trim();
     const dueDay = typedDueDay ? Number.parseInt(typedDueDay, 10) : null;
     if (typedDueDay && (!Number.isInteger(dueDay) || dueDay! < 1 || dueDay! > 31)) {
-      onError?.("Payment due day must be a day of the month, 1 to 31.");
+      onError("Payment due day must be a day of the month, 1 to 31.");
       return;
     }
     setSaving(true);
@@ -8992,133 +9283,87 @@ function AccountManagerLine({
         ...(limitPaise !== undefined ? { creditLimitPaise: limitPaise, paymentDueDay: dueDay } : {})
       });
       const shift = openingPaise - account.startingBalancePaise;
-      setEditing(false);
-      await onSaved?.(
+      await onSaved(
         shift === 0
           ? "Account updated."
-          : `Account updated. ${isCardAccount ? "Outstanding" : "Balance"} moved by ${signedImpact(shift)}.`
+          : `Account updated. ${isCard ? "Outstanding" : "Balance"} moved by ${signedImpact(shift)}.`
       );
     } catch (err) {
-      onError?.(err instanceof Error ? err.message : "Could not update the account.");
+      onError(err instanceof Error ? err.message : "Could not update the account.");
     } finally {
       setSaving(false);
     }
   }
 
-  const isCardAccount = account.type === "credit_card";
-  const isCard = account.type === "credit_card";
-  const primaryValue = isCard ? account.outstandingPaise : account.balancePaise;
-  const primaryLabel = isCard ? "Outstanding" : "Balance";
-  // The mirror of the card's utilisation alert: a balance that has fallen under the figure the
-  // person set. Cards are excluded -- their number is what is owed, where small is good -- and a
-  // minimum of zero means the alert is off rather than meaning every account qualifies.
-  const minimumBalancePaise = account.minimumBalancePaise ?? 0;
-  const belowMinimum =
-    !isCard && !account.isArchived && minimumBalancePaise > 0 && account.balancePaise < minimumBalancePaise;
-
   return (
-    <article className={`loan-card account-card ${account.isArchived ? "archived" : ""}`}>
-      <div className="loan-card-header">
-        <div className="loan-title">
-          <span className={`account-icon ${accountIconTone(account.type)}`}>
-            {accountIconForType(account.type, 20)}
-          </span>
-          <div>
-            <strong>{account.name}</strong>
-            <span>{accountTypeLabel(account.type)}</span>
-          </div>
-        </div>
-        <div className="loan-header-actions">
-          <div className="account-card-primary">
-            <strong className={belowMinimum ? "below-minimum" : undefined}>{formatINR(primaryValue)}</strong>
-            <span>{belowMinimum ? `Below ${formatINR(minimumBalancePaise)}` : primaryLabel}</span>
-          </div>
-          <button
-            type="button"
-            className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
-            aria-label={expanded ? `Collapse ${account.name}` : `Expand ${account.name}`}
-            aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            <ChevronDown size={18} />
-          </button>
-        </div>
-      </div>
-
-      {expanded && <>
+    <FormDialog title={`Edit ${account.name}`} onClose={onClose}>
+      <form className="stack-form account-edit-form" onSubmit={save}>
+        {/* A card's own reading: how much of the limit is used, and how much of what is owed is
+            this cycle's spending against EMIs still running. It used to be behind a disclosure on
+            the card, and the card now carries one action; this is where it goes rather than
+            nowhere. */}
         {isCard && <CardLimitSummary account={account} alertPercent={alertPercent} />}
-        <div className="account-actions">
-          <button type="button" className="secondary-action" onClick={startEdit}>
-            <Pencil size={16} />
-            Edit
-          </button>
-          <button className="secondary-action danger-action" onClick={() => onRemove?.(account)}>
+        <label>
+          Name
+          <input autoFocus value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+        </label>
+        <label>
+          {isCard ? "Opening outstanding" : "Opening balance"}
+          <input
+            inputMode="decimal"
+            value={draft.opening}
+            onChange={(event) => setDraft({ ...draft, opening: event.target.value })}
+          />
+          <small className="field-hint">
+            {isCard
+              ? "What you owed on this card before your first transaction here. Change it to match your statement."
+              : "The balance before your first transaction here. Change it if the app doesn't match your bank."}
+          </small>
+        </label>
+        {isCard && (
+          <>
+            <label>
+              Credit limit
+              <input
+                inputMode="decimal"
+                value={draft.limit}
+                onChange={(event) => setDraft({ ...draft, limit: event.target.value })}
+              />
+            </label>
+            <label>
+              Payment due day
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={31}
+                value={draft.dueDay}
+                onChange={(event) => setDraft({ ...draft, dueDay: event.target.value })}
+                placeholder="18"
+              />
+              <small className="field-hint">
+                The day the bill is due each month. Leave it blank for no reminder.
+              </small>
+            </label>
+          </>
+        )}
+        <div className="budget-dialog-actions">
+          <button type="button" className="secondary-action danger-action" onClick={onDelete} disabled={saving}>
             <Trash2 size={16} />
             Delete
           </button>
+          <div className="budget-dialog-close">
+            <button type="button" className="secondary-action" onClick={onClose} disabled={saving}>
+              Cancel
+            </button>
+            <button type="submit" className="primary-action" disabled={saving}>
+              <Check size={16} />
+              {saving ? "Saving..." : "Save"}
+            </button>
+          </div>
         </div>
-      </>}
-
-      {editing && (
-        <FormDialog title={`Edit ${account.name}`} onClose={() => setEditing(false)}>
-          <form className="stack-form account-edit-form" onSubmit={save}>
-            <label>
-              Name
-              <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-            </label>
-            <label>
-              {isCard ? "Opening outstanding" : "Opening balance"}
-              <input
-                inputMode="decimal"
-                value={draft.opening}
-                onChange={(event) => setDraft({ ...draft, opening: event.target.value })}
-              />
-              <small className="field-hint">
-                {isCard
-                  ? "What you owed on this card before your first transaction here. Change it to match your statement."
-                  : "The balance before your first transaction here. Change it if the app doesn't match your bank."}
-              </small>
-            </label>
-            {isCard && (
-              <>
-                <label>
-                  Credit limit
-                  <input
-                    inputMode="decimal"
-                    value={draft.limit}
-                    onChange={(event) => setDraft({ ...draft, limit: event.target.value })}
-                  />
-                </label>
-                <label>
-                  Payment due day
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    max={31}
-                    value={draft.dueDay}
-                    onChange={(event) => setDraft({ ...draft, dueDay: event.target.value })}
-                    placeholder="18"
-                  />
-                  <small className="field-hint">
-                    The day the bill is due each month. Leave it blank for no reminder.
-                  </small>
-                </label>
-              </>
-            )}
-            <div className="loan-form-actions">
-              <button type="button" className="secondary-action" onClick={() => setEditing(false)} disabled={saving}>
-                Cancel
-              </button>
-              <button type="submit" className="primary-action" disabled={saving}>
-                <Check size={16} />
-                {saving ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </form>
-        </FormDialog>
-      )}
-    </article>
+      </form>
+    </FormDialog>
   );
 }
 
