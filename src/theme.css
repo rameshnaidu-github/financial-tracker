@@ -2962,3 +2962,23 @@ button.budget-hint-chip:focus-visible {
     text-align: left;
   }
 }
+
+/* ---------- Simple mode: the way to the entry form, when it is not in the navigation ---------- */
+.transactions-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.transactions-title h2 {
+  margin: 0;
+}
+
+.record-action {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding-inline: 14px;
+  white-space: nowrap;
+}

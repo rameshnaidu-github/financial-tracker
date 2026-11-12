@@ -426,6 +426,10 @@ export async function updateAppSettings(input: UpdateSettingsInput) {
   if (parsed.holdingGrouping !== undefined) {
     await setSetting("holding_grouping", parsed.holdingGrouping);
   }
+  // Stored as the string the settings table holds, read back as "1" and nothing else.
+  if (parsed.simpleMode !== undefined) {
+    await setSetting("simple_mode", parsed.simpleMode ? "1" : "0");
+  }
   return getSettings();
 }
 

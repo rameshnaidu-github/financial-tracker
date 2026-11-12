@@ -174,6 +174,177 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home; group?: Na
 ];
 
 /**
+ * The sidebar's list of sections.
+ *
+ * Takes the sections rather than reading the whole list, so what it shows is a question about the
+ * mode and not about this component -- and so the two navigations can be rendered against a mode
+ * and read, rather than taken on trust.
+ */
+export function SidebarNav({
+  items,
+  activePage,
+  newsUnread,
+  onNavigate
+}: {
+  items: typeof navItems;
+  activePage: Page;
+  newsUnread: boolean;
+  onNavigate: (page: Page) => void;
+}) {
+  const groups = NAV_GROUPS.filter((group) => items.some((item) => item.group === group));
+  return (
+    <>
+      <nav className="nav-list" aria-label="Main">
+        {groups.map((group) => (
+          <div className="nav-group" key={group} role="group" aria-labelledby={`nav-group-${group.replace(/\W+/g, "-")}`}>
+            <span className="nav-group-label" id={`nav-group-${group.replace(/\W+/g, "-")}`}>
+              {group}
+            </span>
+            {items
+              .filter((item) => item.group === group)
+              .map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.page}
+                    className={`nav-item ${activePage === item.page ? "active" : ""}`}
+                    aria-current={activePage === item.page ? "page" : undefined}
+                    onClick={() => onNavigate(item.page)}
+                  >
+                    <Icon size={18} />
+                    <span>{item.label}</span>
+                    {item.page === "whatsNew" && newsUnread && <span className="nav-dot" aria-label="Unread" />}
+                  </button>
+                );
+              })}
+          </div>
+        ))}
+      </nav>
+      {/* Profile sits below the list so it stays visible even when a short window scrolls the list. */}
+      <button
+        className={`nav-item profile-nav-item ${activePage === "profile" ? "active" : ""}`}
+        aria-current={activePage === "profile" ? "page" : undefined}
+        onClick={() => onNavigate("profile")}
+      >
+        <UserCircle size={18} />
+        <span>Profile</span>
+      </button>
+    </>
+  );
+}
+
+/** What sits behind More on a phone, when there is more than one of them. */
+export function MoreSheet({
+  pages,
+  activePage,
+  onNavigate,
+  onClose
+}: {
+  pages: Page[];
+  activePage: Page;
+  onNavigate: (page: Page) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="mobile-more-backdrop" onClick={onClose}>
+      <div
+        className="mobile-more-sheet"
+        id="mobile-more-sheet"
+        role="dialog"
+        aria-label="More pages"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {pages.map((page) => {
+          const item = navItems.find((candidate) => candidate.page === page);
+          if (!item) return null;
+          const Icon = item.icon;
+          return (
+            <button
+              key={page}
+              type="button"
+              className={activePage === page ? "active" : ""}
+              onClick={() => {
+                onClose();
+                onNavigate(page);
+              }}
+            >
+              <Icon size={20} />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The phone bar.
+ *
+ * `more` holding exactly one section is shown as that section rather than as a More button: in
+ * simple mode the only thing not on the bar is Profile, and hiding one row behind a sheet asks
+ * for two presses where one would do.
+ */
+export function MobileNav({
+  primary,
+  more,
+  activePage,
+  moreOpen,
+  onToggleMore,
+  onNavigate
+}: {
+  primary: Page[];
+  more: Page[];
+  activePage: Page;
+  moreOpen: boolean;
+  onToggleMore: () => void;
+  onNavigate: (page: Page) => void;
+}) {
+  const soleExtra = more.length === 1 ? more[0] : null;
+  const SoleIcon = soleExtra ? navItems.find((item) => item.page === soleExtra)?.icon : null;
+  return (
+    <nav className="mobile-nav" aria-label="Main">
+      {primary.map((page) => {
+        const item = navItems.find((candidate) => candidate.page === page);
+        if (!item) return null;
+        const Icon = item.icon;
+        return (
+          <button
+            key={page}
+            className={activePage === page && !moreOpen ? "active" : ""}
+            onClick={() => onNavigate(page)}
+          >
+            <Icon size={19} />
+            <span>{mobileLabels[page]}</span>
+          </button>
+        );
+      })}
+      {soleExtra && SoleIcon ? (
+        <button
+          key={soleExtra}
+          className={activePage === soleExtra ? "active" : ""}
+          onClick={() => onNavigate(soleExtra)}
+        >
+          <SoleIcon size={19} />
+          <span>{mobileLabels[soleExtra]}</span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          className={moreOpen || !primary.includes(activePage) ? "active" : ""}
+          aria-expanded={moreOpen}
+          aria-controls="mobile-more-sheet"
+          onClick={onToggleMore}
+        >
+          <LayoutGrid size={19} />
+          <span>{primary.includes(activePage) ? "More" : mobileLabels[activePage]}</span>
+        </button>
+      )}
+    </nav>
+  );
+}
+
+/**
  * Page changes cross-fade through the View Transitions API where the browser has it. Without it,
  * or when the person asks for less motion, the page simply swaps.
  */
@@ -232,6 +403,58 @@ function shouldPlayIntroOnLaunch(): boolean {
 // The phone bar keeps the four daily destinations; everything else lives under "More".
 const MOBILE_PRIMARY_PAGES: Page[] = ["overview", "weekly", "transactions", "reports"];
 
+/**
+ * Simple mode: the five sections the application is cut down to when the switch in Profile is on.
+ *
+ * Profile is not listed here and is added by `navigationFor` regardless, because the switch lives
+ * on it: a mode that hid Profile could not be turned off.
+ */
+export const SIMPLE_MODE_PAGES: Page[] = ["overview", "transactions", "accounts", "reports", "investments"];
+
+/**
+ * Can this page be opened at all in this mode?
+ *
+ * Weekly Entry is the exception that makes simple mode usable: it is the only screen in the
+ * application that creates a transaction, and it is not one of the five, so it stays reachable as
+ * the recording form -- through the Record button, not through the navigation.
+ */
+/**
+ * Is simple mode on, according to what the server stored?
+ *
+ * "1" and nothing else. A value the application did not write -- an old row, a hand-edited
+ * setting, a missing one -- means off, which is the state that hides nothing from anybody.
+ */
+export function simpleModeFromSettings(settings: Record<string, string> | undefined): boolean {
+  return settings?.simple_mode === "1";
+}
+
+export function pageAllowedIn(page: Page, simpleMode: boolean): boolean {
+  if (!simpleMode) {
+    return true;
+  }
+  return SIMPLE_MODE_PAGES.includes(page) || page === "profile" || page === "weekly";
+}
+
+/**
+ * What each navigation offers in this mode.
+ *
+ * One answer for both navigations, so the sidebar and the phone bar cannot drift apart: `items`
+ * is every section that can be reached by navigating, `primary` is what the phone bar shows as
+ * its own buttons, and `more` is what sits behind it. When `more` holds a single section the bar
+ * shows it directly instead -- a sheet that opens on one row is a door to a cupboard.
+ */
+export function navigationFor(simpleMode: boolean) {
+  const items = simpleMode
+    ? navItems.filter((item) => SIMPLE_MODE_PAGES.includes(item.page) || item.page === "profile")
+    : navItems;
+  const primary = simpleMode ? SIMPLE_MODE_PAGES : MOBILE_PRIMARY_PAGES;
+  return {
+    items,
+    primary,
+    more: items.filter((item) => !primary.includes(item.page)).map((item) => item.page)
+  };
+}
+
 const mobileLabels: Record<Page, string> = {
   overview: "Home",
   weekly: "Week",
@@ -249,6 +472,11 @@ const mobileLabels: Record<Page, string> = {
   faq: "FAQ",
   profile: "Me"
 };
+
+/** The short name the phone bar gives a section. */
+export function mobileLabelFor(page: Page): string {
+  return mobileLabels[page];
+}
 
 const pagePaths: Record<Page, string> = {
   overview: "/overview",
@@ -648,6 +876,28 @@ export default function App() {
     [showNotice]
   );
 
+  const simpleMode = simpleModeFromSettings(bootstrap?.settings);
+  const navigationModel = navigationFor(simpleMode);
+
+  const canOpen = useCallback((page: Page) => pageAllowedIn(page, simpleMode), [simpleMode]);
+
+  const saveSimpleMode = useCallback(
+    async (next: boolean) => {
+      try {
+        const settings = await Api.updateSettings({ simpleMode: next });
+        setBootstrap((current) => (current ? { ...current, settings } : current));
+        showNotice(
+          next
+            ? "Simple mode on. Five sections, everywhere. Turn it off here to get the rest back."
+            : "Simple mode off. Every section is back."
+        );
+      } catch (err) {
+        showNotice(err instanceof Error ? err.message : "Could not save the setting.");
+      }
+    },
+    [showNotice]
+  );
+
   const cardAlertPercent = (() => {
     const parsed = Number(bootstrap?.settings?.card_utilization_alert_percent ?? "30");
     return Number.isFinite(parsed) && parsed >= 1 && parsed <= 100 ? Math.round(parsed) : 30;
@@ -706,6 +956,19 @@ export default function App() {
   useEffect(() => {
     setProfileDraft(profile);
   }, [profile]);
+
+  /* A bookmark, a shared link or the back button can land on a section simple mode hides. Rather
+     than a title with no page under it, the app moves to Overview -- which the mode always has --
+     and says what happened and how to undo it. Waits for the data: until then nothing is known
+     about the mode, and redirecting on a guess would bounce the page people actually asked for. */
+  useEffect(() => {
+    if (!bootstrap || pageAllowedIn(activePage, simpleMode)) {
+      return;
+    }
+    const name = navItems.find((item) => item.page === activePage)?.label ?? "That section";
+    navigate("overview");
+    showNotice(`${name} is hidden while simple mode is on. Turn it off in Profile to get it back.`);
+  }, [activePage, bootstrap, navigate, showNotice, simpleMode]);
 
   useEffect(() => {
     if (selectedAccountId && !activeAccounts.some((account) => account.id === selectedAccountId)) {
@@ -782,6 +1045,7 @@ export default function App() {
                       selectedAccount={selectedAccount}
                       refreshKey={refreshKey}
                       onNavigate={navigate}
+                      canOpen={canOpen}
                     />
         );
       case "weekly":
@@ -800,6 +1064,7 @@ export default function App() {
                       showNotice={showNotice}
                       onNavigate={navigate}
                       onAccountSelect={setSelectedAccountId}
+                      canOpen={canOpen}
                     />
         );
       case "transactions":
@@ -816,6 +1081,7 @@ export default function App() {
                       refreshKey={refreshKey}
                       showNotice={showNotice}
                       requestConfirm={requestConfirm}
+                      onRecord={simpleMode ? () => navigate("weekly") : undefined}
                     />
         );
       case "reports":
@@ -939,7 +1205,9 @@ export default function App() {
                       onSaveProfile={saveProfile}
                       onSaveCardAlert={saveCardAlert}
                       holdingGrouping={holdingGrouping}
+                      simpleMode={simpleMode}
                       onSaveHoldingGrouping={saveHoldingGrouping}
+                      onSaveSimpleMode={saveSimpleMode}
               onDownloadReport={() => setPrinting(true)}
               preparingReport={printing}
                       onThemeToggle={() =>
@@ -971,43 +1239,12 @@ export default function App() {
           </div>
         </div>
 
-        <nav className="nav-list" aria-label="Main">
-          {NAV_GROUPS.map((group) => (
-            <div className="nav-group" key={group} role="group" aria-labelledby={`nav-group-${group.replace(/\W+/g, "-")}`}>
-              <span className="nav-group-label" id={`nav-group-${group.replace(/\W+/g, "-")}`}>
-                {group}
-              </span>
-              {navItems
-                .filter((item) => item.group === group)
-                .map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <button
-                      key={item.page}
-                      className={`nav-item ${activePage === item.page ? "active" : ""}`}
-                      aria-current={activePage === item.page ? "page" : undefined}
-                      onClick={() => navigate(item.page)}
-                    >
-                      <Icon size={18} />
-                      <span>{item.label}</span>
-                      {item.page === "whatsNew" && newsUnread && (
-                        <span className="nav-dot" aria-label="Unread" />
-                      )}
-                    </button>
-                  );
-                })}
-            </div>
-          ))}
-        </nav>
-        {/* Profile sits below the list so it stays visible even when a short window scrolls the list. */}
-        <button
-          className={`nav-item profile-nav-item ${activePage === "profile" ? "active" : ""}`}
-          aria-current={activePage === "profile" ? "page" : undefined}
-          onClick={() => navigate("profile")}
-        >
-          <UserCircle size={18} />
-          <span>Profile</span>
-        </button>
+        <SidebarNav
+          items={navigationModel.items}
+          activePage={activePage}
+          newsUnread={newsUnread}
+          onNavigate={navigate}
+        />
       </aside>
 
       <main className="main-shell">
@@ -1048,7 +1285,11 @@ export default function App() {
             </p>
           </header>
           {/* Derived from the navigation rather than a second list, so a page added to the app is
-              in the report without anybody remembering to add it here. */}
+              in the report without anybody remembering to add it here.
+
+              Deliberately the whole list, not the sections simple mode leaves. The report is a
+              record of the money, not a view of the application: a PDF quietly missing your loans
+              because a display setting was on is a worse thing than a report longer than the app. */}
           {navItems.map((item) => (
             <section key={item.page} className="print-page">
               <h2 className="print-page-title">{item.label}</h2>
@@ -1058,68 +1299,26 @@ export default function App() {
         </div>
       )}
 
-      {moreOpen && (
-        <div className="mobile-more-backdrop" onClick={() => setMoreOpen(false)}>
-          <div
-            className="mobile-more-sheet"
-            id="mobile-more-sheet"
-            role="dialog"
-            aria-label="More pages"
-            onClick={(event) => event.stopPropagation()}
-          >
-            {navItems
-              .filter((item) => !MOBILE_PRIMARY_PAGES.includes(item.page))
-              .map((item) => {
-                const Icon = item.icon;
-                return (
-                  <button
-                    key={item.page}
-                    type="button"
-                    className={activePage === item.page ? "active" : ""}
-                    onClick={() => {
-                      setMoreOpen(false);
-                      navigate(item.page);
-                    }}
-                  >
-                    <Icon size={20} />
-                    <span>{item.label}</span>
-                  </button>
-                );
-              })}
-          </div>
-        </div>
+      {moreOpen && navigationModel.more.length > 1 && (
+        <MoreSheet
+          pages={navigationModel.more}
+          activePage={activePage}
+          onNavigate={navigate}
+          onClose={() => setMoreOpen(false)}
+        />
       )}
 
-      <nav className="mobile-nav" aria-label="Main">
-        {navItems
-          .filter((item) => MOBILE_PRIMARY_PAGES.includes(item.page))
-          .map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.page}
-                className={activePage === item.page && !moreOpen ? "active" : ""}
-                onClick={() => {
-                  setMoreOpen(false);
-                  navigate(item.page);
-                }}
-              >
-                <Icon size={19} />
-                <span>{mobileLabels[item.page]}</span>
-              </button>
-            );
-          })}
-        <button
-          type="button"
-          className={moreOpen || !MOBILE_PRIMARY_PAGES.includes(activePage) ? "active" : ""}
-          aria-expanded={moreOpen}
-          aria-controls="mobile-more-sheet"
-          onClick={() => setMoreOpen((open) => !open)}
-        >
-          <LayoutGrid size={19} />
-          <span>{MOBILE_PRIMARY_PAGES.includes(activePage) ? "More" : mobileLabels[activePage]}</span>
-        </button>
-      </nav>
+      <MobileNav
+        primary={navigationModel.primary}
+        more={navigationModel.more}
+        activePage={activePage}
+        moreOpen={moreOpen}
+        onToggleMore={() => setMoreOpen((open) => !open)}
+        onNavigate={(page) => {
+          setMoreOpen(false);
+          navigate(page);
+        }}
+      />
 
       {notice && (
         <div className="toast" role="status" aria-live="polite">
@@ -1193,12 +1392,16 @@ function OverviewPage({
   selectedAccountId,
   selectedAccount,
   refreshKey,
-  onNavigate
+  onNavigate,
+  canOpen
 }: {
   selectedAccountId: string;
   selectedAccount?: Account;
   refreshKey: number;
   onNavigate: Navigate;
+  /* Whether a section can be opened at all. A page the mode keeps must not offer a door into one
+     it hides: pressing it would bounce the reader straight back with an apology. */
+  canOpen: (page: Page) => boolean;
 }) {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1392,13 +1595,15 @@ function OverviewPage({
               />
             )}
           </Panel>
-          <Panel title="Budget guardrails" action={<button onClick={() => onNavigate("budgets")}>Plan</button>}>
+{canOpen("budgets") && (
+                    <Panel title="Budget guardrails" action={<button onClick={() => onNavigate("budgets")}>Plan</button>}>
             <BudgetGuardrails
               plan={budgetPlan}
               uncategorizedCount={overview.summary.uncategorizedCount}
               onReviewUncategorized={() => onNavigate("transactions", { status: "uncategorized" })}
             />
           </Panel>
+          )}
         </div>
         <Panel title="Cashflow">
           {wealth ? (
@@ -1631,7 +1836,8 @@ function WeeklyEntryPage({
   refreshKey,
   showNotice,
   onNavigate,
-  onAccountSelect
+  onAccountSelect,
+  canOpen
 }: {
   selectedAccountId: string;
   accounts: Account[];
@@ -1646,6 +1852,9 @@ function WeeklyEntryPage({
   showNotice: (message: string) => void;
   onNavigate: (page: Page) => void;
   onAccountSelect: (accountId: string) => void;
+  /* Whether a section can be opened at all -- Weekly Entry stays reachable in simple mode as the
+     recording form, but Categories, which it links to, does not. */
+  canOpen: (page: Page) => boolean;
 }) {
   const week = useMemo(() => mondayWeekRange(), []);
   const visibleAccounts = selectedAccountId
@@ -2201,9 +2410,11 @@ function WeeklyEntryPage({
                   Clear filter
                 </button>
               )}
-              <button type="button" onClick={() => onNavigate("categories")}>
-                <Plus size={16} /> Add category
-              </button>
+              {canOpen("categories") && (
+                <button type="button" onClick={() => onNavigate("categories")}>
+                  <Plus size={16} /> Add category
+                </button>
+              )}
             </div>
             </details>
 
@@ -2306,7 +2517,8 @@ function TransactionsPage({
   refresh,
   refreshKey,
   showNotice,
-  requestConfirm
+  requestConfirm,
+  onRecord
 }: {
   selectedAccountId: string;
   accounts: Account[];
@@ -2319,6 +2531,10 @@ function TransactionsPage({
   refreshKey: number;
   showNotice: (message: string, options?: NoticeOptions) => void;
   requestConfirm: (request: ConfirmRequest) => void;
+  /* Given only when the entry form is not in the navigation -- simple mode keeps the five
+     sections asked for, and Weekly Entry, the one screen that creates a transaction, is not one
+     of them. Without this the mode would be an application nothing could be put into. */
+  onRecord?: () => void;
 }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   // A drill-down (e.g. clicking "Groceries" in Reports) opens this page pre-filtered via the URL.
@@ -2687,8 +2903,17 @@ function TransactionsPage({
   return (
     <div className="panel">
       <div className="panel-header toolbar-header">
-        <div>
+        {/* The title and, when the entry form is not in the navigation, the way to it. Beside the
+            title rather than in the filter row: the filters are a dense line of controls and a
+            primary action dropped into them squeezed the search box onto two lines. */}
+        <div className="transactions-title">
           <h2>All transactions</h2>
+          {onRecord && (
+            <button type="button" className="primary-action record-action" onClick={onRecord}>
+              <Plus size={17} />
+              Record
+            </button>
+          )}
         </div>
         <div className="toolbar filter-toolbar">
           <label className="search-box">
@@ -8130,6 +8355,14 @@ function PasswordRow() {
   );
 }
 
+/** The sections simple mode keeps, named the way the navigation names them. */
+function simpleModeSectionNames() {
+  const names = SIMPLE_MODE_PAGES.map(
+    (page) => navItems.find((item) => item.page === page)?.label ?? page
+  );
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 /** What is wrong with each identity field, field by field, so the page can say it where it is. */
 export function profileFieldProblems(profile: UserProfile) {
   const name = profile.name.trim();
@@ -8166,10 +8399,12 @@ export function ProfilePage({
   saving,
   cardAlertPercent,
   holdingGrouping,
+  simpleMode,
   onProfileChange,
   onSaveProfile,
   onSaveCardAlert,
   onSaveHoldingGrouping,
+  onSaveSimpleMode,
   onDownloadReport,
   preparingReport,
   onThemeToggle,
@@ -8187,10 +8422,12 @@ export function ProfilePage({
   saving: boolean;
   cardAlertPercent: number;
   holdingGrouping: HoldingGrouping;
+  simpleMode: boolean;
   onProfileChange: (profile: UserProfile) => void;
   onSaveProfile: () => Promise<void> | void;
   onSaveCardAlert: (percent: number) => Promise<void> | void;
   onSaveHoldingGrouping: (grouping: HoldingGrouping) => Promise<void> | void;
+  onSaveSimpleMode: (next: boolean) => Promise<void> | void;
   onDownloadReport: () => void;
   preparingReport: boolean;
   onThemeToggle: () => void;
@@ -8353,6 +8590,28 @@ export function ProfilePage({
         )}
 
         <ProfileSection title="Preferences">
+          <SettingsRow
+            label="Simple mode"
+            hint={
+              simpleMode
+                ? `Showing ${SIMPLE_MODE_PAGES.length} sections. Turn this off to get the rest back.`
+                : `Cuts the app down to ${SIMPLE_MODE_PAGES.length} sections — ${simpleModeSectionNames()} — on every screen.`
+            }
+          >
+            <button
+              type="button"
+              role="switch"
+              aria-checked={simpleMode}
+              aria-label="Simple mode"
+              className="switch-control"
+              onClick={() => void onSaveSimpleMode(!simpleMode)}
+            >
+              <span className="switch-track" aria-hidden="true">
+                <span className="switch-thumb" />
+              </span>
+              {simpleMode ? "On" : "Off"}
+            </button>
+          </SettingsRow>
           <SettingsRow label="Dark theme" hint="Follows your system setting until you choose here.">
             <button
               type="button"
@@ -9532,6 +9791,8 @@ export {
   SubscriptionCard,
   SubscriptionForm,
   SubscriptionsPage,
+  TransactionsPage,
+  navItems,
   VacationForm,
   WhatsNewPage,
   VacationsPage
