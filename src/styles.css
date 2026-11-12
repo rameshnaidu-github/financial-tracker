@@ -41,10 +41,10 @@
   --muted: #aeb9ca;
   --line: #273142;
   --line-strong: #3b4960;
-  --accent: #60a5fa;
-  --accent-strong: #93c5fd;
-  --accent-soft: #172554;
-  --accent-blue: #60a5fa;
+  --accent: #7de2af;
+  --accent-strong: #9aecc2;
+  --accent-soft: #15301f;
+  --accent-blue: #7de2af;
   --warning: #f59e0b;
   --warning-soft: #3a2610;
   --danger: #f87171;
@@ -98,7 +98,7 @@ select {
 
 :root[data-theme="dark"] input,
 :root[data-theme="dark"] select {
-  background: #0f1722;
+  background-color: var(--bg-deep);
   border-color: var(--line);
 }
 
@@ -188,7 +188,8 @@ a {
     color 160ms ease;
 }
 
-.nav-item.active,
+/* Hover only. The current page's pill is filled with the accent, declared in theme.css; sharing
+   this rule with it meant the hover state and the current state were the same thing. */
 .nav-item:hover {
   background: var(--accent-soft);
   color: var(--accent-strong);
@@ -243,7 +244,7 @@ a {
 :root[data-theme="dark"] .icon-button,
 :root[data-theme="dark"] .category-shortcuts button,
 :root[data-theme="dark"] .inline-editor-header button {
-  background: #111927;
+  background-color: var(--panel-soft);
 }
 
 .profile-menu {
@@ -568,11 +569,11 @@ a {
   padding: 18px;
   overflow: hidden;
   position: relative;
-  background: linear-gradient(135deg, #ecfeff 0%, #f8fafc 100%);
+  background: linear-gradient(135deg, var(--accent-soft) 0%, var(--panel) 100%);
 }
 
 :root[data-theme="dark"] .summary-card {
-  background: linear-gradient(135deg, #172554 0%, #121821 100%);
+  background: linear-gradient(135deg, var(--accent-soft) 0%, var(--panel) 100%);
 }
 
 .summary-grid .summary-card:nth-child(2) {
@@ -892,11 +893,11 @@ a {
 }
 
 :root[data-theme="dark"] .transaction-table .table-row:nth-child(even) {
-  background: rgba(96, 165, 250, 0.08);
+  background: var(--accent-soft);
 }
 
 :root[data-theme="dark"] .transaction-table .table-row:nth-child(odd) {
-  background: #101822;
+  background-color: var(--panel-soft);
 }
 
 .table-row strong {
@@ -1906,7 +1907,7 @@ a {
 }
 
 :root[data-theme="dark"] .account-icon.bank {
-  background: #172554;
+  background-color: var(--accent-soft);
   color: var(--accent);
 }
 
@@ -3417,7 +3418,7 @@ a {
 :root[data-theme="dark"] .inline-editor,
 :root[data-theme="dark"] .transaction-edit-row,
 :root[data-theme="dark"] .taxonomy-subtype-row {
-  background: #101822;
+  background-color: var(--panel-soft);
   border-color: var(--line);
 }
 

@@ -370,6 +370,10 @@ function withPageTransition(update: () => void) {
 }
 
 const NAV_GROUPS: NavGroup[] = ["Daily", "Plan", "Own & owe", "Setup"];
+
+/* Pages that draw their own header. The shell prints the page's name in the top bar for every
+   other one; these say it in their own body instead, and must not be told twice. */
+const PAGES_WITH_OWN_HEADER: Page[] = ["budgets", "accounts"];
 const THEME_KEY = "finance-theme";
 const INTRO_ON_LAUNCH_KEY = "finance-intro-on-launch";
 
@@ -881,16 +885,6 @@ export default function App() {
 
   const canOpen = useCallback((page: Page) => pageAllowedIn(page, simpleMode), [simpleMode]);
 
-  /* The skin rides on the document rather than on the shell, beside the theme: dialogs and the
-     toast are portalled to the body, and a skin set further in would stop at them. */
-  useEffect(() => {
-    if (simpleMode) {
-      document.documentElement.dataset.skin = "simple";
-    } else {
-      delete document.documentElement.dataset.skin;
-    }
-  }, [simpleMode]);
-
   const saveSimpleMode = useCallback(
     async (next: boolean) => {
       try {
@@ -1260,7 +1254,9 @@ export default function App() {
       <main className="main-shell">
         <header className="topbar" key={activePage}>
           <div>
-            <h1>{navItems.find((item) => item.page === activePage)?.label}</h1>
+            {!PAGES_WITH_OWN_HEADER.includes(activePage) && (
+              <h1>{navItems.find((item) => item.page === activePage)?.label}</h1>
+            )}
           </div>
           <div className="topbar-actions">
             {showAccountFilter && (
@@ -2407,6 +2403,14 @@ function WeeklyEntryPage({
                 <button
                   key={category.id}
                   className={weeklyCategoryFilterId === category.id ? "active" : ""}
+                  /* The badge is a mark and a colour; the chip has no words of its own, so the
+                     name has to be said here or the control is nameless to anyone not looking. */
+                  aria-label={
+                    weeklyCategoryFilterId === category.id
+                      ? `Stop filtering by ${category.name}`
+                      : `Filter by ${category.name}`
+                  }
+                  aria-pressed={weeklyCategoryFilterId === category.id}
                   onClick={() =>
                     setWeeklyCategoryFilterId((current) => (current === category.id ? "" : category.id))
                   }
@@ -4582,6 +4586,139 @@ export function PreviousMonthHints({
  * question "is the copy action offered on a month that already has lines" is answered by handing
  * this a plan that has lines, which is not a question the fetching page can be asked.
  */
+/**
+ * A page's own header: what it is, how it is going, and what can be done here.
+ *
+ * The shell prints the page's name in the top bar for every other page; a page that renders this
+ * is named once, in its own body, the way the reference has it.
+ */
+export function PageHeader({
+  title,
+  summary,
+  actions
+}: {
+  title: string;
+  summary?: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <header className="page-header">
+      <div className="page-header-copy">
+        <h1>{title}</h1>
+        {summary ? <p>{summary}</p> : null}
+      </div>
+      {actions ? <div className="page-header-actions">{actions}</div> : null}
+    </header>
+  );
+}
+
+/**
+ * Days of the planned month still to spend in, counting today.
+ *
+ * `dayOfMonth` is 0 for a month that has not started and pins to the last day for one already
+ * finished, so the month's own end date is what separates "the last day" from "long over".
+ */
+export function budgetDaysLeft(plan: BudgetPlan): number {
+  if (plan.asOfDate > plan.end) {
+    return 0;
+  }
+  if (plan.dayOfMonth === 0) {
+    return plan.daysInMonth;
+  }
+  return plan.daysInMonth - plan.dayOfMonth + 1;
+}
+
+/** What is left, spread over the days left -- zero when there is nothing left or nowhere to put it. */
+export function budgetPerDayPaise(plan: BudgetPlan): number {
+  const days = budgetDaysLeft(plan);
+  if (days <= 0 || plan.totals.remainingPaise <= 0) {
+    return 0;
+  }
+  return Math.round(plan.totals.remainingPaise / days);
+}
+
+/**
+ * The line under the title: where the month has got to, what is off plan, and where the plan
+ * lands if nothing changes. The projection used to be a fifth tile; the reference has four, and
+ * this is where the reading of it goes instead.
+ */
+export function budgetSummaryLine(plan: BudgetPlan): string {
+  const month = formatMonth(plan.month);
+  if (plan.lines.length === 0) {
+    return `Nothing planned for ${month} yet.`;
+  }
+  const where =
+    plan.dayOfMonth === 0
+      ? `${month} has not started.`
+      : budgetDaysLeft(plan) === 0
+        ? `${month} is done.`
+        : `${plan.dayOfMonth} of ${plan.daysInMonth} days into ${month}.`;
+  const over = plan.lines.filter((line) => line.status === "over").length;
+  const standing =
+    over === 0 ? "Nothing is over." : over === 1 ? "1 budget is over." : `${over} budgets are over.`;
+  return `${where} ${standing} On this pace it ends near ${formatINRWhole(plan.totals.projectedPaise)}.`;
+}
+
+/** The note under each of the four tiles, worked out from the plan rather than written in. */
+export function budgetTileNotes(plan: BudgetPlan) {
+  const daysLeft = budgetDaysLeft(plan);
+  const ofPlan =
+    plan.totals.amountPaise > 0
+      ? Math.round((plan.totals.actualPaise / plan.totals.amountPaise) * 100)
+      : 0;
+  return {
+    budgeted: plan.lines.length === 1 ? "1 category" : `${plan.lines.length} categories`,
+    spent:
+      plan.totals.amountPaise > 0
+        ? `${ofPlan}% of the plan, ${plan.elapsedPercent}% of the month`
+        : `${plan.elapsedPercent}% of the month`,
+    left: daysLeft === 0 ? "the month is done" : daysLeft === 1 ? "for 1 day" : `for ${daysLeft} days`,
+    perDay:
+      plan.totals.remainingPaise <= 0
+        ? "already past the plan"
+        : daysLeft === 0
+          ? "the month is done"
+          : "to land on plan"
+  };
+}
+
+/**
+ * The word on the pill. The application keeps four statuses and the reference's pill has three
+ * colours, so the two middle ones share a word -- the longer label stays as the title, for
+ * anyone who wants to know which of the two it is.
+ */
+export function budgetPillWord(status: BudgetLine["status"]): string {
+  return status === "over" ? "Over" : status === "safe" ? "On track" : "Close";
+}
+
+/**
+ * The name on a card's face: the SubType alone.
+ *
+ * A line's full name is "Expense / Groceries", and at a quarter of the page width the Type in
+ * front of it wraps every card onto two lines for a word that is "Expense" on all of them. The
+ * full name stays on the card's own label and on the dialog that edits it.
+ */
+export function budgetCardName(line: BudgetLine): string {
+  if (line.scopeType !== "subcategory") {
+    return line.name;
+  }
+  const cut = line.name.lastIndexOf(" / ");
+  return cut === -1 ? line.name : line.name.slice(cut + 3);
+}
+
+/** What one line leaves to spend a day, or the plain fact that it leaves nothing. */
+export function budgetCardRate(line: BudgetLine, daysLeft: number): string {
+  if (line.remainingPaise <= 0) {
+    return "Nothing left this month";
+  }
+  if (daysLeft <= 0) {
+    return "The month is done";
+  }
+  /* Whole rupees. A rate is an answer to "roughly how much a day", and ₹1,947.37 answers a
+     question nobody asked. */
+  return `${formatINRWhole(Math.round(line.remainingPaise / daysLeft))} a day`;
+}
+
 export function BudgetPlanBody({
   plan,
   saving,
@@ -4595,8 +4732,7 @@ export function BudgetPlanBody({
   onAddingChange,
   onAdd,
   onCopyPreviousMonth,
-  onStartEdit,
-  onDelete
+  onStartEdit
 }: {
   plan: BudgetPlan;
   saving: boolean;
@@ -4611,87 +4747,120 @@ export function BudgetPlanBody({
   onAdd: (event: FormEvent) => void;
   onCopyPreviousMonth: () => void;
   onStartEdit: (line: BudgetLine) => void;
-  onDelete: (line: BudgetLine) => void;
 }) {
+  const notes = budgetTileNotes(plan);
+  const daysLeft = budgetDaysLeft(plan);
   return (
     <>
-      <p className="helper-text budget-range">
-        {formatShortDate(plan.start)} to {formatShortDate(plan.end)} · Day {plan.dayOfMonth} of {plan.daysInMonth}
-      </p>
-      <div className="summary-grid report-summary">
-        <SummaryCard label="Budgeted" value={formatINRWhole(plan.totals.amountPaise)} countPaise={plan.totals.amountPaise} icon={<PiggyBank />} />
-        <SummaryCard label="Used" value={formatINRWhole(plan.totals.actualPaise)} countPaise={plan.totals.actualPaise} icon={<BarChart3 />} tone={budgetSummaryTone(plan)} />
+      <div className="summary-grid budget-tiles">
         <SummaryCard
-          label="Remaining"
-          value={formatINRWhole(plan.totals.remainingPaise)} countPaise={plan.totals.remainingPaise}
+          label="Budgeted"
+          value={formatINRWhole(plan.totals.amountPaise)}
+          countPaise={plan.totals.amountPaise}
+          icon={<PiggyBank />}
+          note={<small>{notes.budgeted}</small>}
+        />
+        <SummaryCard
+          label="Spent"
+          value={formatINRWhole(plan.totals.actualPaise)}
+          countPaise={plan.totals.actualPaise}
+          icon={<BarChart3 />}
+          tone={budgetSummaryTone(plan)}
+          note={<small>{notes.spent}</small>}
+        />
+        <SummaryCard
+          label="Left"
+          value={formatINRWhole(plan.totals.remainingPaise)}
+          countPaise={plan.totals.remainingPaise}
           icon={<WalletCards />}
           tone={plan.totals.remainingPaise < 0 ? "warning" : "good"}
+          note={<small>{notes.left}</small>}
         />
-        <SummaryCard label="Projected" value={formatINRWhole(plan.totals.projectedPaise)} countPaise={plan.totals.projectedPaise} icon={<TrendingUp />} tone={plan.totals.projectedPaise > plan.totals.amountPaise ? "warning" : "neutral"} />
+        <SummaryCard
+          label="Per day"
+          value={formatINRWhole(budgetPerDayPaise(plan))}
+          countPaise={budgetPerDayPaise(plan)}
+          icon={<TrendingUp />}
+          note={<small>{notes.perDay}</small>}
+        />
       </div>
 
       <CopyLastMonthRow previousPlan={plan.previousPlan} busy={saving} onCopy={onCopyPreviousMonth} />
 
-      {plan.lines.length === 0 ? (
-        <EmptyState
-          text={
-            plan.previousPlan.lineCount > 0
-              ? "No budget lines for this month yet. Take last month's plan above, or add a line below."
-              : "No budget lines for this month yet. Add one below."
-          }
-        />
-      ) : (
-        <div className="budget-line-list">
-          {plan.lines.map((line) => (
-            <BudgetLineCard
-              key={line.id}
-              line={line}
-              onStartEdit={() => onStartEdit(line)}
-              onDelete={() => onDelete(line)}
-            />
-          ))}
-        </div>
-      )}
+      {/* The budgets, and the way to start another one, in one grid -- the reference puts its
+          dashed card after the last budget rather than in a section of its own. */}
+      <div className="budget-grid">
+        {plan.lines.map((line) => (
+          <BudgetLineCard
+            key={line.id}
+            line={line}
+            elapsedPercent={plan.elapsedPercent}
+            daysLeft={daysLeft}
+            onStartEdit={() => onStartEdit(line)}
+          />
+        ))}
+        <button type="button" className="budget-add-card" onClick={() => onAddingChange(true)}>
+          <Plus size={20} />
+          <strong>Add a budget</strong>
+          <span>Groceries, rent, anything</span>
+        </button>
+      </div>
 
-      <CollapsibleForm title="Add budget line" variant="inset" open={adding} onToggle={onAddingChange}>
-        <form className="budget-add-form" onSubmit={onAdd}>
-          <label>
-            SubType
-            <select value={subKey} onChange={(event) => onSubKeyChange(event.target.value)} disabled={!subScopes.length}>
-              {subScopes.length === 0 && <option value="">No SubTypes available</option>}
-              {subScopes.map((scope) => (
-                <option key={budgetScopeKey(scope)} value={budgetScopeKey(scope)}>
-                  {budgetSubLabel(scope)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Amount
-            <input
-              inputMode="decimal"
-              value={amount}
-              onChange={(event) => onAmountChange(event.target.value)}
-              placeholder="25000"
-            />
-          </label>
-          <button className="primary-action" type="submit" disabled={saving || !subScopes.length}>
-            <Plus size={17} />
-            Add
-          </button>
-          {/* Its own row: inside a field this note made that column taller and the row went ragged. */}
-          {selectedScope && (
-            <div className="budget-add-note">
+      {adding && (
+        <FormDialog title="New budget" onClose={() => onAddingChange(false)}>
+          {/* stack-form alone: budget-add-form is the three-column row this used to be laid out
+              as inline, and inside a dialog it put the fields shoulder to shoulder. */}
+          <form className="stack-form" onSubmit={onAdd}>
+            <label>
+              SubType
+              <select
+                autoFocus
+                value={subKey}
+                onChange={(event) => onSubKeyChange(event.target.value)}
+                disabled={!subScopes.length}
+              >
+                {subScopes.length === 0 && <option value="">No SubTypes available</option>}
+                {subScopes.map((scope) => (
+                  <option key={budgetScopeKey(scope)} value={budgetScopeKey(scope)}>
+                    {budgetSubLabel(scope)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Amount for {formatMonth(plan.month)}
+              <input
+                inputMode="decimal"
+                value={amount}
+                onChange={(event) => onAmountChange(event.target.value)}
+                placeholder="25000"
+              />
+            </label>
+            {selectedScope && (
               <PreviousMonthHints
                 month={plan.previousMonth}
                 budgetPaise={selectedScope.previousBudgetPaise}
                 actualPaise={selectedScope.previousActualPaise}
                 onUse={(paise) => onAmountChange(budgetAmountInput(paise))}
               />
+            )}
+            <div className="loan-form-actions">
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => onAddingChange(false)}
+                disabled={saving}
+              >
+                Cancel
+              </button>
+              <button className="primary-action" type="submit" disabled={saving || !subScopes.length}>
+                <Plus size={17} />
+                Add budget
+              </button>
             </div>
-          )}
-        </form>
-      </CollapsibleForm>
+          </form>
+        </FormDialog>
+      )}
     </>
   );
 }
@@ -4848,198 +5017,237 @@ function BudgetPlannerPage({
 
   return (
     <div className="page-grid budget-page">
-      <Panel
-        title="Monthly Budget"
-        action={
-          <div className="budget-month-picker">
-            <label className="control-field budget-month-control">
-              <span className="control-label">Month</span>
-              <select
-                value={splitMonth(month).month}
-                onChange={(event) => setMonth(monthValue(splitMonth(month).year, Number(event.target.value)))}
-              >
-                {MONTH_CHOICES.map((choice) => (
-                  <option key={choice.value} value={choice.value}>
-                    {choice.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="control-field budget-year-control">
-              <span className="control-label">Year</span>
-              <select
-                value={splitMonth(month).year}
-                onChange={(event) => setMonth(monthValue(Number(event.target.value), splitMonth(month).month))}
-              >
-                {yearChoices(splitMonth(month).year).map((year) => (
-                  <option key={year} value={year}>
-                    {year}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        }
-      >
-        {error ? (
-          <div className="stacked-empty-state">
-            <EmptyState text={error} />
-            <button type="button" className="secondary-action" onClick={() => setRetryKey((key) => key + 1)}>
-              <RotateCcw size={17} />
-              Retry
+      <PageHeader
+        title="Budget Planner"
+        summary={plan ? budgetSummaryLine(plan) : undefined}
+        actions={
+          <>
+            <div className="budget-month-picker">
+              <label className="control-field budget-month-control">
+                <span className="control-label">Month</span>
+                <select
+                  value={splitMonth(month).month}
+                  onChange={(event) => setMonth(monthValue(splitMonth(month).year, Number(event.target.value)))}
+                >
+                  {MONTH_CHOICES.map((choice) => (
+                    <option key={choice.value} value={choice.value}>
+                      {choice.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="control-field budget-year-control">
+                <span className="control-label">Year</span>
+                <select
+                  value={splitMonth(month).year}
+                  onChange={(event) => setMonth(monthValue(Number(event.target.value), splitMonth(month).month))}
+                >
+                  {yearChoices(splitMonth(month).year).map((year) => (
+                    <option key={year} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <button
+              type="button"
+              className="primary-action"
+              onClick={() => setAdding(true)}
+              disabled={!plan || !subScopes.length}
+            >
+              <Plus size={17} />
+              New budget
             </button>
-          </div>
-        ) : !plan ? (
-          <PanelLoader label="Loading budget" />
-        ) : (
-          <BudgetPlanBody
-            plan={plan}
-            saving={saving}
-            subScopes={subScopes}
-            subKey={subKey}
-            selectedScope={selectedScope}
-            amount={amount}
-            adding={adding}
-            onSubKeyChange={setSubKey}
-            onAmountChange={setAmount}
-            onAddingChange={setAdding}
-            onAdd={addBudget}
-            onCopyPreviousMonth={() => void copyPreviousMonth()}
-            onStartEdit={(line) => {
-              setEditingId(line.id);
-              setEditAmount(budgetAmountInput(line.amountPaise));
-            }}
-            onDelete={remove}
-          />
-        )}
-      </Panel>
+          </>
+        }
+      />
+
+      {error ? (
+        <div className="stacked-empty-state">
+          <EmptyState text={error} />
+          <button type="button" className="secondary-action" onClick={() => setRetryKey((key) => key + 1)}>
+            <RotateCcw size={17} />
+            Retry
+          </button>
+        </div>
+      ) : !plan ? (
+        <PanelLoader label="Loading budget" />
+      ) : (
+        <BudgetPlanBody
+          plan={plan}
+          saving={saving}
+          subScopes={subScopes}
+          subKey={subKey}
+          selectedScope={selectedScope}
+          amount={amount}
+          adding={adding}
+          onSubKeyChange={setSubKey}
+          onAmountChange={setAmount}
+          onAddingChange={setAdding}
+          onAdd={addBudget}
+          onCopyPreviousMonth={() => void copyPreviousMonth()}
+          onStartEdit={(line) => {
+            setEditingId(line.id);
+            setEditAmount(budgetAmountInput(line.amountPaise));
+          }}
+        />
+      )}
 
       {editingLine && (
-        <FormDialog title={`Edit ${editingLine.name} budget`} onClose={cancelEdit}>
-          <form
-            className="stack-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void saveEdit(editingLine);
-            }}
-          >
-            <label>
-              Budget for {formatMonth(editingLine.month)}
-              <input
-                autoFocus
-                aria-label={`Budget amount for ${editingLine.name}`}
-                inputMode="decimal"
-                value={editAmount}
-                onChange={(event) => setEditAmount(event.target.value)}
-              />
-            </label>
-            <PreviousMonthHints
-              month={previousMonthOf(editingLine.month)}
-              budgetPaise={editingLine.previousBudgetPaise}
-              actualPaise={editingLine.previousActualPaise}
-              onUse={(paise) => setEditAmount(budgetAmountInput(paise))}
-            />
-            <div className="loan-form-actions">
-              <button type="button" className="secondary-action" onClick={cancelEdit} disabled={saving}>
-                Cancel
-              </button>
-              <button type="submit" className="primary-action" disabled={saving}>
-                <Check size={16} />
-                {saving ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </form>
-        </FormDialog>
+        <BudgetEditDialog
+          line={editingLine}
+          amount={editAmount}
+          saving={saving}
+          onAmountChange={setEditAmount}
+          onSave={() => void saveEdit(editingLine)}
+          /* The editor closes before the question is asked. Stacked on top of the dialog the
+             confirmation could be seen but not pressed -- its button took a mousedown, the
+             dialog's focus trap pulled focus back, and no click ever landed. Driving it is what
+             found that; one modal at a time is the fix and the better thing besides. */
+          onDelete={() => {
+            const target = editingLine;
+            cancelEdit();
+            remove(target);
+          }}
+          onClose={cancelEdit}
+        />
       )}
     </div>
   );
 }
 
-
-function BudgetLineCard({
+/**
+ * One budget, as the reference draws it: everything on the face, nothing behind a disclosure.
+ *
+ * The bar carries two things -- how much of the budget has gone, and how much of the month has.
+ * A fill short of the marker is a line running under; a fill past it is one running ahead.
+ */
+export function BudgetLineCard({
   line,
-  onStartEdit,
-  onDelete
+  elapsedPercent,
+  daysLeft,
+  onStartEdit
 }: {
   line: BudgetLine;
+  elapsedPercent: number;
+  daysLeft: number;
   onStartEdit: () => void;
-  onDelete: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const progress = Math.min(line.usedPercent, 100);
+  const filled = Math.min(Math.max(line.usedPercent, 0), 100);
+  const over = line.remainingPaise < 0;
   return (
-    <article className={`budget-line-card ${line.status}`}>
-      <div className="budget-line-header">
-        <div className="loan-title">
-          <span className="loan-icon" style={{ background: `${line.color}18`, color: line.color }}>
-            <IconGlyph name={line.icon} size={20} />
-          </span>
-          <div>
-            <strong>{line.name}</strong>
-            <span>{line.scopeType === "type" ? "Type budget" : "SubType budget"}</span>
-          </div>
+    <article className={`budget-card ${line.status}`}>
+      <div className="budget-card-head">
+        <span className="budget-card-icon" style={{ background: `${line.color}22`, color: line.color }}>
+          <IconGlyph name={line.icon} size={19} />
+        </span>
+        <div className="budget-card-name">
+          <strong title={line.name}>{budgetCardName(line)}</strong>
+          <span>{formatINR(line.amountPaise)} a month</span>
         </div>
-        <div className="loan-header-actions">
-          <span className={`budget-status ${line.status}`}>{line.statusLabel}</span>
-          <button
-            type="button"
-            className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
-            aria-label={expanded ? `Collapse ${line.name}` : `Expand ${line.name}`}
-            aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            <ChevronDown size={18} />
-          </button>
-        </div>
+        <span className={`status-pill ${line.status}`} title={line.statusLabel}>
+          <i aria-hidden="true" />
+          {budgetPillWord(line.status)}
+        </span>
       </div>
 
-      <p className="budget-last-month">
-        {line.previousActualPaise > 0 ? (
-          <>
-            Last month: <strong>{formatINR(line.previousActualPaise)}</strong>
-            {line.amountPaise > 0 && (
-              <span className={gainToneClass(line.previousActualPaise - line.amountPaise)}>
-                {line.amountPaise > line.previousActualPaise
-                  ? ` (planning ${formatINR(line.amountPaise - line.previousActualPaise)} more)`
-                  : line.amountPaise < line.previousActualPaise
-                    ? ` (planning ${formatINR(line.previousActualPaise - line.amountPaise)} less)`
-                    : " (same as planned)"}
-              </span>
-            )}
-          </>
-        ) : (
-          <>Nothing spent here last month</>
-        )}
+      <p className="budget-card-figure">
+        <strong>{formatINRWhole(Math.abs(line.remainingPaise))}</strong>
+        <span>{over ? "over" : "left"}</span>
       </p>
 
-      <div className="budget-progress">
-        <div>
-          <span>{line.usedPercent}% used</span>
-          <strong>{formatINR(line.actualPaise)} / {formatINR(line.amountPaise)}</strong>
-        </div>
-        <div className="budget-progress-bar" aria-label={`${line.name} budget usage`}>
-          <span className={line.status} style={{ width: `${progress}%` }} />
-        </div>
+      <div
+        className="budget-bar"
+        role="img"
+        aria-label={`${line.name}: ${formatINR(line.actualPaise)} of ${formatINR(line.amountPaise)} spent, ${elapsedPercent}% of the month gone`}
+      >
+        <span className={`budget-bar-fill ${line.status}`} style={{ width: `${filled}%` }} />
+        {/* Where the month has got to. A month that has not started has nothing to mark. */}
+        {elapsedPercent > 0 && (
+          <span className="budget-bar-marker" style={{ left: `${Math.min(elapsedPercent, 100)}%` }} />
+        )}
       </div>
 
-      {expanded && <>
-      <div className="budget-line-metrics">
-        <Metric label="Remaining" value={formatINR(line.remainingPaise)} warning={line.remainingPaise < 0} />
-        <Metric label="Projection" value={formatINR(line.projectedPaise)} warning={line.projectedPaise > line.amountPaise} />
+      <div className="budget-card-foot">
+        <span>{formatINR(line.actualPaise)} spent</span>
+        <span>{budgetCardRate(line, daysLeft)}</span>
       </div>
 
-      <div className="budget-line-actions">
-        <button type="button" className="secondary-action" onClick={onStartEdit}>
-          <Pencil size={16} />
-          Edit
-        </button>
-        <button type="button" className="secondary-action danger-action" onClick={onDelete}>
-          <Trash2 size={16} />
-          Remove
-        </button>
-      </div>
-      </>}
+      <button type="button" className="budget-card-edit" onClick={onStartEdit}>
+        <Pencil size={15} />
+        Edit
+      </button>
     </article>
+  );
+}
+
+/**
+ * Editing one budget, and the only place it can be removed from.
+ *
+ * Remove used to sit on the card beside Edit. The reference's card carries one action, so it
+ * moved in here -- where the amount it would throw away is on screen, which is a better place to
+ * ask the question from than a row of cards.
+ */
+export function BudgetEditDialog({
+  line,
+  amount,
+  saving,
+  onAmountChange,
+  onSave,
+  onDelete,
+  onClose
+}: {
+  line: BudgetLine;
+  amount: string;
+  saving: boolean;
+  onAmountChange: (value: string) => void;
+  onSave: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <FormDialog title={`Edit ${line.name} budget`} onClose={onClose}>
+      <form
+        className="stack-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave();
+        }}
+      >
+        <label>
+          Budget for {formatMonth(line.month)}
+          <input
+            autoFocus
+            aria-label={`Budget amount for ${line.name}`}
+            inputMode="decimal"
+            value={amount}
+            onChange={(event) => onAmountChange(event.target.value)}
+          />
+        </label>
+        <PreviousMonthHints
+          month={previousMonthOf(line.month)}
+          budgetPaise={line.previousBudgetPaise}
+          actualPaise={line.previousActualPaise}
+          onUse={(paise) => onAmountChange(budgetAmountInput(paise))}
+        />
+        <div className="budget-dialog-actions">
+          <button type="button" className="secondary-action danger-action" onClick={onDelete} disabled={saving}>
+            <Trash2 size={16} />
+            Remove
+          </button>
+          <div className="budget-dialog-close">
+            <button type="button" className="secondary-action" onClick={onClose} disabled={saving}>
+              Cancel
+            </button>
+            <button type="submit" className="primary-action" disabled={saving}>
+              <Check size={16} />
+              {saving ? "Saving..." : "Save"}
+            </button>
+          </div>
+        </div>
+      </form>
+    </FormDialog>
   );
 }
 
@@ -5062,6 +5270,271 @@ function budgetSummaryTone(plan: BudgetPlan): "neutral" | "warning" | "good" {
   return plan.lines.length > 0 ? "good" : "neutral";
 }
 
+/**
+ * One account, on the budget card's pattern: everything on the face, nothing behind a disclosure.
+ *
+ * The bar belongs to a credit card alone. Its utilisation has a natural nought-to-a-hundred and
+ * the owner's own alert to mark on it, the way a budget's bar marks how far through the month it
+ * is. A bank balance has no such scale, and drawing one would be a picture rather than a reading.
+ */
+export function AccountCard({
+  account,
+  alertPercent,
+  onStartEdit
+}: {
+  account: Account;
+  alertPercent: number;
+  onStartEdit: () => void;
+}) {
+  const isCard = account.type === "credit_card";
+  const standing = accountStanding(account, alertPercent);
+  const limit = account.creditLimitPaise ?? 0;
+  const usage = cardUsagePercent(account);
+  const available = account.availableLimitPaise ?? Math.max(limit - account.outstandingPaise, 0);
+  const minimum = account.minimumBalancePaise ?? 0;
+  const split = outstandingSplit(account.spendOutstandingPaise, account.emiOutstandingPaise);
+
+  const headline = isCard ? Math.max(account.outstandingPaise, 0) : account.balancePaise;
+  const headlineWord = isCard ? "owed" : "available";
+  const under = isCard
+    ? limit > 0
+      ? `${formatINR(limit)} limit${account.paymentDueDay ? ` · due on the ${account.paymentDueDay}th` : ""}`
+      : accountTypeLabel(account.type)
+    : accountTypeLabel(account.type);
+
+  return (
+    <article className={`budget-card account-card-v2 ${standing?.tone ?? "plain"}`}>
+      <div className="budget-card-head">
+        <span className={`budget-card-icon account-icon ${accountIconTone(account.type)}`}>
+          {accountIconForType(account.type, 19)}
+        </span>
+        <div className="budget-card-name">
+          <strong title={account.name}>{account.name}</strong>
+          <span>{under}</span>
+        </div>
+        {standing && (
+          <span className={`status-pill ${standing.tone === "over" ? "over" : standing.tone}`} title={standing.detail}>
+            <i aria-hidden="true" />
+            {standing.word}
+          </span>
+        )}
+      </div>
+
+      <p className="budget-card-figure">
+        <strong>{formatINRWhole(headline)}</strong>
+        <span>{headlineWord}</span>
+      </p>
+
+      {isCard && limit > 0 && (
+        <div
+          className="budget-bar"
+          role="img"
+          aria-label={`${account.name}: ${usage}% of its ${formatINR(limit)} limit used, your alert is at ${alertPercent}%`}
+        >
+          <span
+            className={`budget-bar-fill ${standing?.tone === "over" ? "over" : standing?.tone === "watch" ? "watch" : "safe"}`}
+            style={{ width: `${Math.min(usage, 100)}%` }}
+          />
+          {/* Where the owner asked to be warned, not a figure chosen here. */}
+          <span className="budget-bar-marker" style={{ left: `${Math.min(alertPercent, 100)}%` }} />
+        </div>
+      )}
+
+      {/* The second reading the owner asked for: what is owed, cut into this cycle's own
+          spending and the EMIs still running. accounts-30 put this in the edit dialog; it
+          belongs on the card, where the first reading already is. */}
+      {isCard && split.show && (
+        <>
+          <div
+            className="budget-bar outstanding-bar"
+            role="img"
+            aria-label={`${account.name}: of ${formatINR(split.totalPaise)} owed, ${split.spendPercent}% is this cycle's spending and ${split.emiPercent}% is EMIs`}
+          >
+            <span className="outstanding-bar-spend" style={{ width: `${split.spendPercent}%` }} />
+            <span className="outstanding-bar-emi" style={{ width: `${split.emiPercent}%` }} />
+          </div>
+          <p className="outstanding-split-legend">
+            <span className="spend">
+              <i aria-hidden="true" />
+              Monthly {split.spendPercent}% · {formatINRWhole(split.spendPaise)}
+            </span>
+            <span className="emi">
+              <i aria-hidden="true" />
+              EMIs {split.emiPercent}% · {formatINRWhole(split.emiPaise)}
+            </span>
+          </p>
+        </>
+      )}
+
+      <div className="budget-card-foot">
+        {isCard ? (
+          <>
+            <span>{limit > 0 ? `${usage}% of ${formatINRWhole(limit)}` : "No limit set"}</span>
+            <span>{limit > 0 ? `${formatINRWhole(available)} left` : "Set one to see utilisation"}</span>
+          </>
+        ) : (
+          <>
+            <span>Opened at {formatINRWhole(account.startingBalancePaise)}</span>
+            <span>{minimum > 0 ? `${formatINRWhole(minimum)} minimum` : "No minimum set"}</span>
+          </>
+        )}
+      </div>
+
+      <button type="button" className="budget-card-edit" onClick={onStartEdit}>
+        <Pencil size={15} />
+        Edit
+      </button>
+    </article>
+  );
+}
+
+/**
+ * The accounts, in the two groups the owner asked for.
+ *
+ * A heading with nothing under it is a heading about nothing, so a group with no accounts is not
+ * returned at all. Every live account belongs to exactly one of the two: a credit card is a card,
+ * and everything else -- a bank, a food card -- is held rather than borrowed.
+ */
+export function accountGroups(accounts: Account[]): Array<{ key: "bank" | "card"; title: string; accounts: Account[] }> {
+  const live = liveAccounts(accounts);
+  const groups: Array<{ key: "bank" | "card"; title: string; accounts: Account[] }> = [
+    { key: "bank", title: "Bank accounts", accounts: live.filter((account) => account.type !== "credit_card") },
+    { key: "card", title: "Cards", accounts: live.filter((account) => account.type === "credit_card") }
+  ];
+  return groups.filter((group) => group.accounts.length > 0);
+}
+
+/** The accounts that count: archived ones are out of the tracker and out of every figure here. */
+export function liveAccounts(accounts: Account[]): Account[] {
+  return accounts.filter((account) => !account.isArchived);
+}
+
+/**
+ * The four figures the page opens with.
+ *
+ * `cardDebtPaise` takes `max(outstanding, 0)` for each card: a card carrying a credit balance
+ * owes nothing, and counting it as a negative debt would quietly add that credit to what you are
+ * worth. That is the rule fixes-23 established against the real database.
+ */
+export function accountTotals(accounts: Account[]) {
+  const live = liveAccounts(accounts);
+  const cards = live.filter((account) => account.type === "credit_card");
+  const cashPaise = live
+    .filter((account) => account.type === "bank" || account.type === "food_card")
+    .reduce((sum, account) => sum + account.balancePaise, 0);
+  const cardDebtPaise = cards.reduce((sum, account) => sum + Math.max(account.outstandingPaise, 0), 0);
+  const limitPaise = cards.reduce((sum, account) => sum + (account.creditLimitPaise ?? 0), 0);
+  const availableCreditPaise = cards.reduce(
+    (sum, account) => sum + (account.availableLimitPaise ?? Math.max((account.creditLimitPaise ?? 0) - account.outstandingPaise, 0)),
+    0
+  );
+  return {
+    cashPaise,
+    cardDebtPaise,
+    limitPaise,
+    availableCreditPaise,
+    netPaise: cashPaise - cardDebtPaise,
+    cashCount: live.filter((account) => account.type === "bank" || account.type === "food_card").length,
+    cardCount: cards.length
+  };
+}
+
+/** How much of its limit a card is using, as a whole percent. A card with no limit uses none. */
+export function cardUsagePercent(account: Account): number {
+  const limit = account.creditLimitPaise ?? 0;
+  if (limit <= 0) {
+    return 0;
+  }
+  return Math.round((Math.max(account.outstandingPaise, 0) / limit) * 100);
+}
+
+/**
+ * Where an account stands, or null when it stands against nothing.
+ *
+ * A card is measured against the alert the owner set in Profile; a bank against the minimum
+ * balance they set on it. An account with neither has no status, and gets no pill -- a badge
+ * that reads "Healthy" whatever the figures is decoration.
+ */
+export function accountStanding(
+  account: Account,
+  alertPercent: number
+): { tone: "safe" | "watch" | "over"; word: string; detail: string } | null {
+  if (account.type === "credit_card") {
+    const limit = account.creditLimitPaise ?? 0;
+    if (limit <= 0) {
+      return null;
+    }
+    const usage = cardUsagePercent(account);
+    if (usage > alertPercent) {
+      return { tone: "over", word: "Over alert", detail: `${usage}% of the limit, past your ${alertPercent}%` };
+    }
+    if (usage >= alertPercent - 10) {
+      return { tone: "watch", word: "Close", detail: `${usage}% of the limit, near your ${alertPercent}%` };
+    }
+    return { tone: "safe", word: "Healthy", detail: `${usage}% of the limit` };
+  }
+  const minimum = account.minimumBalancePaise ?? 0;
+  if (minimum <= 0) {
+    return null;
+  }
+  if (account.balancePaise < minimum) {
+    return { tone: "over", word: "Below minimum", detail: `under the ${formatINR(minimum)} you set` };
+  }
+  if (account.balancePaise < Math.round(minimum * 1.1)) {
+    return { tone: "watch", word: "Close", detail: `near the ${formatINR(minimum)} you set` };
+  }
+  return { tone: "safe", word: "Healthy", detail: `above the ${formatINR(minimum)} you set` };
+}
+
+/** The note under each of the four tiles, worked out from the accounts rather than written in. */
+export function accountTileNotes(accounts: Account[], alertPercent: number) {
+  const totals = accountTotals(accounts);
+  const usedPercent = totals.limitPaise > 0 ? Math.round((totals.cardDebtPaise / totals.limitPaise) * 100) : 0;
+  const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  return {
+    cash: totals.cashCount === 0 ? "no accounts yet" : `across ${plural(totals.cashCount, "account", "accounts")}`,
+    cardDebt:
+      totals.cardCount === 0
+        ? "no cards yet"
+        : totals.limitPaise > 0
+          ? `${usedPercent}% of your ${formatINRWhole(totals.limitPaise)} limit`
+          : `on ${plural(totals.cardCount, "card", "cards")}, no limit set`,
+    availableCredit:
+      totals.cardCount === 0 ? "no cards yet" : `left of ${formatINRWhole(totals.limitPaise)}`,
+    net: totals.cardDebtPaise === 0 ? "nothing owed on cards" : "cash less what the cards owe"
+  };
+}
+
+/** The line under the title: what is held, what is owed, and anything asking for attention. */
+export function accountSummaryLine(accounts: Account[], alertPercent: number): string {
+  const live = liveAccounts(accounts);
+  if (live.length === 0) {
+    return "No accounts or cards yet. Add one to start tracking.";
+  }
+  const totals = accountTotals(accounts);
+  const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  const held =
+    totals.cardCount === 0
+      ? `${plural(totals.cashCount, "account", "accounts")}.`
+      : totals.cashCount === 0
+        ? `${plural(totals.cardCount, "card", "cards")}.`
+        : `${plural(totals.cashCount, "account", "accounts")} and ${plural(totals.cardCount, "card", "cards")}.`;
+  const money =
+    totals.cardDebtPaise === 0
+      ? `${formatINRWhole(totals.cashPaise)} in cash, nothing owed.`
+      : `${formatINRWhole(totals.cashPaise)} in cash, ${formatINRWhole(totals.cardDebtPaise)} owed.`;
+  const flagged = live.filter((account) => accountStanding(account, alertPercent)?.tone === "over").length;
+  const archived = accounts.length - live.length;
+  const parts = [held, money];
+  if (flagged > 0) {
+    parts.push(flagged === 1 ? "One needs a look." : `${flagged} need a look.`);
+  }
+  if (archived > 0) {
+    parts.push(`${plural(archived, "archived", "archived")}.`);
+  }
+  return parts.join(" ");
+}
+
 function AccountsPage({
   accounts,
   cardAlertPercent,
@@ -5076,11 +5549,23 @@ function AccountsPage({
   requestConfirm: (request: ConfirmRequest) => void;
 }) {
   const [adding, setAdding] = useState(false);
-  const activeAccounts = accounts.filter((account) => !account.isArchived);
+  const [editingId, setEditingId] = useState("");
+  const activeAccounts = liveAccounts(accounts);
+  const editingAccount = activeAccounts.find((account) => account.id === editingId) ?? null;
   const cardSegments = cardUtilisationSegments(activeAccounts);
   const cardOutstandingPaise = cardSegments.reduce((sum, segment) => sum + segment.amountPaise, 0);
+  const groups = accountGroups(accounts);
+  const addCard = (
+    <button type="button" className="budget-add-card" onClick={() => setAdding(true)}>
+      <Plus size={20} />
+      <strong>Add an account</strong>
+      <span>A bank, a card, a food card</span>
+    </button>
+  );
+  const notes = accountTileNotes(accounts, cardAlertPercent);
+  const totals = accountTotals(accounts);
 
-  async function remove(account: Account) {
+  function remove(account: Account) {
     requestConfirm({
       message: "Are you sure you want to delete this?",
       detail: `${account.name} will disappear from the app. Existing transaction history is preserved when history is linked to this account.`,
@@ -5099,56 +5584,124 @@ function AccountsPage({
   }
 
   return (
-    <div className="page-grid">
-      <div className="two-column accounts-page">
-      <Panel title="Accounts & cards">
-        {activeAccounts.length === 0 ? (
-          <EmptyState text="No active accounts or cards. Add one to keep tracking." />
-        ) : (
-          <div className="account-stack">
-            {activeAccounts.map((account) => (
-              <AccountManagerLine
+    <div className="page-grid accounts-page">
+      <PageHeader
+        title="Accounts"
+        summary={accountSummaryLine(accounts, cardAlertPercent)}
+        actions={
+          <button type="button" className="primary-action" onClick={() => setAdding(true)}>
+            <Plus size={17} />
+            New account
+          </button>
+        }
+      />
+
+      <div className="summary-grid budget-tiles">
+        <SummaryCard
+          label="Cash"
+          value={formatINRWhole(totals.cashPaise)}
+          countPaise={totals.cashPaise}
+          icon={<Landmark />}
+          note={<small>{notes.cash}</small>}
+        />
+        <SummaryCard
+          label="Card debt"
+          value={formatINRWhole(totals.cardDebtPaise)}
+          countPaise={totals.cardDebtPaise}
+          icon={<CreditCard />}
+          tone={totals.cardDebtPaise > 0 ? "warning" : "neutral"}
+          note={<small>{notes.cardDebt}</small>}
+        />
+        <SummaryCard
+          label="Available credit"
+          value={formatINRWhole(totals.availableCreditPaise)}
+          countPaise={totals.availableCreditPaise}
+          icon={<WalletCards />}
+          tone="good"
+          note={<small>{notes.availableCredit}</small>}
+        />
+        <SummaryCard
+          label="Net"
+          value={formatINRWhole(totals.netPaise)}
+          countPaise={totals.netPaise}
+          icon={<TrendingUp />}
+          tone={totals.netPaise < 0 ? "warning" : "neutral"}
+          note={<small>{notes.net}</small>}
+        />
+      </div>
+
+      {/* Grouped, and three across rather than the budget page's four -- an account's card
+          carries two bars and a legend where a budget's carries one bar. */}
+      {groups.map((group, index) => (
+        <section className="account-group" key={group.key}>
+          <h2 className="account-group-title">{group.title}</h2>
+          <div className="budget-grid accounts-grid">
+            {group.accounts.map((account) => (
+              <AccountCard
                 key={account.id}
                 account={account}
                 alertPercent={cardAlertPercent}
-                onRemove={remove}
-                onSaved={async (message) => {
-                  await refresh();
-                  showNotice(message);
-                }}
-                onError={showNotice}
+                onStartEdit={() => setEditingId(account.id)}
               />
             ))}
+            {/* The way to add goes in the last group's own grid. On its own it took a whole row
+                for one cell and pushed everything under it -- the card utilisation among them --
+                off the first screen. */}
+            {index === groups.length - 1 && addCard}
           </div>
-        )}
-        <p className="helper-text">
-          Deleting an unused account removes it permanently. Accounts with linked transactions are hidden so reports keep their history.
-        </p>
-      </Panel>
+        </section>
+      ))}
 
+      {groups.length === 0 && <div className="budget-grid accounts-grid">{addCard}</div>}
 
-      <Panel title="Card utilisation">
-        <MixChart
-          segments={cardSegments}
-          totalPaise={cardOutstandingPaise}
-          ariaLabel="Credit card utilisation"
-          centerLabel="Card debt"
-          centerValue={formatINRWhole(cardOutstandingPaise)}
-          className="overview-donut-chart"
-          emptyText="No credit card owes anything right now."
-        />
-      </Panel>
-      </div>
+      {/* Kept from before: the same card debt cut by card. The budget page has no second panel,
+          but dropping a view the owner already has to tighten a resemblance is the wrong trade. */}
+      {cardOutstandingPaise > 0 && (
+        <Panel title="Card utilisation">
+          <MixChart
+            segments={cardSegments}
+            totalPaise={cardOutstandingPaise}
+            ariaLabel="Credit card utilisation"
+            centerLabel="Card debt"
+            centerValue={formatINRWhole(cardOutstandingPaise)}
+            className="overview-donut-chart"
+            emptyText="No credit card owes anything right now."
+          />
+        </Panel>
+      )}
 
-      <CollapsibleForm title="Add account" open={adding} onToggle={setAdding}>
-        <AccountForm
-          onCreated={async () => {
-            setAdding(false);
+      {adding && (
+        <FormDialog title="New account" onClose={() => setAdding(false)}>
+          <AccountForm
+            onCreated={async () => {
+              setAdding(false);
+              await refresh();
+              showNotice("Account added.");
+            }}
+          />
+        </FormDialog>
+      )}
+
+      {editingAccount && (
+        <AccountEditDialog
+          account={editingAccount}
+          onClose={() => setEditingId("")}
+          onSaved={async (message) => {
+            setEditingId("");
             await refresh();
-            showNotice("Account added.");
+            showNotice(message);
+          }}
+          onError={showNotice}
+          /* The editor closes before the question is asked. Stacked on the dialog a confirmation
+             can be seen and not pressed -- the dialog's focus trap eats the click, which
+             budgets-29 found by driving it. One modal at a time. */
+          onDelete={() => {
+            const target = editingAccount;
+            setEditingId("");
+            remove(target);
           }}
         />
-      </CollapsibleForm>
+      )}
     </div>
   );
 }
@@ -8137,67 +8690,6 @@ function FaqItem({ question, answer }: { question: string; answer: string }) {
   );
 }
 
-function CardLimitSummary({ account, alertPercent }: { account: Account; alertPercent: number }) {
-  const limit = account.creditLimitPaise ?? 0;
-  const outstanding = account.outstandingPaise;
-  const available = account.availableLimitPaise ?? Math.max(limit - outstanding, 0);
-  const usage = creditUtilization(account);
-  const highUsage = usage > alertPercent;
-  const split = outstandingSplit(account.spendOutstandingPaise, account.emiOutstandingPaise);
-
-  return (
-    <div className="card-limit-summary">
-      <div className="card-utilization-row">
-        <span>Utilization</span>
-        <strong className={highUsage ? "utilization-danger" : ""}>{usage}%</strong>
-      </div>
-      <div className="card-limit-meter">
-        <span className={highUsage ? "danger" : ""} style={{ width: `${usage}%` }} />
-      </div>
-      {/* The same outstanding again, cut a different way: how much of what is owed is this
-          cycle's own spending and how much is EMIs still running. A second bar rather than a line
-          of text, so the two readings of the card can be compared at a glance -- and both the
-          widths and the legend read the one pair of percentages, so they cannot disagree. */}
-      {split.show && (
-        <>
-          <div className="card-utilization-row">
-            <span>Outstanding</span>
-            <strong>100%</strong>
-          </div>
-          <div className="card-limit-meter split">
-            <span className="spend" style={{ width: `${split.spendPercent}%` }} />
-            <span className="emi" style={{ width: `${split.emiPercent}%` }} />
-          </div>
-          <div className="outstanding-legend">
-            <span className="spend">
-              <i />
-              Monthly utilization {split.spendPercent}% · {formatINR(split.spendPaise)}
-            </span>
-            <span className="emi">
-              <i />
-              EMIs {split.emiPercent}% · {formatINR(split.emiPaise)}
-            </span>
-          </div>
-        </>
-      )}
-      <div className="card-limit-grid">
-        <div>
-          <span>Total Amount</span>
-          <strong>{formatINR(limit)}</strong>
-        </div>
-        <div className={highUsage ? "danger" : "warning"}>
-          <span>Outstanding</span>
-          <strong>{formatINR(outstanding)}</strong>
-        </div>
-        <div className="good">
-          <span>Available</span>
-          <strong>{formatINR(available)}</strong>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function AccountImpactCard({ account, transactions }: { account: Account; transactions: Transaction[] }) {
   const impact = accountImpact(account, transactions);
   const tone = impact.amountPaise === 0 ? "flat" : impact.isGood ? "positive" : "negative";
@@ -8738,50 +9230,51 @@ export function ProfilePage({
   );
 }
 
-function AccountManagerLine({
+/**
+ * Editing one account, and the only place it can be deleted from.
+ *
+ * Delete used to sit on the card beside Edit, behind a disclosure. The budget card carries one
+ * action, so it moved in here -- where the name and the figures it would take away are already
+ * on screen, which is a better place to ask the question from than a row of cards.
+ */
+export function AccountEditDialog({
   account,
-  alertPercent,
-  onRemove,
+  onClose,
   onSaved,
-  onError
+  onError,
+  onDelete
 }: {
   account: Account;
-  alertPercent: number;
-  onRemove?: (account: Account) => void;
-  onSaved?: (message: string) => Promise<void>;
-  onError?: (message: string) => void;
+  onClose: () => void;
+  onSaved: (message: string) => Promise<void> | void;
+  onError: (message: string) => void;
+  onDelete: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [editing, setEditing] = useState(false);
+  const isCard = account.type === "credit_card";
   const [saving, setSaving] = useState(false);
-  const [draft, setDraft] = useState({ name: "", opening: "", limit: "", dueDay: "" });
-
-  function startEdit() {
-    setDraft({
-      name: account.name,
-      opening: amountInputFromPaise(account.startingBalancePaise),
-      limit: account.creditLimitPaise === null ? "" : amountInputFromPaise(account.creditLimitPaise),
-      dueDay: account.paymentDueDay ? String(account.paymentDueDay) : ""
-    });
-    setEditing(true);
-  }
+  const [draft, setDraft] = useState(() => ({
+    name: account.name,
+    opening: amountInputFromPaise(account.startingBalancePaise),
+    limit: account.creditLimitPaise === null ? "" : amountInputFromPaise(account.creditLimitPaise),
+    dueDay: account.paymentDueDay ? String(account.paymentDueDay) : ""
+  }));
 
   async function save(event: FormEvent) {
     event.preventDefault();
     const openingPaise = parseAmountToPaise(draft.opening || "0");
-    const limitPaise = isCardAccount ? parseAmountToPaise(draft.limit || "0") : undefined;
+    const limitPaise = isCard ? parseAmountToPaise(draft.limit || "0") : undefined;
     if (draft.name.trim().length < 2) {
-      onError?.("Give the account a name of at least 2 characters.");
+      onError("Give the account a name of at least 2 characters.");
       return;
     }
     if (openingPaise < 0 || (limitPaise !== undefined && limitPaise < 0)) {
-      onError?.("Amounts can't be negative.");
+      onError("Amounts can't be negative.");
       return;
     }
     const typedDueDay = draft.dueDay.trim();
     const dueDay = typedDueDay ? Number.parseInt(typedDueDay, 10) : null;
     if (typedDueDay && (!Number.isInteger(dueDay) || dueDay! < 1 || dueDay! > 31)) {
-      onError?.("Payment due day must be a day of the month, 1 to 31.");
+      onError("Payment due day must be a day of the month, 1 to 31.");
       return;
     }
     setSaving(true);
@@ -8792,133 +9285,82 @@ function AccountManagerLine({
         ...(limitPaise !== undefined ? { creditLimitPaise: limitPaise, paymentDueDay: dueDay } : {})
       });
       const shift = openingPaise - account.startingBalancePaise;
-      setEditing(false);
-      await onSaved?.(
+      await onSaved(
         shift === 0
           ? "Account updated."
-          : `Account updated. ${isCardAccount ? "Outstanding" : "Balance"} moved by ${signedImpact(shift)}.`
+          : `Account updated. ${isCard ? "Outstanding" : "Balance"} moved by ${signedImpact(shift)}.`
       );
     } catch (err) {
-      onError?.(err instanceof Error ? err.message : "Could not update the account.");
+      onError(err instanceof Error ? err.message : "Could not update the account.");
     } finally {
       setSaving(false);
     }
   }
 
-  const isCardAccount = account.type === "credit_card";
-  const isCard = account.type === "credit_card";
-  const primaryValue = isCard ? account.outstandingPaise : account.balancePaise;
-  const primaryLabel = isCard ? "Outstanding" : "Balance";
-  // The mirror of the card's utilisation alert: a balance that has fallen under the figure the
-  // person set. Cards are excluded -- their number is what is owed, where small is good -- and a
-  // minimum of zero means the alert is off rather than meaning every account qualifies.
-  const minimumBalancePaise = account.minimumBalancePaise ?? 0;
-  const belowMinimum =
-    !isCard && !account.isArchived && minimumBalancePaise > 0 && account.balancePaise < minimumBalancePaise;
-
   return (
-    <article className={`loan-card account-card ${account.isArchived ? "archived" : ""}`}>
-      <div className="loan-card-header">
-        <div className="loan-title">
-          <span className={`account-icon ${accountIconTone(account.type)}`}>
-            {accountIconForType(account.type, 20)}
-          </span>
-          <div>
-            <strong>{account.name}</strong>
-            <span>{accountTypeLabel(account.type)}</span>
-          </div>
-        </div>
-        <div className="loan-header-actions">
-          <div className="account-card-primary">
-            <strong className={belowMinimum ? "below-minimum" : undefined}>{formatINR(primaryValue)}</strong>
-            <span>{belowMinimum ? `Below ${formatINR(minimumBalancePaise)}` : primaryLabel}</span>
-          </div>
-          <button
-            type="button"
-            className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
-            aria-label={expanded ? `Collapse ${account.name}` : `Expand ${account.name}`}
-            aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            <ChevronDown size={18} />
-          </button>
-        </div>
-      </div>
-
-      {expanded && <>
-        {isCard && <CardLimitSummary account={account} alertPercent={alertPercent} />}
-        <div className="account-actions">
-          <button type="button" className="secondary-action" onClick={startEdit}>
-            <Pencil size={16} />
-            Edit
-          </button>
-          <button className="secondary-action danger-action" onClick={() => onRemove?.(account)}>
+    <FormDialog title={`Edit ${account.name}`} onClose={onClose}>
+      <form className="stack-form account-edit-form" onSubmit={save}>
+        <label>
+          Name
+          <input autoFocus value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+        </label>
+        <label>
+          {isCard ? "Opening outstanding" : "Opening balance"}
+          <input
+            inputMode="decimal"
+            value={draft.opening}
+            onChange={(event) => setDraft({ ...draft, opening: event.target.value })}
+          />
+          <small className="field-hint">
+            {isCard
+              ? "What you owed on this card before your first transaction here. Change it to match your statement."
+              : "The balance before your first transaction here. Change it if the app doesn't match your bank."}
+          </small>
+        </label>
+        {isCard && (
+          <>
+            <label>
+              Credit limit
+              <input
+                inputMode="decimal"
+                value={draft.limit}
+                onChange={(event) => setDraft({ ...draft, limit: event.target.value })}
+              />
+            </label>
+            <label>
+              Payment due day
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={31}
+                value={draft.dueDay}
+                onChange={(event) => setDraft({ ...draft, dueDay: event.target.value })}
+                placeholder="18"
+              />
+              <small className="field-hint">
+                The day the bill is due each month. Leave it blank for no reminder.
+              </small>
+            </label>
+          </>
+        )}
+        <div className="budget-dialog-actions">
+          <button type="button" className="secondary-action danger-action" onClick={onDelete} disabled={saving}>
             <Trash2 size={16} />
             Delete
           </button>
+          <div className="budget-dialog-close">
+            <button type="button" className="secondary-action" onClick={onClose} disabled={saving}>
+              Cancel
+            </button>
+            <button type="submit" className="primary-action" disabled={saving}>
+              <Check size={16} />
+              {saving ? "Saving..." : "Save"}
+            </button>
+          </div>
         </div>
-      </>}
-
-      {editing && (
-        <FormDialog title={`Edit ${account.name}`} onClose={() => setEditing(false)}>
-          <form className="stack-form account-edit-form" onSubmit={save}>
-            <label>
-              Name
-              <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-            </label>
-            <label>
-              {isCard ? "Opening outstanding" : "Opening balance"}
-              <input
-                inputMode="decimal"
-                value={draft.opening}
-                onChange={(event) => setDraft({ ...draft, opening: event.target.value })}
-              />
-              <small className="field-hint">
-                {isCard
-                  ? "What you owed on this card before your first transaction here. Change it to match your statement."
-                  : "The balance before your first transaction here. Change it if the app doesn't match your bank."}
-              </small>
-            </label>
-            {isCard && (
-              <>
-                <label>
-                  Credit limit
-                  <input
-                    inputMode="decimal"
-                    value={draft.limit}
-                    onChange={(event) => setDraft({ ...draft, limit: event.target.value })}
-                  />
-                </label>
-                <label>
-                  Payment due day
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    max={31}
-                    value={draft.dueDay}
-                    onChange={(event) => setDraft({ ...draft, dueDay: event.target.value })}
-                    placeholder="18"
-                  />
-                  <small className="field-hint">
-                    The day the bill is due each month. Leave it blank for no reminder.
-                  </small>
-                </label>
-              </>
-            )}
-            <div className="loan-form-actions">
-              <button type="button" className="secondary-action" onClick={() => setEditing(false)} disabled={saving}>
-                Cancel
-              </button>
-              <button type="submit" className="primary-action" disabled={saving}>
-                <Check size={16} />
-                {saving ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </form>
-        </FormDialog>
-      )}
-    </article>
+      </form>
+    </FormDialog>
   );
 }
 
