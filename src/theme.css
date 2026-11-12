@@ -3048,7 +3048,7 @@ button.budget-hint-chip:focus-visible {
    the theme: white on the dark mint, near-black on the light one. */
 :root[data-skin="simple"] .nav-item.active,
 :root[data-skin="simple"] .mobile-nav button.active {
-  background: var(--accent);
+  background-color: var(--accent);
   color: var(--on-accent);
 }
 
@@ -3107,7 +3107,22 @@ button.budget-hint-chip:focus-visible {
 :root[data-skin="simple"][data-theme="dark"] input,
 :root[data-skin="simple"][data-theme="dark"] select,
 :root[data-skin="simple"][data-theme="dark"] textarea {
-  background: var(--bg-deep);
+  background-color: var(--bg-deep);
+}
+
+/* A labelled filter field draws its own box and its own chevron, and the control inside it is
+   just the line of text. Giving that control a fill of its own puts a dark pill inside a lighter
+   box: two frames around one value. On the application's old greys the two colours were a couple
+   of points apart and nobody saw it; on the green they are far enough apart to look like a
+   mistake, which it always was. The field keeps the box; the control sits in it. */
+:root[data-skin="simple"] .control-field > input,
+:root[data-skin="simple"] .control-field > select,
+:root[data-skin="simple"] .control-field > textarea,
+:root[data-skin="simple"][data-theme="dark"] .control-field > input,
+:root[data-skin="simple"][data-theme="dark"] .control-field > select,
+:root[data-skin="simple"][data-theme="dark"] .control-field > textarea {
+  background-color: transparent;
+  border-color: transparent;
 }
 
 :root[data-skin="simple"][data-theme="dark"] .panel-action button,
@@ -3117,7 +3132,7 @@ button.budget-hint-chip:focus-visible {
 :root[data-skin="simple"][data-theme="dark"] .category-shortcuts button,
 :root[data-skin="simple"][data-theme="dark"] .inline-editor-header button,
 :root[data-skin="simple"][data-theme="dark"] .control-field {
-  background: var(--panel-soft);
+  background-color: var(--panel-soft);
 }
 
 :root[data-skin="simple"][data-theme="dark"] .ledger-row,
@@ -3125,16 +3140,45 @@ button.budget-hint-chip:focus-visible {
 :root[data-skin="simple"][data-theme="dark"] .transaction-edit-row,
 :root[data-skin="simple"][data-theme="dark"] .taxonomy-subtype-row,
 :root[data-skin="simple"][data-theme="dark"] .transaction-table .table-row:nth-child(odd) {
-  background: var(--panel-soft);
+  background-color: var(--panel-soft);
 }
 
 :root[data-skin="simple"][data-theme="dark"] .transaction-table .table-row:nth-child(even) {
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  background-color: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
 :root[data-skin="simple"][data-theme="dark"] .summary-card,
 :root[data-skin="simple"][data-theme="dark"] .panel,
 :root[data-skin="simple"][data-theme="dark"] .sidebar,
 :root[data-skin="simple"][data-theme="dark"] .mobile-nav {
-  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  background-color: color-mix(in srgb, var(--panel) 96%, transparent);
+}
+
+/* A field and a button were coming out identical in the skin -- same fill, same 1px line -- so
+   Apply sat in a row of filter fields looking like a fifth one. The edge is what separates them:
+   a control you type into keeps the quiet line, a control you press takes the stronger one. */
+:root[data-skin="simple"][data-theme="dark"] .panel-action button,
+:root[data-skin="simple"][data-theme="dark"] .toolbar button,
+:root[data-skin="simple"][data-theme="dark"] .secondary-action,
+:root[data-skin="simple"][data-theme="dark"] .icon-button,
+:root[data-skin="simple"][data-theme="dark"] .category-shortcuts button,
+:root[data-skin="simple"][data-theme="dark"] .inline-editor-header button {
+  border-color: var(--line-strong);
+}
+
+:root[data-skin="simple"][data-theme="dark"] .panel-action button:hover,
+:root[data-skin="simple"][data-theme="dark"] .toolbar button:hover,
+:root[data-skin="simple"][data-theme="dark"] .secondary-action:hover,
+:root[data-skin="simple"][data-theme="dark"] .icon-button:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong));
+  background-color: var(--accent-soft);
+}
+
+/* The primary action's drop shadow is tinted with the accent. On the ink blue that reads as
+   weight; on a mint this luminous it reads as a halo bleeding into the panel. Kept, quieter. */
+:root[data-skin="simple"] .primary-action,
+:root[data-skin="simple"] .profile-save-button {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 4px 10px -8px color-mix(in srgb, var(--accent) 45%, transparent);
 }
