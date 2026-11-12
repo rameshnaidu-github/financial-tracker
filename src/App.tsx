@@ -2403,6 +2403,14 @@ function WeeklyEntryPage({
                 <button
                   key={category.id}
                   className={weeklyCategoryFilterId === category.id ? "active" : ""}
+                  /* The badge is a mark and a colour; the chip has no words of its own, so the
+                     name has to be said here or the control is nameless to anyone not looking. */
+                  aria-label={
+                    weeklyCategoryFilterId === category.id
+                      ? `Stop filtering by ${category.name}`
+                      : `Filter by ${category.name}`
+                  }
+                  aria-pressed={weeklyCategoryFilterId === category.id}
                   onClick={() =>
                     setWeeklyCategoryFilterId((current) => (current === category.id ? "" : category.id))
                   }
@@ -5284,6 +5292,7 @@ export function AccountCard({
   const usage = cardUsagePercent(account);
   const available = account.availableLimitPaise ?? Math.max(limit - account.outstandingPaise, 0);
   const minimum = account.minimumBalancePaise ?? 0;
+  const split = outstandingSplit(account.spendOutstandingPaise, account.emiOutstandingPaise);
 
   const headline = isCard ? Math.max(account.outstandingPaise, 0) : account.balancePaise;
   const headlineWord = isCard ? "owed" : "available";
@@ -5331,6 +5340,32 @@ export function AccountCard({
         </div>
       )}
 
+      {/* The second reading the owner asked for: what is owed, cut into this cycle's own
+          spending and the EMIs still running. accounts-30 put this in the edit dialog; it
+          belongs on the card, where the first reading already is. */}
+      {isCard && split.show && (
+        <>
+          <div
+            className="budget-bar outstanding-bar"
+            role="img"
+            aria-label={`${account.name}: of ${formatINR(split.totalPaise)} owed, ${split.spendPercent}% is this cycle's spending and ${split.emiPercent}% is EMIs`}
+          >
+            <span className="outstanding-bar-spend" style={{ width: `${split.spendPercent}%` }} />
+            <span className="outstanding-bar-emi" style={{ width: `${split.emiPercent}%` }} />
+          </div>
+          <p className="outstanding-split-legend">
+            <span className="spend">
+              <i aria-hidden="true" />
+              Monthly {split.spendPercent}% · {formatINRWhole(split.spendPaise)}
+            </span>
+            <span className="emi">
+              <i aria-hidden="true" />
+              EMIs {split.emiPercent}% · {formatINRWhole(split.emiPaise)}
+            </span>
+          </p>
+        </>
+      )}
+
       <div className="budget-card-foot">
         {isCard ? (
           <>
@@ -5351,6 +5386,22 @@ export function AccountCard({
       </button>
     </article>
   );
+}
+
+/**
+ * The accounts, in the two groups the owner asked for.
+ *
+ * A heading with nothing under it is a heading about nothing, so a group with no accounts is not
+ * returned at all. Every live account belongs to exactly one of the two: a credit card is a card,
+ * and everything else -- a bank, a food card -- is held rather than borrowed.
+ */
+export function accountGroups(accounts: Account[]): Array<{ key: "bank" | "card"; title: string; accounts: Account[] }> {
+  const live = liveAccounts(accounts);
+  const groups: Array<{ key: "bank" | "card"; title: string; accounts: Account[] }> = [
+    { key: "bank", title: "Bank accounts", accounts: live.filter((account) => account.type !== "credit_card") },
+    { key: "card", title: "Cards", accounts: live.filter((account) => account.type === "credit_card") }
+  ];
+  return groups.filter((group) => group.accounts.length > 0);
 }
 
 /** The accounts that count: archived ones are out of the tracker and out of every figure here. */
@@ -5503,6 +5554,14 @@ function AccountsPage({
   const editingAccount = activeAccounts.find((account) => account.id === editingId) ?? null;
   const cardSegments = cardUtilisationSegments(activeAccounts);
   const cardOutstandingPaise = cardSegments.reduce((sum, segment) => sum + segment.amountPaise, 0);
+  const groups = accountGroups(accounts);
+  const addCard = (
+    <button type="button" className="budget-add-card" onClick={() => setAdding(true)}>
+      <Plus size={20} />
+      <strong>Add an account</strong>
+      <span>A bank, a card, a food card</span>
+    </button>
+  );
   const notes = accountTileNotes(accounts, cardAlertPercent);
   const totals = accountTotals(accounts);
 
@@ -5571,21 +5630,29 @@ function AccountsPage({
         />
       </div>
 
-      <div className="budget-grid">
-        {activeAccounts.map((account) => (
-          <AccountCard
-            key={account.id}
-            account={account}
-            alertPercent={cardAlertPercent}
-            onStartEdit={() => setEditingId(account.id)}
-          />
-        ))}
-        <button type="button" className="budget-add-card" onClick={() => setAdding(true)}>
-          <Plus size={20} />
-          <strong>Add an account</strong>
-          <span>A bank, a card, a food card</span>
-        </button>
-      </div>
+      {/* Grouped, and three across rather than the budget page's four -- an account's card
+          carries two bars and a legend where a budget's carries one bar. */}
+      {groups.map((group, index) => (
+        <section className="account-group" key={group.key}>
+          <h2 className="account-group-title">{group.title}</h2>
+          <div className="budget-grid accounts-grid">
+            {group.accounts.map((account) => (
+              <AccountCard
+                key={account.id}
+                account={account}
+                alertPercent={cardAlertPercent}
+                onStartEdit={() => setEditingId(account.id)}
+              />
+            ))}
+            {/* The way to add goes in the last group's own grid. On its own it took a whole row
+                for one cell and pushed everything under it -- the card utilisation among them --
+                off the first screen. */}
+            {index === groups.length - 1 && addCard}
+          </div>
+        </section>
+      ))}
+
+      {groups.length === 0 && <div className="budget-grid accounts-grid">{addCard}</div>}
 
       {/* Kept from before: the same card debt cut by card. The budget page has no second panel,
           but dropping a view the owner already has to tighten a resemblance is the wrong trade. */}
@@ -5628,7 +5695,6 @@ function AccountsPage({
           /* The editor closes before the question is asked. Stacked on the dialog a confirmation
              can be seen and not pressed -- the dialog's focus trap eats the click, which
              budgets-29 found by driving it. One modal at a time. */
-          alertPercent={cardAlertPercent}
           onDelete={() => {
             const target = editingAccount;
             setEditingId("");
@@ -8624,67 +8690,6 @@ function FaqItem({ question, answer }: { question: string; answer: string }) {
   );
 }
 
-function CardLimitSummary({ account, alertPercent }: { account: Account; alertPercent: number }) {
-  const limit = account.creditLimitPaise ?? 0;
-  const outstanding = account.outstandingPaise;
-  const available = account.availableLimitPaise ?? Math.max(limit - outstanding, 0);
-  const usage = creditUtilization(account);
-  const highUsage = usage > alertPercent;
-  const split = outstandingSplit(account.spendOutstandingPaise, account.emiOutstandingPaise);
-
-  return (
-    <div className="card-limit-summary">
-      <div className="card-utilization-row">
-        <span>Utilization</span>
-        <strong className={highUsage ? "utilization-danger" : ""}>{usage}%</strong>
-      </div>
-      <div className="card-limit-meter">
-        <span className={highUsage ? "danger" : ""} style={{ width: `${usage}%` }} />
-      </div>
-      {/* The same outstanding again, cut a different way: how much of what is owed is this
-          cycle's own spending and how much is EMIs still running. A second bar rather than a line
-          of text, so the two readings of the card can be compared at a glance -- and both the
-          widths and the legend read the one pair of percentages, so they cannot disagree. */}
-      {split.show && (
-        <>
-          <div className="card-utilization-row">
-            <span>Outstanding</span>
-            <strong>100%</strong>
-          </div>
-          <div className="card-limit-meter split">
-            <span className="spend" style={{ width: `${split.spendPercent}%` }} />
-            <span className="emi" style={{ width: `${split.emiPercent}%` }} />
-          </div>
-          <div className="outstanding-legend">
-            <span className="spend">
-              <i />
-              Monthly utilization {split.spendPercent}% · {formatINR(split.spendPaise)}
-            </span>
-            <span className="emi">
-              <i />
-              EMIs {split.emiPercent}% · {formatINR(split.emiPaise)}
-            </span>
-          </div>
-        </>
-      )}
-      <div className="card-limit-grid">
-        <div>
-          <span>Total Amount</span>
-          <strong>{formatINR(limit)}</strong>
-        </div>
-        <div className={highUsage ? "danger" : "warning"}>
-          <span>Outstanding</span>
-          <strong>{formatINR(outstanding)}</strong>
-        </div>
-        <div className="good">
-          <span>Available</span>
-          <strong>{formatINR(available)}</strong>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function AccountImpactCard({ account, transactions }: { account: Account; transactions: Transaction[] }) {
   const impact = accountImpact(account, transactions);
   const tone = impact.amountPaise === 0 ? "flat" : impact.isGood ? "positive" : "negative";
@@ -9234,7 +9239,6 @@ export function ProfilePage({
  */
 export function AccountEditDialog({
   account,
-  alertPercent,
   onClose,
   onSaved,
   onError,
@@ -9245,8 +9249,6 @@ export function AccountEditDialog({
   onSaved: (message: string) => Promise<void> | void;
   onError: (message: string) => void;
   onDelete: () => void;
-  /** Only to show the card's own reading above the fields; nothing here changes it. */
-  alertPercent: number;
 }) {
   const isCard = account.type === "credit_card";
   const [saving, setSaving] = useState(false);
@@ -9298,11 +9300,6 @@ export function AccountEditDialog({
   return (
     <FormDialog title={`Edit ${account.name}`} onClose={onClose}>
       <form className="stack-form account-edit-form" onSubmit={save}>
-        {/* A card's own reading: how much of the limit is used, and how much of what is owed is
-            this cycle's spending against EMIs still running. It used to be behind a disclosure on
-            the card, and the card now carries one action; this is where it goes rather than
-            nowhere. */}
-        {isCard && <CardLimitSummary account={account} alertPercent={alertPercent} />}
         <label>
           Name
           <input autoFocus value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />

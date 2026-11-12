@@ -188,7 +188,8 @@ a {
     color 160ms ease;
 }
 
-.nav-item.active,
+/* Hover only. The current page's pill is filled with the accent, declared in theme.css; sharing
+   this rule with it meant the hover state and the current state were the same thing. */
 .nav-item:hover {
   background: var(--accent-soft);
   color: var(--accent-strong);

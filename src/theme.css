@@ -238,22 +238,20 @@ p {
   color: var(--text);
 }
 
+/* The filled pill is declared once, further down with the rest of the shell. What was here --
+   a panel-coloured pill, and a hardcoded #1a2130 behind it in the dark -- out-specified it at
+   (0,3,0), so the current page came out near-black text on a navy block, about 1.3:1 and hard to
+   pick out of the sidebar at all. The weight stays; the colour belongs to the one rule. */
 .nav-item.active {
-  background: var(--panel);
-  color: var(--text);
   font-weight: 620;
-  box-shadow: 0 0 0 1px var(--bezel-core-ring), 0 6px 14px -10px rgba(34, 48, 92, 0.45);
-}
-
-:root[data-theme="dark"] .nav-item.active {
-  background: #1a2130;
 }
 
 .nav-item.active .ui-icon {
-  color: var(--accent);
+  color: inherit;
 }
 
-/* Current page marker. */
+/* Current page marker. The pill itself is the accent now, so the bar beside it takes the
+   colour that sits on the accent -- an accent bar on an accent pill is an invisible bar. */
 .nav-item.active::before {
   content: "";
   position: absolute;
@@ -262,7 +260,7 @@ p {
   width: 3px;
   height: 18px;
   border-radius: 0 4px 4px 0;
-  background: var(--accent);
+  background: var(--accent-strong);
   transform: translateY(-50%);
 }
 
@@ -3410,4 +3408,100 @@ button.budget-hint-chip:focus-visible {
 
 .budget-tiles .summary-card:first-child {
   background-image: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 62%);
+}
+
+/* ---------- Accounts: three across, two groups, and a card that reads itself ---------- */
+/*
+ * Three rather than the budget page's four: an account's card carries two bars and a legend
+ * where a budget's carries one bar, and four of those at a quarter of the page was a column of
+ * slivers. The shared .budget-grid still means four; .accounts-grid is what narrows it.
+ */
+.budget-grid.accounts-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.account-group + .account-group {
+  margin-top: var(--space-5);
+}
+
+.account-group-title {
+  margin: 0 0 var(--space-3);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* What is owed, cut two ways. Two segments side by side rather than one over the other, so the
+   pair reads as a whole that adds to what is owed. */
+.budget-bar.outstanding-bar {
+  display: flex;
+  margin-top: -2px;
+}
+
+.outstanding-bar-spend,
+.outstanding-bar-emi {
+  height: 100%;
+  transition: width var(--dur-slow) var(--ease-out);
+}
+
+.outstanding-bar-spend {
+  background-color: var(--accent);
+}
+
+.outstanding-bar-emi {
+  background-color: var(--warning);
+}
+
+.outstanding-split-legend {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.71rem;
+}
+
+.outstanding-split-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.outstanding-split-legend i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.outstanding-split-legend .spend i {
+  background-color: var(--accent);
+}
+
+.outstanding-split-legend .emi i {
+  background-color: var(--warning);
+}
+
+@media (max-width: 1240px) {
+  .budget-grid.accounts-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .budget-grid.accounts-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .outstanding-bar-spend,
+  .outstanding-bar-emi {
+    transition: none;
+  }
 }
