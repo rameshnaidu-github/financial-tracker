@@ -287,21 +287,6 @@ p {
   letter-spacing: -0.035em;
 }
 
-/* Eyebrow: a small tag above the heading, not a shouted all-caps line. */
-.eyebrow {
-  display: inline-flex;
-  align-items: center;
-  margin: 0 0 10px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  padding: 3px 10px;
-  font-size: 0.66rem;
-  font-weight: 600;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
 /* ---------- Surfaces: double bezel ---------- */
 .panel,
 .summary-card {
@@ -726,8 +711,6 @@ textarea:focus {
 .ledger-row,
 .donut-legend-row,
 .budget-grid > *,
-.metric-list > *,
-.impact-stack > *,
 .taxonomy-tree > * {
   animation: rise-row var(--dur-slow) var(--ease-out) both;
 }
@@ -746,8 +729,6 @@ textarea:focus {
 .ledger-row:nth-child(1),
 .donut-legend-row:nth-child(1),
 .budget-grid > *:nth-child(1),
-.metric-list > *:nth-child(1),
-.impact-stack > *:nth-child(1),
 .taxonomy-tree > *:nth-child(1) {
   animation-delay: 0ms;
 }
@@ -755,8 +736,6 @@ textarea:focus {
 .ledger-row:nth-child(2),
 .donut-legend-row:nth-child(2),
 .budget-grid > *:nth-child(2),
-.metric-list > *:nth-child(2),
-.impact-stack > *:nth-child(2),
 .taxonomy-tree > *:nth-child(2) {
   animation-delay: 35ms;
 }
@@ -764,8 +743,6 @@ textarea:focus {
 .ledger-row:nth-child(3),
 .donut-legend-row:nth-child(3),
 .budget-grid > *:nth-child(3),
-.metric-list > *:nth-child(3),
-.impact-stack > *:nth-child(3),
 .taxonomy-tree > *:nth-child(3) {
   animation-delay: 70ms;
 }
@@ -773,8 +750,6 @@ textarea:focus {
 .ledger-row:nth-child(4),
 .donut-legend-row:nth-child(4),
 .budget-grid > *:nth-child(4),
-.metric-list > *:nth-child(4),
-.impact-stack > *:nth-child(4),
 .taxonomy-tree > *:nth-child(4) {
   animation-delay: 105ms;
 }
@@ -782,8 +757,6 @@ textarea:focus {
 .ledger-row:nth-child(5),
 .donut-legend-row:nth-child(5),
 .budget-grid > *:nth-child(5),
-.metric-list > *:nth-child(5),
-.impact-stack > *:nth-child(5),
 .taxonomy-tree > *:nth-child(5) {
   animation-delay: 140ms;
 }
@@ -791,8 +764,6 @@ textarea:focus {
 .ledger-row:nth-child(6),
 .donut-legend-row:nth-child(6),
 .budget-grid > *:nth-child(6),
-.metric-list > *:nth-child(6),
-.impact-stack > *:nth-child(6),
 .taxonomy-tree > *:nth-child(6) {
   animation-delay: 175ms;
 }
@@ -800,7 +771,6 @@ textarea:focus {
 .ledger-row:nth-child(7),
 .donut-legend-row:nth-child(7),
 .budget-grid > *:nth-child(7),
-.metric-list > *:nth-child(7),
 .taxonomy-tree > *:nth-child(7) {
   animation-delay: 210ms;
 }
@@ -808,7 +778,6 @@ textarea:focus {
 .ledger-row:nth-child(8),
 .donut-legend-row:nth-child(8),
 .budget-grid > *:nth-child(8),
-.metric-list > *:nth-child(8),
 .taxonomy-tree > *:nth-child(8) {
   animation-delay: 245ms;
 }
@@ -841,8 +810,6 @@ textarea:focus {
 .ledger-row:nth-child(n + 13),
 .donut-legend-row:nth-child(n + 9),
 .budget-grid > *:nth-child(n + 13),
-.metric-list > *:nth-child(n + 9),
-.impact-stack > *:nth-child(n + 7),
 .taxonomy-tree > *:nth-child(n + 13) {
   animation: none;
 }
@@ -1004,19 +971,6 @@ textarea:focus {
 .primary-action,
 .secondary-action {
   white-space: nowrap;
-}
-
-.impact-values strong {
-  white-space: nowrap;
-}
-
-.impact-card {
-  border-radius: 14px;
-}
-
-.account-line {
-  border-color: var(--line);
-  border-radius: 14px;
 }
 
 .attention-banner > button {
@@ -1528,7 +1482,6 @@ select:not([multiple]):not([size]) {
 }
 
 /* State change: a panel, card or inline form that opens slides its content in. */
-.collapsible-content,
 .refund-form,
 .account-edit-form,
 .transaction-edit-row,
@@ -1555,7 +1508,6 @@ select:not([multiple]):not([size]) {
 /* Proportion: bars grow from zero to their share. */
 .bar-track > div,
 .budget-pace-track > span:not(.expected),
-.budget-progress-bar > span,
 .loan-progress-bar > span,
 .vacation-breakdown-bar > span,
 .vacation-budget-bar > span {
@@ -1688,7 +1640,6 @@ select:not([multiple]):not([size]) {
 .summary-card > div {
   min-width: 0;
 }
-
 
 /* Card headers: the title block shrinks and its detail line wraps instead of pushing the card wider. */
 .loan-card-header > *,
@@ -2356,7 +2307,7 @@ body::before {
 }
 
 /* Profile Save shares the primary look: dark label on the light accent in dark mode (white was ~2.4:1). */
-.profile-menu .profile-save-button:not(.blurred):hover {
+.profile-menu .profile-save-button:hover {
   background: var(--accent-strong);
 }
 
@@ -3289,9 +3240,7 @@ button.budget-hint-chip:focus-visible {
 :root[data-theme="dark"] .panel-action button,
 :root[data-theme="dark"] .toolbar button,
 :root[data-theme="dark"] .secondary-action,
-:root[data-theme="dark"] .icon-button,
-:root[data-theme="dark"] .category-shortcuts button,
-:root[data-theme="dark"] .inline-editor-header button {
+:root[data-theme="dark"] .icon-button {
   border-color: var(--line-strong);
 }
 

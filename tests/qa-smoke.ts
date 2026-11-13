@@ -3030,27 +3030,6 @@ test("budget projection uses the typical rest of month from recent history", asy
   assert(line?.status !== "critical" && line?.status !== "over", "Rent paid in full should not raise an alarm.");
 });
 
-test("weekly account impact shows the real direction of a card's outstanding", async () => {
-  const { accountImpact } = await import("../src/account-impact.ts");
-  const card = { id: "card", type: "credit_card", creditLimitPaise: 2_00_000_00, balancePaise: 0 } as never;
-  const bank = { id: "bank", type: "bank", creditLimitPaise: null, balancePaise: 2_16_800_00 } as never;
-  const txns = [
-    { accountId: "card", direction: "outflow", kind: "expense", amountPaise: 4_100_00 },
-    { accountId: "bank", direction: "outflow", kind: "card_payment", transferAccountId: "card", amountPaise: 21_000_00 },
-    { accountId: "bank", direction: "outflow", kind: "expense", amountPaise: 3_000_00 },
-    { accountId: "bank", direction: "outflow", kind: "expense", amountPaise: 750_00 }
-  ] as never[];
-  const cardImpact = accountImpact(card, txns);
-  assert(cardImpact.amountPaise === 4_100_00 - 21_000_00, `Card outstanding should fall by 16,900, got ${cardImpact.amountPaise}.`);
-  assert(cardImpact.isGood && cardImpact.label === "Outstanding movement", "Paying down a card is good news.");
-  assert(cardImpact.percentLabel === "8.5% of limit", `Card movement is measured against the limit: ${cardImpact.percentLabel}`);
-  const bankImpact = accountImpact(bank, txns);
-  const moved = -(21_000_00 + 3_000_00 + 750_00);
-  assert(bankImpact.amountPaise === moved && !bankImpact.isGood, "Bank balance should fall by the week's outflows.");
-  const expected = `${Math.round((-moved / (2_16_800_00 - moved)) * 1000) / 10}% of balance`;
-  assert(bankImpact.percentLabel === expected, `Bank movement compares with the balance before it: ${bankImpact.percentLabel}`);
-});
-
 test("the spending mix leaves investments out and reports them as invested", async () => {
   assert(state.bankId, "Bank should exist.");
   const base = { accountId: state.bankId, method: "upi" as const, direction: "outflow" as const };
