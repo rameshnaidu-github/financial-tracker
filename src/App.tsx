@@ -68,7 +68,6 @@ import {
 } from "./format";
 import { IconGlyph } from "./icons";
 import { WHATS_NEW, hasUnreadNews, newestNewsDate, type NewsEntry } from "./whats-new";
-import { accountImpact } from "./account-impact";
 import { flushSync } from "react-dom";
 import { prefersReducedMotion, useCountUp, useScrollReveal } from "./motion";
 import { cashflowPartsFromTypes, INFLOW_BEHAVIORS, type CashflowPart } from "./report-cashflow";
@@ -124,7 +123,7 @@ import {
 // System Type that ties a refund to the purchase it came from (see shared/finance.ts).
 const REFUND_TYPE_ID = "type_refund";
 
-type Page = "overview" | "weekly" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "cardEmis" | "vacations" | "subscriptions" | "categories" | "whatsNew" | "faq" | "profile";
+type Page = "overview" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "cardEmis" | "vacations" | "subscriptions" | "categories" | "whatsNew" | "faq" | "profile";
 type Theme = "light" | "dark";
 type DonutSegment = {
   id: string;
@@ -157,7 +156,6 @@ type NavGroup = "Daily" | "Plan" | "Own & owe" | "Setup";
 // Grouped by how often people reach for them: everyday entry first, setup last.
 const navItems: Array<{ page: Page; label: string; icon: typeof Home; group?: NavGroup }> = [
   { page: "overview", label: "Overview", icon: Home, group: "Daily" },
-  { page: "weekly", label: "Weekly Entry", icon: CalendarDays, group: "Daily" },
   { page: "transactions", label: "Transactions", icon: ArrowDownUp, group: "Daily" },
   { page: "reports", label: "Reports", icon: BarChart3, group: "Daily" },
   { page: "budgets", label: "Budget Planner", icon: Target, group: "Plan" },
@@ -345,10 +343,16 @@ export function MobileNav({
 }
 
 /**
- * Page changes cross-fade through the View Transitions API where the browser has it. Without it,
+ * Page changes animate through the View Transitions API where the browser has it. Without it,
  * or when the person asks for less motion, the page simply swaps.
+ *
+ * `direction` says which way the navigation went down the sidebar, so the outgoing page leaves
+ * the way the incoming one arrives: go further down the list and the new page rises from below,
+ * go back up and it drops from above. A cross-fade alone said a page had changed; this says
+ * which way you moved. The attribute is read by the ::view-transition rules in theme.css and is
+ * cleared when the transition finishes, so a swap with no direction still cross-fades.
  */
-function withPageTransition(update: () => void) {
+function withPageTransition(update: () => void, direction: "forward" | "back" | "none" = "none") {
   const doc = document as Document & {
     startViewTransition?: (callback: () => void) => {
       finished?: Promise<void>;
@@ -361,7 +365,14 @@ function withPageTransition(update: () => void) {
     update();
     return;
   }
+  if (direction !== "none") {
+    document.documentElement.dataset.pageDirection = direction;
+  }
   const transition = doc.startViewTransition(() => flushSync(update));
+  const clearDirection = () => {
+    delete document.documentElement.dataset.pageDirection;
+  };
+  transition?.finished?.then(clearDirection, clearDirection);
   // An interrupted or skipped transition rejects all three of these. The page has already changed
   // by then, so none of them is an error worth surfacing; leaving any uncaught logs to the console.
   transition?.finished?.catch(() => {});
@@ -373,7 +384,22 @@ const NAV_GROUPS: NavGroup[] = ["Daily", "Plan", "Own & owe", "Setup"];
 
 /* Pages that draw their own header. The shell prints the page's name in the top bar for every
    other one; these say it in their own body instead, and must not be told twice. */
-const PAGES_WITH_OWN_HEADER: Page[] = ["budgets", "accounts"];
+/*
+ * Pages that draw their own header -- a title on the left and the way to add on the right -- so
+ * the shell's topbar does not name them a second time. Every section that can add something is
+ * on this list now; the inline fold-out form each of them used to lead with is gone.
+ */
+const PAGES_WITH_OWN_HEADER: Page[] = [
+  "budgets",
+  "accounts",
+  "transactions",
+  "loans",
+  "cardEmis",
+  "investments",
+  "vacations",
+  "subscriptions",
+  "categories"
+];
 const THEME_KEY = "finance-theme";
 const INTRO_ON_LAUNCH_KEY = "finance-intro-on-launch";
 
@@ -405,7 +431,7 @@ function shouldPlayIntroOnLaunch(): boolean {
 }
 
 // The phone bar keeps the four daily destinations; everything else lives under "More".
-const MOBILE_PRIMARY_PAGES: Page[] = ["overview", "weekly", "transactions", "reports"];
+const MOBILE_PRIMARY_PAGES: Page[] = ["overview", "transactions", "reports"];
 
 /**
  * Simple mode: the five sections the application is cut down to when the switch in Profile is on.
@@ -415,12 +441,11 @@ const MOBILE_PRIMARY_PAGES: Page[] = ["overview", "weekly", "transactions", "rep
  */
 export const SIMPLE_MODE_PAGES: Page[] = ["overview", "transactions", "accounts", "reports", "investments"];
 
-/**
- * Can this page be opened at all in this mode?
- *
- * Weekly Entry is the exception that makes simple mode usable: it is the only screen in the
- * application that creates a transaction, and it is not one of the five, so it stays reachable as
- * the recording form -- through the Record button, not through the navigation.
+/*
+ * Simple mode needs no exception any more. Recording used to live on a Weekly Entry page that was
+ * not one of the five sections, so the mode had to keep it reachable through a Record button.
+ * The form is now a dialog on Transactions, which is one of the five, so the mode is exactly its
+ * list and nothing beside it.
  */
 /**
  * Is simple mode on, according to what the server stored?
@@ -436,7 +461,7 @@ export function pageAllowedIn(page: Page, simpleMode: boolean): boolean {
   if (!simpleMode) {
     return true;
   }
-  return SIMPLE_MODE_PAGES.includes(page) || page === "profile" || page === "weekly";
+  return SIMPLE_MODE_PAGES.includes(page) || page === "profile";
 }
 
 /**
@@ -461,7 +486,6 @@ export function navigationFor(simpleMode: boolean) {
 
 const mobileLabels: Record<Page, string> = {
   overview: "Home",
-  weekly: "Week",
   transactions: "Txns",
   reports: "Reports",
   budgets: "Bdgt",
@@ -484,7 +508,6 @@ export function mobileLabelFor(page: Page): string {
 
 const pagePaths: Record<Page, string> = {
   overview: "/overview",
-  weekly: "/weekly",
   transactions: "/transactions",
   reports: "/reports",
   budgets: "/budgets",
@@ -671,6 +694,13 @@ export default function App() {
   const [activePage, setActivePage] = useState<Page>(() =>
     typeof window === "undefined" ? "overview" : pageFromPath(window.location.pathname)
   );
+  /* Where the page was before this navigation, for working out which way it moved. A ref rather
+     than the state value: `navigate` is a stable callback and must not be rebuilt on every page
+     change, which closing over `activePage` would force. */
+  const activePageRef = useRef(activePage);
+  useEffect(() => {
+    activePageRef.current = activePage;
+  }, [activePage]);
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<{ message: string; action?: NoticeAction } | null>(null);
@@ -749,7 +779,15 @@ export default function App() {
     if (`${window.location.pathname}${window.location.search}` !== target) {
       window.history.pushState({}, "", target);
     }
-    withPageTransition(() => setActivePage(page));
+    /* Which way down the sidebar this went. A page outside the navigation -- the profile, say --
+       has no place in that order, so it gets no direction and cross-fades instead. Read from a
+       ref rather than from state: a state updater must stay free of side effects, and React
+       calls it twice in development to prove it. */
+    const from = navItems.findIndex((item) => item.page === activePageRef.current);
+    const to = navItems.findIndex((item) => item.page === page);
+    const direction = from < 0 || to < 0 || from === to ? "none" : to > from ? "forward" : "back";
+    activePageRef.current = page;
+    withPageTransition(() => setActivePage(page), direction);
   }, []);
 
   useEffect(() => {
@@ -1052,31 +1090,13 @@ export default function App() {
                       canOpen={canOpen}
                     />
         );
-      case "weekly":
-        return (
-        <WeeklyEntryPage
-                      selectedAccountId={selectedAccountId}
-                      accounts={activeAccounts}
-                      loans={loans.filter((loan) => !loan.isArchived)}
-                      cardEmis={cardEmis.filter((emi) => !emi.isArchived)}
-                      subscriptions={subscriptions.filter((subscription) => !subscription.isArchived)}
-                      mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
-                      vacations={vacations.filter((vacation) => !vacation.isArchived)}
-                      categoryTypes={categoryTypes}
-                      refresh={refresh}
-                      refreshKey={refreshKey}
-                      showNotice={showNotice}
-                      onNavigate={navigate}
-                      onAccountSelect={setSelectedAccountId}
-                      canOpen={canOpen}
-                    />
-        );
       case "transactions":
         return (
         <TransactionsPage
                       selectedAccountId={selectedAccountId}
                       accounts={activeAccounts}
                       loans={loans.filter((loan) => !loan.isArchived)}
+                      cardEmis={cardEmis.filter((emi) => !emi.isArchived)}
                       subscriptions={subscriptions}
                       mutualFunds={investments.filter((investment) => investment.type === "mutual_funds")}
                       vacations={vacations.filter((vacation) => !vacation.isArchived)}
@@ -1085,7 +1105,7 @@ export default function App() {
                       refreshKey={refreshKey}
                       showNotice={showNotice}
                       requestConfirm={requestConfirm}
-                      onRecord={simpleMode ? () => navigate("weekly") : undefined}
+                      onAccountSelect={setSelectedAccountId}
                     />
         );
       case "reports":
@@ -1492,13 +1512,20 @@ function OverviewPage({
     });
   }
 
+  /*
+   * The ring divides every slice by `spendingPaise`, which the server sums with each category
+   * floored at zero -- so a category left negative by refunds has to be floored here too, or the
+   * slices would come to less than the whole and the track would show through behind them.
+   */
   const spendingSegments = consolidateDonutSegments(
-    overview.categoryReport.map((category) => ({
-      id: category.subcategoryId ?? category.name,
-      name: category.name,
-      color: category.color,
-      amountPaise: category.amountPaise
-    }))
+    overview.categoryReport
+      .filter((category) => category.amountPaise > 0)
+      .map((category) => ({
+        id: category.subcategoryId ?? category.name,
+        name: category.name,
+        color: category.color,
+        amountPaise: category.amountPaise
+      }))
   );
   const allocationTotal = wealth ? wealth.allocation.reduce((sum, segment) => sum + segment.valuePaise, 0) : 0;
   const cardSegments = cardUtilisationSegments(overview.accounts);
@@ -1596,6 +1623,7 @@ function OverviewPage({
                 ariaLabel="Spending by category"
                 centerLabel="Spent"
                 centerValue={formatINRWhole(overview.summary.spendingPaise)}
+                centerCountPaise={overview.summary.spendingPaise}
                 className="overview-donut-chart"
                 onSegmentClick={(segment) => showMonthTransactions(segment.id)}
               />
@@ -1651,6 +1679,7 @@ function OverviewPage({
                 ariaLabel="Asset allocation"
                 centerLabel="Assets"
                 centerValue={formatINRWhole(allocationTotal)}
+                centerCountPaise={allocationTotal}
                 className="overview-donut-chart"
               />
             ) : (
@@ -1665,6 +1694,7 @@ function OverviewPage({
             ariaLabel="Credit card utilisation"
             centerLabel="Card debt"
             centerValue={formatINRWhole(cardOutstandingPaise)}
+            centerCountPaise={cardOutstandingPaise}
             className="overview-donut-chart"
             emptyText="No credit card owes anything right now."
           />
@@ -1829,7 +1859,20 @@ function BudgetGuardrails({
   );
 }
 
-function WeeklyEntryPage({
+/**
+ * The one form that records a transaction, shown in a dialog from the Transactions page.
+ *
+ * It used to be the top half of a Weekly Entry page that also listed the week, totalled it, and
+ * drew an account-impact panel beside it. The owner asked for that page gone and for recording
+ * to happen from Transactions instead, so the form moved here whole -- every field, every
+ * conditional branch, and the card-EMI settlement it carries -- and the page furniture around it
+ * did not come with it. The Transactions page already lists and filters everything the week
+ * panel used to show.
+ *
+ * `batchId` comes from the page rather than being fetched here: the import dialog needs the same
+ * one, and two fetches of the same week's batch would be two round trips for one answer.
+ */
+function TransactionEntryForm({
   selectedAccountId,
   accounts,
   loans,
@@ -1838,12 +1881,11 @@ function WeeklyEntryPage({
   mutualFunds,
   vacations,
   categoryTypes,
+  batchId,
   refresh,
-  refreshKey,
   showNotice,
-  onNavigate,
-  onAccountSelect,
-  canOpen
+  onDone,
+  onCancel
 }: {
   selectedAccountId: string;
   accounts: Account[];
@@ -1853,27 +1895,19 @@ function WeeklyEntryPage({
   mutualFunds: Investment[];
   vacations: Vacation[];
   categoryTypes: CategoryType[];
+  batchId: string;
   refresh: () => Promise<void>;
-  refreshKey: number;
   showNotice: (message: string) => void;
-  onNavigate: (page: Page) => void;
-  onAccountSelect: (accountId: string) => void;
-  /* Whether a section can be opened at all -- Weekly Entry stays reachable in simple mode as the
-     recording form, but Categories, which it links to, does not. */
-  canOpen: (page: Page) => boolean;
+  /** Closes the dialog once the entry has landed. */
+  onDone: () => void;
+  /** Closes it without recording anything. Separate from onDone so the two read apart. */
+  onCancel: () => void;
 }) {
-  const week = useMemo(() => mondayWeekRange(), []);
   const visibleAccounts = selectedAccountId
     ? accounts.filter((account) => account.id === selectedAccountId)
     : accounts;
   const firstAccount = visibleAccounts[0] ?? accounts[0];
-  const categories = flattenSubcategories(categoryTypes);
   const defaultType = preferredType(categoryTypes, "expense") ?? categoryTypes[0];
-  const [batchId, setBatchId] = useState("");
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [weeklyCategoryFilterId, setWeeklyCategoryFilterId] = useState("");
-  const [importOpen, setImportOpen] = useState(false);
-  const [duplicateCount, setDuplicateCount] = useState(0);
   const [saving, setSaving] = useState(false);
   // Which EMIs on the card being paid this payment covers, and for how much each, keyed by EMI.
   // A key present means ticked, so unticking one forgets its amount rather than keeping a zero.
@@ -1895,21 +1929,6 @@ function WeeklyEntryPage({
     investmentId: "",
     vacationId: ""
   });
-
-  const reloadWeek = useCallback(async () => {
-    const batch = await Api.currentBatch(week.weekStart, week.weekEnd);
-    setBatchId(batch.id);
-    const rows = await Api.transactions({
-      from: week.weekStart,
-      to: week.weekEnd,
-      accountId: selectedAccountId || undefined
-    });
-    setTransactions(rows);
-  }, [selectedAccountId, week.weekEnd, week.weekStart]);
-
-  useEffect(() => {
-    reloadWeek();
-  }, [reloadWeek, refreshKey]);
 
   useEffect(() => {
     if (firstAccount && !visibleAccounts.some((account) => account.id === form.accountId)) {
@@ -1962,22 +1981,6 @@ function WeeklyEntryPage({
     .filter((allocation) => allocation.amountPaise > 0);
   const cardEmiTotalPaise = cardEmiAllocations.reduce((sum, allocation) => sum + allocation.amountPaise, 0);
   const paymentAmountPaise = parseAmountToPaise(form.amount);
-  const expenseTotal = transactions
-    .filter((transaction) => transaction.kind === "expense")
-    .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
-  const emiTotal = transactions
-    .filter((transaction) => transaction.kind === "emi")
-    .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
-  const investmentTotal = transactions
-    .filter((transaction) => transaction.kind === "investment")
-    .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
-  const incomeTotal = transactions
-    .filter((transaction) => transaction.kind === "income")
-    .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
-  const uncategorizedCount = transactions.filter((transaction) => transaction.status === "uncategorized").length;
-  const visibleTransactions = weeklyCategoryFilterId
-    ? transactions.filter((transaction) => transaction.subcategoryId === weeklyCategoryFilterId)
-    : transactions;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -1987,7 +1990,7 @@ function WeeklyEntryPage({
       const behavior = selectedType?.behavior ?? "expense";
       const kind = kindForBehavior(behavior);
       const payload: CreateTransactionPayload = {
-        batchId,
+        batchId: batchId || undefined,
         date: form.date,
         accountId: form.accountId,
         method: selectedAccount?.type === "credit_card" ? "credit_card" : form.method,
@@ -2014,27 +2017,13 @@ function WeeklyEntryPage({
       };
 
       const result = await Api.createTransaction(payload);
-      setDuplicateCount(result.duplicateCandidates.length);
-      setForm((current) => ({
-        ...current,
-        merchant: "",
-        note: "",
-        amount: "",
-        subcategoryId: "",
-        loanId: "",
-        loanPaymentType: "emi",
-        subscriptionId: "",
-        investmentId: ""
-      }));
-      setSettleCardEmis(false);
-      setCardEmiAmounts({});
-      await reloadWeek();
       await refresh();
       showNotice(
         result.duplicateCandidates.length
           ? "Transaction saved. Possible duplicate found."
           : "Transaction added."
       );
+      onDone();
     } catch (err) {
       showNotice(err instanceof Error ? err.message : "Could not save transaction.");
     } finally {
@@ -2043,459 +2032,341 @@ function WeeklyEntryPage({
   }
 
   return (
-    <>
-    <div className="page-grid weekly-grid">
-      <section className="panel entry-panel">
-        <div className="panel-header">
-          <div>
-            <h2>
-              This week <span className="heading-sub">{week.label}</span>
-            </h2>
-          </div>
-          <button className="secondary-action" onClick={() => setImportOpen(true)}>
-            <FileSpreadsheet size={17} />
-            Import transactions
-          </button>
-        </div>
-
-            <form className="entry-form" onSubmit={submit}>
-              <label>
-                Date
-                <input
-                  type="date"
-                  value={form.date}
-                  onChange={(event) => setForm({ ...form, date: event.target.value })}
-                  min={EARLIEST_DATE}
-                  /* A transaction records what happened, so the picker stops at today. */
-                  max={todayISO()}
-                  required
-                />
-              </label>
-              <label>
-                Account
-                <select
-                  value={form.accountId}
-                  onChange={(event) => {
-                    const account = accounts.find((item) => item.id === event.target.value);
-                    setForm({
-                      ...form,
-                      accountId: event.target.value,
-                      method: account?.type === "credit_card" ? "credit_card" : form.method,
-                      transferAccountId:
-                        isSelfTransferSelected && form.transferAccountId === event.target.value
-                          ? ""
-                          : form.transferAccountId
-                    });
-                  }}
-                  required
-                >
-                  {visibleAccounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Type
-                <select
-                  value={form.typeId}
-                  onChange={(event) =>
-                    setForm({
-                      ...form,
-                      typeId: event.target.value,
-                      subcategoryId: "",
-                      transferAccountId: accounts.find((account) => account.type === "credit_card")?.id ?? "",
-                      loanId: "",
-                      loanPaymentType: "emi"
-                    })
-                  }
-                  required
-                >
-                  {categoryTypes.map((type) => (
-                    <option key={type.id} value={type.id}>
-                      {type.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Method
-                <select
-                  value={selectedAccount?.type === "credit_card" ? "credit_card" : form.method}
-                  disabled={selectedAccount?.type === "credit_card"}
-                  onChange={(event) => setForm({ ...form, method: event.target.value as PaymentMethod })}
-                >
-                  <option value="upi">UPI</option>
-                  <option value="credit_card">Credit card</option>
-                  <option value="bank_transfer">Bank transfer</option>
-                  <option value="cash">Cash</option>
-                  <option value="other">Other</option>
-                </select>
-              </label>
-              <label className="wide">
-                Merchant / note
-                <input
-                  value={form.merchant}
-                  onChange={(event) => setForm({ ...form, merchant: event.target.value })}
-                  placeholder="DMart, PVR, unknown..."
-                />
-              </label>
-              <label>
-                SubType
-                {selectedBehavior === "card_payment" ? (
-                  <select
-                    value={form.transferAccountId}
-                    onChange={(event) => setForm({ ...form, transferAccountId: event.target.value })}
-                    required
-                  >
-                    <option value="">Choose card</option>
-                    {cardAccounts.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {account.name}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <select
-                    value={form.subcategoryId}
+    <form className="entry-form" onSubmit={submit}>
+      <label>
+        Date
+        <input
+          type="date"
+          value={form.date}
+          onChange={(event) => setForm({ ...form, date: event.target.value })}
+          min={EARLIEST_DATE}
+          /* A transaction records what happened, so the picker stops at today. */
+          max={todayISO()}
+          required
+        />
+      </label>
+      <label>
+        Account
+        <select
+          value={form.accountId}
+          onChange={(event) => {
+            const account = accounts.find((item) => item.id === event.target.value);
+            setForm({
+              ...form,
+              accountId: event.target.value,
+              method: account?.type === "credit_card" ? "credit_card" : form.method,
+              transferAccountId:
+                isSelfTransferSelected && form.transferAccountId === event.target.value
+                  ? ""
+                  : form.transferAccountId
+            });
+          }}
+          required
+        >
+          {visibleAccounts.map((account) => (
+            <option key={account.id} value={account.id}>
+              {account.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Type
+        <select
+          value={form.typeId}
+          onChange={(event) =>
+            setForm({
+              ...form,
+              typeId: event.target.value,
+              subcategoryId: "",
+              transferAccountId: accounts.find((account) => account.type === "credit_card")?.id ?? "",
+              loanId: "",
+              loanPaymentType: "emi"
+            })
+          }
+          required
+        >
+          {categoryTypes.map((type) => (
+            <option key={type.id} value={type.id}>
+              {type.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Method
+        <select
+          value={selectedAccount?.type === "credit_card" ? "credit_card" : form.method}
+          disabled={selectedAccount?.type === "credit_card"}
+          onChange={(event) => setForm({ ...form, method: event.target.value as PaymentMethod })}
+        >
+          <option value="upi">UPI</option>
+          <option value="credit_card">Credit card</option>
+          <option value="bank_transfer">Bank transfer</option>
+          <option value="cash">Cash</option>
+          <option value="other">Other</option>
+        </select>
+      </label>
+      <label className="wide">
+        Merchant / note
+        <input
+          value={form.merchant}
+          onChange={(event) => setForm({ ...form, merchant: event.target.value })}
+          placeholder="DMart, PVR, unknown..."
+        />
+      </label>
+      <label>
+        SubType
+        {selectedBehavior === "card_payment" ? (
+          <select
+            value={form.transferAccountId}
+            onChange={(event) => setForm({ ...form, transferAccountId: event.target.value })}
+            required
+          >
+            <option value="">Choose card</option>
+            {cardAccounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.name}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <select
+            value={form.subcategoryId}
+            onChange={(event) =>
+              setForm({
+                ...form,
+                subcategoryId: event.target.value,
+                transferAccountId: "",
+                loanId: "",
+                subscriptionId: "",
+                investmentId: ""
+              })
+            }
+          >
+            <option value="">Decide later</option>
+            {availableSubcategories.map((subcategory) => (
+              <option key={subcategory.id} value={subcategory.id}>
+                {subcategory.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </label>
+      {isSelfTransferSelected && (
+        <label>
+          Account
+          <select
+            value={form.transferAccountId}
+            onChange={(event) => setForm({ ...form, transferAccountId: event.target.value })}
+            required
+          >
+            <option value="">Choose account</option>
+            {selfTransferTargets.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {isAutopaySelected && (
+        <label>
+          Subscription
+          <select
+            value={form.subscriptionId}
+            onChange={(event) => setForm({ ...form, subscriptionId: event.target.value })}
+          >
+            <option value="">Not linked yet</option>
+            {subscriptions
+              .filter((subscription) => subscription.status === "active")
+              .map((subscription) => (
+                <option key={subscription.id} value={subscription.id}>
+                  {subscription.name} · {formatINR(subscription.amountPaise)}
+                </option>
+              ))}
+          </select>
+        </label>
+      )}
+      {isMutualFundsSelected && (
+        <label>
+          Mutual fund
+          <select
+            value={form.investmentId}
+            onChange={(event) => setForm({ ...form, investmentId: event.target.value })}
+          >
+            <option value="">Not linked yet</option>
+            {mutualFunds.map((fund) => (
+              <option key={fund.id} value={fund.id}>
+                {fund.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {isExpenseSelected && vacations.length > 0 && (
+        <label className="vacation-check">
+          <input
+            type="checkbox"
+            checked={Boolean(form.vacationId)}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                vacationId: event.target.checked ? current.vacationId || vacations[0].id : ""
+              }))
+            }
+          />
+          <span>Part of a vacation?</span>
+        </label>
+      )}
+      {isExpenseSelected && vacations.length > 0 && form.vacationId && (
+        <label>
+          Vacation
+          <select
+            value={form.vacationId}
+            onChange={(event) => setForm({ ...form, vacationId: event.target.value })}
+          >
+            {vacations.map((vacation) => (
+              <option key={vacation.id} value={vacation.id}>
+                {vacation.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {selectedBehavior === "loan" && (
+        <>
+          <label>
+            Linked loan
+            <select
+              value={form.loanId}
+              onChange={(event) => setForm({ ...form, loanId: event.target.value })}
+              disabled={!form.subcategoryId}
+            >
+              <option value="">Not linked yet</option>
+              {availableLoans.map((loan) => (
+                <option key={loan.id} value={loan.id}>
+                  {loan.name} · {formatINR(loan.outstandingPaise)} outstanding
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Payment type
+            <select
+              value={form.loanPaymentType}
+              onChange={(event) =>
+                setForm({ ...form, loanPaymentType: event.target.value as LoanPaymentType })
+              }
+              disabled={!form.loanId}
+            >
+              <option value="emi">EMI</option>
+              <option value="prepayment">Prepayment</option>
+            </select>
+          </label>
+        </>
+      )}
+      {/* A card EMI is part of the card's bill, not a payment of its own. So the bill asks
+          which of the card's EMIs it covers, and each ticked one is then charged to the
+          card and settled by this payment -- the card's outstanding and the EMI's balance
+          both move, from the one entry. */}
+      {selectedBehavior === "card_payment" && cardEmisForPayment.length > 0 && (
+        <label className="vacation-check wide">
+          <input
+            type="checkbox"
+            checked={settleCardEmis}
+            onChange={(event) => {
+              const on = event.target.checked;
+              setSettleCardEmis(on);
+              // Ticked, every EMI on the card starts at its monthly installment, which is
+              // what a bill normally carries. Each one can then be unticked or changed.
+              setCardEmiAmounts(
+                on
+                  ? Object.fromEntries(
+                      cardEmisForPayment.map((emi) => [emi.id, (emi.monthlyEmiPaise / 100).toFixed(2)])
+                    )
+                  : {}
+              );
+            }}
+          />
+          <span>EMIs on this card part of this payment?</span>
+        </label>
+      )}
+      {selectedBehavior === "card_payment" && settleCardEmis && cardEmisForPayment.length > 0 && (
+        <div className="card-emi-settle wide">
+          {cardEmisForPayment.map((emi) => {
+            const picked = cardEmiAmounts[emi.id] !== undefined;
+            return (
+              <div className="card-emi-settle-row" key={emi.id}>
+                <label className="card-emi-settle-pick">
+                  <input
+                    type="checkbox"
+                    checked={picked}
                     onChange={(event) =>
-                      setForm({
-                        ...form,
-                        subcategoryId: event.target.value,
-                        transferAccountId: "",
-                        loanId: "",
-                        subscriptionId: "",
-                        investmentId: ""
+                      setCardEmiAmounts((current) => {
+                        const next = { ...current };
+                        if (event.target.checked) {
+                          next[emi.id] = (emi.monthlyEmiPaise / 100).toFixed(2);
+                        } else {
+                          delete next[emi.id];
+                        }
+                        return next;
                       })
                     }
-                  >
-                    <option value="">Decide later</option>
-                    {availableSubcategories.map((subcategory) => (
-                      <option key={subcategory.id} value={subcategory.id}>
-                        {subcategory.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </label>
-              {isSelfTransferSelected && (
-                <label>
-                  Account
-                  <select
-                    value={form.transferAccountId}
-                    onChange={(event) => setForm({ ...form, transferAccountId: event.target.value })}
-                    required
-                  >
-                    <option value="">Choose account</option>
-                    {selfTransferTargets.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {account.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {isAutopaySelected && (
-                <label>
-                  Subscription
-                  <select
-                    value={form.subscriptionId}
-                    onChange={(event) => setForm({ ...form, subscriptionId: event.target.value })}
-                  >
-                    <option value="">Not linked yet</option>
-                    {subscriptions
-                      .filter((subscription) => subscription.status === "active")
-                      .map((subscription) => (
-                        <option key={subscription.id} value={subscription.id}>
-                          {subscription.name} · {formatINR(subscription.amountPaise)}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-              )}
-              {isMutualFundsSelected && (
-                <label>
-                  Mutual fund
-                  <select
-                    value={form.investmentId}
-                    onChange={(event) => setForm({ ...form, investmentId: event.target.value })}
-                  >
-                    <option value="">Not linked yet</option>
-                    {mutualFunds.map((fund) => (
-                      <option key={fund.id} value={fund.id}>
-                        {fund.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {isExpenseSelected && vacations.length > 0 && (
-                <label className="vacation-check">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(form.vacationId)}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        vacationId: event.target.checked ? current.vacationId || vacations[0].id : ""
-                      }))
-                    }
                   />
-                  <span>Part of a vacation?</span>
+                  <span>
+                    <strong>{emi.name}</strong>
+                    <small>
+                      {formatINR(emi.monthlyEmiPaise)} a month · {formatINR(emi.outstandingPaise)} left
+                    </small>
+                  </span>
                 </label>
-              )}
-              {isExpenseSelected && vacations.length > 0 && form.vacationId && (
-                <label>
-                  Vacation
-                  <select
-                    value={form.vacationId}
-                    onChange={(event) => setForm({ ...form, vacationId: event.target.value })}
-                  >
-                    {vacations.map((vacation) => (
-                      <option key={vacation.id} value={vacation.id}>
-                        {vacation.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {selectedBehavior === "loan" && (
-                <>
-                  <label>
-                    Linked loan
-                    <select
-                      value={form.loanId}
-                      onChange={(event) => setForm({ ...form, loanId: event.target.value })}
-                      disabled={!form.subcategoryId}
-                    >
-                      <option value="">Not linked yet</option>
-                      {availableLoans.map((loan) => (
-                        <option key={loan.id} value={loan.id}>
-                          {loan.name} · {formatINR(loan.outstandingPaise)} outstanding
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Payment type
-                    <select
-                      value={form.loanPaymentType}
-                      onChange={(event) =>
-                        setForm({ ...form, loanPaymentType: event.target.value as LoanPaymentType })
-                      }
-                      disabled={!form.loanId}
-                    >
-                      <option value="emi">EMI</option>
-                      <option value="prepayment">Prepayment</option>
-                    </select>
-                  </label>
-                </>
-              )}
-              {/* A card EMI is part of the card's bill, not a payment of its own. So the bill asks
-                  which of the card's EMIs it covers, and each ticked one is then charged to the
-                  card and settled by this payment -- the card's outstanding and the EMI's balance
-                  both move, from the one entry. */}
-              {selectedBehavior === "card_payment" && cardEmisForPayment.length > 0 && (
-                <label className="vacation-check wide">
-                  <input
-                    type="checkbox"
-                    checked={settleCardEmis}
-                    onChange={(event) => {
-                      const on = event.target.checked;
-                      setSettleCardEmis(on);
-                      // Ticked, every EMI on the card starts at its monthly installment, which is
-                      // what a bill normally carries. Each one can then be unticked or changed.
-                      setCardEmiAmounts(
-                        on
-                          ? Object.fromEntries(
-                              cardEmisForPayment.map((emi) => [emi.id, (emi.monthlyEmiPaise / 100).toFixed(2)])
-                            )
-                          : {}
-                      );
-                    }}
-                  />
-                  <span>EMIs on this card part of this payment?</span>
-                </label>
-              )}
-              {selectedBehavior === "card_payment" && settleCardEmis && cardEmisForPayment.length > 0 && (
-                <div className="card-emi-settle wide">
-                  {cardEmisForPayment.map((emi) => {
-                    const picked = cardEmiAmounts[emi.id] !== undefined;
-                    return (
-                      <div className="card-emi-settle-row" key={emi.id}>
-                        <label className="card-emi-settle-pick">
-                          <input
-                            type="checkbox"
-                            checked={picked}
-                            onChange={(event) =>
-                              setCardEmiAmounts((current) => {
-                                const next = { ...current };
-                                if (event.target.checked) {
-                                  next[emi.id] = (emi.monthlyEmiPaise / 100).toFixed(2);
-                                } else {
-                                  delete next[emi.id];
-                                }
-                                return next;
-                              })
-                            }
-                          />
-                          <span>
-                            <strong>{emi.name}</strong>
-                            <small>
-                              {formatINR(emi.monthlyEmiPaise)} a month · {formatINR(emi.outstandingPaise)} left
-                            </small>
-                          </span>
-                        </label>
-                        <input
-                          className="card-emi-settle-amount"
-                          value={cardEmiAmounts[emi.id] ?? ""}
-                          onChange={(event) =>
-                            setCardEmiAmounts((current) => ({ ...current, [emi.id]: event.target.value }))
-                          }
-                          placeholder="₹0"
-                          inputMode="decimal"
-                          disabled={!picked}
-                          aria-label={`How much of this payment settles ${emi.name}`}
-                        />
-                      </div>
-                    );
-                  })}
-                  {/* The payment, read as its two parts. Shown against the amount entered so that
-                      an EMI part larger than the payment is visible here rather than only as a
-                      refusal on saving. */}
-                  <p className="card-emi-settle-total">
-                    {formatINR(cardEmiTotalPaise)} of EMIs
-                    {paymentAmountPaise > 0 &&
-                      (paymentAmountPaise >= cardEmiTotalPaise
-                        ? ` · ${formatINR(paymentAmountPaise - cardEmiTotalPaise)} towards this cycle's spending`
-                        : " · more than the payment itself")}
-                  </p>
-                </div>
-              )}
-              <label>
-                Amount
                 <input
-                  value={form.amount}
-                  onChange={(event) => setForm({ ...form, amount: event.target.value })}
+                  className="card-emi-settle-amount"
+                  value={cardEmiAmounts[emi.id] ?? ""}
+                  onChange={(event) =>
+                    setCardEmiAmounts((current) => ({ ...current, [emi.id]: event.target.value }))
+                  }
                   placeholder="₹0"
                   inputMode="decimal"
-                  required
+                  disabled={!picked}
+                  aria-label={`How much of this payment settles ${emi.name}`}
                 />
-              </label>
-              <button className="primary-action add-button" disabled={saving || !batchId}>
-                <Plus size={18} />
-                Add transaction
-              </button>
-            </form>
-
-            <details className="category-cloud-disclosure">
-              <summary>
-                Filter by category
-                {weeklyCategoryFilterId && (
-                  <span className="category-cloud-active">
-                    {categories.find((category) => category.id === weeklyCategoryFilterId)?.name}
-                  </span>
-                )}
-              </summary>
-            <div className="category-shortcuts category-filter-chips">
-              {categories.map((category) => (
-                <button
-                  key={category.id}
-                  className={weeklyCategoryFilterId === category.id ? "active" : ""}
-                  /* The badge is a mark and a colour; the chip has no words of its own, so the
-                     name has to be said here or the control is nameless to anyone not looking. */
-                  aria-label={
-                    weeklyCategoryFilterId === category.id
-                      ? `Stop filtering by ${category.name}`
-                      : `Filter by ${category.name}`
-                  }
-                  aria-pressed={weeklyCategoryFilterId === category.id}
-                  onClick={() =>
-                    setWeeklyCategoryFilterId((current) => (current === category.id ? "" : category.id))
-                  }
-                  type="button"
-                >
-                  <CategoryBadge category={category} />
-                </button>
-              ))}
-              {weeklyCategoryFilterId && (
-                <button type="button" onClick={() => setWeeklyCategoryFilterId("")}>
-                  Clear filter
-                </button>
-              )}
-              {canOpen("categories") && (
-                <button type="button" onClick={() => onNavigate("categories")}>
-                  <Plus size={16} /> Add category
-                </button>
-              )}
-            </div>
-            </details>
-
-            <TransactionTable transactions={visibleTransactions} empty="No transactions in this week yet." />
-      </section>
-
-      <aside className="side-stack">
-        <Panel title="This week">
-          <div className="metric-list">
-            <Metric label="Spending" value={formatINR(expenseTotal)} />
-            <Metric label="Loan" value={formatINR(emiTotal)} warning={emiTotal > 0} />
-            <Metric label="Investment" value={formatINR(investmentTotal)} />
-            <Metric label="Income" value={formatINR(incomeTotal)} />
-            <Metric label="Uncategorized" value={`${uncategorizedCount} ${uncategorizedCount === 1 ? "item" : "items"}`} warning={uncategorizedCount > 0} />
-            <Metric label="Possible duplicate" value={`${duplicateCount} found`} warning={duplicateCount > 0} />
-          </div>
-        </Panel>
-
-        <Panel title="Account impact">
-          {(() => {
-            const impactedAccounts = accounts
-              .filter((account) => accountImpact(account, transactions).amountPaise !== 0)
-              .slice(0, 4);
-            return impactedAccounts.length === 0 ? (
-              <EmptyState text="No account activity this week yet." />
-            ) : (
-              <div className="impact-stack">
-                {impactedAccounts.map((account) => (
-                  <AccountImpactCard key={account.id} account={account} transactions={transactions} />
-                ))}
               </div>
             );
-          })()}
-        </Panel>
-      </aside>
-    </div>
-    {importOpen && (
-      <ImportTransactionsModal
-        batchId={batchId}
-        onClose={() => setImportOpen(false)}
-        onImported={async (count, details) => {
-          setImportOpen(false);
-          await reloadWeek();
-          await refresh();
-          const createdCount =
-            (details?.createdAccounts?.length ?? 0) +
-            (details?.createdTypes?.length ?? 0) +
-            (details?.createdSubcategories?.length ?? 0);
-          const limitWarning = details?.warnings?.some((warning) => warning.includes("credit limit"));
-          const skippedDuplicateCount = details?.skippedDuplicateCount ?? 0;
-          const affectedAccounts = details?.affectedAccounts ?? [];
-          if (affectedAccounts.length === 1) {
-            onAccountSelect(affectedAccounts[0].id);
-          }
-          onNavigate("transactions");
-          showNotice(
-            `Imported ${count} transaction${count === 1 ? "" : "s"}.` +
-              (skippedDuplicateCount
-                ? ` Skipped ${skippedDuplicateCount} duplicate row${skippedDuplicateCount === 1 ? "" : "s"}.`
-                : "") +
-              (createdCount ? ` Created ${createdCount} lookup item${createdCount === 1 ? "" : "s"}.` : "") +
-              (limitWarning ? " Update new card limits in Accounts." : "")
-          );
-        }}
-      />
-    )}
-    </>
+          })}
+          {/* The payment, read as its two parts. Shown against the amount entered so that
+              an EMI part larger than the payment is visible here rather than only as a
+              refusal on saving. */}
+          <p className="card-emi-settle-total">
+            {formatINR(cardEmiTotalPaise)} of EMIs
+            {paymentAmountPaise > 0 &&
+              (paymentAmountPaise >= cardEmiTotalPaise
+                ? ` · ${formatINR(paymentAmountPaise - cardEmiTotalPaise)} towards this cycle's spending`
+                : " · more than the payment itself")}
+          </p>
+        </div>
+      )}
+      <label>
+        Amount
+        <input
+          value={form.amount}
+          onChange={(event) => setForm({ ...form, amount: event.target.value })}
+          placeholder="₹0"
+          inputMode="decimal"
+          required
+        />
+      </label>
+      <div className="entry-form-actions">
+        <button type="button" className="secondary-action" onClick={onCancel} disabled={saving}>
+          Cancel
+        </button>
+        <button className="primary-action add-button" disabled={saving}>
+          <Plus size={18} />
+          Add transaction
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -2524,6 +2395,7 @@ function TransactionsPage({
   selectedAccountId,
   accounts,
   loans,
+  cardEmis,
   subscriptions,
   mutualFunds,
   vacations,
@@ -2532,11 +2404,12 @@ function TransactionsPage({
   refreshKey,
   showNotice,
   requestConfirm,
-  onRecord
+  onAccountSelect
 }: {
   selectedAccountId: string;
   accounts: Account[];
   loans: Loan[];
+  cardEmis: Loan[];
   subscriptions: AutopaySubscription[];
   mutualFunds: Investment[];
   vacations: Vacation[];
@@ -2545,12 +2418,30 @@ function TransactionsPage({
   refreshKey: number;
   showNotice: (message: string, options?: NoticeOptions) => void;
   requestConfirm: (request: ConfirmRequest) => void;
-  /* Given only when the entry form is not in the navigation -- simple mode keeps the five
-     sections asked for, and Weekly Entry, the one screen that creates a transaction, is not one
-     of them. Without this the mode would be an application nothing could be put into. */
-  onRecord?: () => void;
+  onAccountSelect: (accountId: string) => void;
 }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  // Recording and importing both happen from here now, each in its own dialog.
+  const [adding, setAdding] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  /* Entries are grouped into the week they were recorded in. Both dialogs write into the same
+     batch, so the page fetches it once rather than each of them asking for the same answer. */
+  const week = useMemo(() => mondayWeekRange(), []);
+  const [batchId, setBatchId] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    Api.currentBatch(week.weekStart, week.weekEnd)
+      .then((batch) => {
+        if (!cancelled) setBatchId(batch.id);
+      })
+      .catch(() => {
+        /* A batch that cannot be fetched must not stop a transaction being recorded: the id is
+           optional on the way in, and an entry without one is still an entry. */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [week.weekEnd, week.weekStart]);
   // A drill-down (e.g. clicking "Groceries" in Reports) opens this page pre-filtered via the URL.
   const [initialFilters] = useState(() => new URLSearchParams(window.location.search));
   const [search, setSearch] = useState(() => initialFilters.get("search") ?? "");
@@ -2915,19 +2806,76 @@ function TransactionsPage({
   }
 
   return (
-    <div className="panel">
+    <div className="page-grid transactions-page">
+      <PageHeader
+        title="Transactions"
+        actions={
+          <>
+            <button type="button" className="secondary-action" onClick={() => setImportOpen(true)}>
+              <FileSpreadsheet size={17} />
+              Import transactions
+            </button>
+            <button type="button" className="primary-action" onClick={() => setAdding(true)}>
+              <Plus size={17} />
+              Add transaction
+            </button>
+          </>
+        }
+      />
+
+      {adding && (
+        <FormDialog title="Add transaction" wide onClose={() => setAdding(false)}>
+          <TransactionEntryForm
+            selectedAccountId={selectedAccountId}
+            accounts={accounts}
+            loans={loans}
+            cardEmis={cardEmis}
+            subscriptions={subscriptions}
+            mutualFunds={mutualFunds}
+            vacations={vacations}
+            categoryTypes={categoryTypes}
+            batchId={batchId}
+            refresh={refresh}
+            showNotice={showNotice}
+            onDone={() => setAdding(false)}
+            onCancel={() => setAdding(false)}
+          />
+        </FormDialog>
+      )}
+
+      {importOpen && (
+        <ImportTransactionsModal
+          batchId={batchId}
+          onClose={() => setImportOpen(false)}
+          onImported={async (count, details) => {
+            setImportOpen(false);
+            await refresh();
+            const createdCount =
+              (details?.createdAccounts?.length ?? 0) +
+              (details?.createdTypes?.length ?? 0) +
+              (details?.createdSubcategories?.length ?? 0);
+            const limitWarning = details?.warnings?.some((warning) => warning.includes("credit limit"));
+            const skippedDuplicateCount = details?.skippedDuplicateCount ?? 0;
+            const affectedAccounts = details?.affectedAccounts ?? [];
+            if (affectedAccounts.length === 1) {
+              onAccountSelect(affectedAccounts[0].id);
+            }
+            showNotice(
+              `Imported ${count} transaction${count === 1 ? "" : "s"}.` +
+                (skippedDuplicateCount
+                  ? ` Skipped ${skippedDuplicateCount} duplicate row${skippedDuplicateCount === 1 ? "" : "s"}.`
+                  : "") +
+                (createdCount ? ` Created ${createdCount} lookup item${createdCount === 1 ? "" : "s"}.` : "") +
+                (limitWarning ? " Update new card limits in Accounts." : "")
+            );
+          }}
+        />
+      )}
+
+      <div className="panel">
       <div className="panel-header toolbar-header">
-        {/* The title and, when the entry form is not in the navigation, the way to it. Beside the
-            title rather than in the filter row: the filters are a dense line of controls and a
-            primary action dropped into them squeezed the search box onto two lines. */}
         <div className="transactions-title">
           <h2>All transactions</h2>
-          {onRecord && (
-            <button type="button" className="primary-action record-action" onClick={onRecord}>
-              <Plus size={17} />
-              Record
-            </button>
-          )}
         </div>
         <div className="toolbar filter-toolbar">
           <label className="search-box">
@@ -3222,6 +3170,7 @@ function TransactionsPage({
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }
@@ -4594,18 +4543,21 @@ export function PreviousMonthHints({
  */
 export function PageHeader({
   title,
-  summary,
   actions
 }: {
   title: string;
-  summary?: string;
   actions?: ReactNode;
 }) {
+  /*
+   * Title on the left, the way to add on the right, and nothing in between. There was a line of
+   * prose under the title -- how far into the month, what was over, what nothing-yet looked like
+   * -- and the owner asked for it gone: the tiles under it already carry those readings as
+   * figures, so the sentence was saying a second time what the page was about to show.
+   */
   return (
     <header className="page-header">
       <div className="page-header-copy">
         <h1>{title}</h1>
-        {summary ? <p>{summary}</p> : null}
       </div>
       {actions ? <div className="page-header-actions">{actions}</div> : null}
     </header>
@@ -4637,27 +4589,6 @@ export function budgetPerDayPaise(plan: BudgetPlan): number {
   return Math.round(plan.totals.remainingPaise / days);
 }
 
-/**
- * The line under the title: where the month has got to, what is off plan, and where the plan
- * lands if nothing changes. The projection used to be a fifth tile; the reference has four, and
- * this is where the reading of it goes instead.
- */
-export function budgetSummaryLine(plan: BudgetPlan): string {
-  const month = formatMonth(plan.month);
-  if (plan.lines.length === 0) {
-    return `Nothing planned for ${month} yet.`;
-  }
-  const where =
-    plan.dayOfMonth === 0
-      ? `${month} has not started.`
-      : budgetDaysLeft(plan) === 0
-        ? `${month} is done.`
-        : `${plan.dayOfMonth} of ${plan.daysInMonth} days into ${month}.`;
-  const over = plan.lines.filter((line) => line.status === "over").length;
-  const standing =
-    over === 0 ? "Nothing is over." : over === 1 ? "1 budget is over." : `${over} budgets are over.`;
-  return `${where} ${standing} On this pace it ends near ${formatINRWhole(plan.totals.projectedPaise)}.`;
-}
 
 /** The note under each of the four tiles, worked out from the plan rather than written in. */
 export function budgetTileNotes(plan: BudgetPlan) {
@@ -5019,7 +4950,6 @@ function BudgetPlannerPage({
     <div className="page-grid budget-page">
       <PageHeader
         title="Budget Planner"
-        summary={plan ? budgetSummaryLine(plan) : undefined}
         actions={
           <>
             <div className="budget-month-picker">
@@ -5505,35 +5435,6 @@ export function accountTileNotes(accounts: Account[], alertPercent: number) {
   };
 }
 
-/** The line under the title: what is held, what is owed, and anything asking for attention. */
-export function accountSummaryLine(accounts: Account[], alertPercent: number): string {
-  const live = liveAccounts(accounts);
-  if (live.length === 0) {
-    return "No accounts or cards yet. Add one to start tracking.";
-  }
-  const totals = accountTotals(accounts);
-  const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
-  const held =
-    totals.cardCount === 0
-      ? `${plural(totals.cashCount, "account", "accounts")}.`
-      : totals.cashCount === 0
-        ? `${plural(totals.cardCount, "card", "cards")}.`
-        : `${plural(totals.cashCount, "account", "accounts")} and ${plural(totals.cardCount, "card", "cards")}.`;
-  const money =
-    totals.cardDebtPaise === 0
-      ? `${formatINRWhole(totals.cashPaise)} in cash, nothing owed.`
-      : `${formatINRWhole(totals.cashPaise)} in cash, ${formatINRWhole(totals.cardDebtPaise)} owed.`;
-  const flagged = live.filter((account) => accountStanding(account, alertPercent)?.tone === "over").length;
-  const archived = accounts.length - live.length;
-  const parts = [held, money];
-  if (flagged > 0) {
-    parts.push(flagged === 1 ? "One needs a look." : `${flagged} need a look.`);
-  }
-  if (archived > 0) {
-    parts.push(`${plural(archived, "archived", "archived")}.`);
-  }
-  return parts.join(" ");
-}
 
 function AccountsPage({
   accounts,
@@ -5587,7 +5488,6 @@ function AccountsPage({
     <div className="page-grid accounts-page">
       <PageHeader
         title="Accounts"
-        summary={accountSummaryLine(accounts, cardAlertPercent)}
         actions={
           <button type="button" className="primary-action" onClick={() => setAdding(true)}>
             <Plus size={17} />
@@ -5673,6 +5573,7 @@ function AccountsPage({
       {adding && (
         <FormDialog title="New account" onClose={() => setAdding(false)}>
           <AccountForm
+            onCancel={() => setAdding(false)}
             onCreated={async () => {
               setAdding(false);
               await refresh();
@@ -5778,6 +5679,15 @@ function LoansPage({
 
   return (
     <div className="page-grid loans-page">
+      <PageHeader
+        title={isCardEmi ? "EMI" : "Loans"}
+        actions={
+          <button type="button" className="primary-action" onClick={() => setAdding(true)}>
+            <Plus size={17} />
+            Add {noun}
+          </button>
+        }
+      />
       <section className="summary-grid mini loan-summary-grid">
         <SummaryCard label="Active outstanding" value={formatINRWhole(activeOutstanding)} countPaise={activeOutstanding} icon={<Landmark />} tone="warning" />
         <SummaryCard label="Monthly EMI total" value={formatINRWhole(monthlyEmiTotal)} countPaise={monthlyEmiTotal} icon={<CalendarDays />} />
@@ -5834,13 +5744,15 @@ function LoansPage({
             ariaLabel={`Outstanding by ${noun}`}
             centerLabel="Outstanding"
             centerValue={formatINRWhole(activeOutstanding)}
+            centerCountPaise={activeOutstanding}
             className="overview-donut-chart"
             emptyText={`Nothing outstanding yet. Add ${isCardEmi ? "an EMI" : "a loan"} to see the split.`}
           />
         </Panel>
       </div>
 
-      <CollapsibleForm title={`Add ${noun}`} open={adding} onToggle={setAdding}>
+      {adding && (
+        <FormDialog title={`Add ${noun}`} onClose={() => setAdding(false)}>
         {loanType ? (
           <LoanForm
             loan={null}
@@ -5856,7 +5768,8 @@ function LoansPage({
         ) : (
           <EmptyState text={`${isCardEmi ? "EMI" : "Loan"} needs a Type with Loan behavior. Add one in Categories first.`} />
         )}
-      </CollapsibleForm>
+      </FormDialog>
+      )}
 
       {editingLoan && (
         <FormDialog title={`Edit ${noun}`} onClose={() => setEditingLoan(null)}>
@@ -6293,6 +6206,15 @@ function InvestmentsPage({
 
   return (
     <div className="page-grid loans-page">
+      <PageHeader
+        title="Investments"
+        actions={
+          <button type="button" className="primary-action" onClick={() => setAdding(true)}>
+            <Plus size={17} />
+            Add investment
+          </button>
+        }
+      />
       <section className="summary-grid report-summary">
         <SummaryCard label="Invested" value={formatINRWhole(totalInvested)} countPaise={totalInvested} icon={<WalletCards />} />
         <SummaryCard label="Current value" value={formatINRWhole(totalCurrent)} countPaise={totalCurrent} icon={<BarChart3 />} />
@@ -6352,6 +6274,7 @@ function InvestmentsPage({
             ariaLabel={chartType ? `${chartType.label} holdings` : "Current value by type"}
             centerLabel={chartType ? chartType.label : "Portfolio"}
             centerValue={formatINRWhole(chartTotalPaise)}
+            centerCountPaise={chartTotalPaise}
             className="overview-donut-chart"
             emptyText={chartType ? `Nothing held in ${chartType.label} yet.` : "Add a holding to see how your portfolio is split."}
             onSegmentClick={chartType ? undefined : (segment) => setChartTypeId(segment.id)}
@@ -6359,7 +6282,8 @@ function InvestmentsPage({
         </Panel>
       </div>
 
-      <CollapsibleForm title="Add investment" open={adding} onToggle={setAdding}>
+      {adding && (
+        <FormDialog title="Add investment" onClose={() => setAdding(false)}>
         <InvestmentForm
           investment={null}
           bankAccounts={bankAccounts}
@@ -6370,7 +6294,8 @@ function InvestmentsPage({
             showNotice(message);
           }}
         />
-      </CollapsibleForm>
+      </FormDialog>
+      )}
 
       {editing && (
         <FormDialog title="Edit investment" onClose={() => setEditing(null)}>
@@ -6940,6 +6865,15 @@ function VacationsPage({
 
   return (
     <div className="page-grid loans-page">
+      <PageHeader
+        title="Vacations"
+        actions={
+          <button type="button" className="primary-action" onClick={() => setAdding(true)}>
+            <Plus size={17} />
+            Add vacation
+          </button>
+        }
+      />
       <section className="summary-grid report-summary">
         <SummaryCard label="Trips" value={String(vacations.length)} icon={<Plane />} />
         <SummaryCard label="Total spent" value={formatINRWhole(totalSpent)} countPaise={totalSpent} icon={<WalletCards />} />
@@ -6956,7 +6890,7 @@ function VacationsPage({
 
       <p className="helper-text investments-asof">
         <Info size={14} />
-        Tag any expense to a trip from the Weekly Entry form. It still counts in your normal expenses, and also rolls up here.
+        Tag any expense to a trip when you add it. It still counts in your normal expenses, and also rolls up here.
       </p>
 
       <Panel title="Your trips">
@@ -6971,7 +6905,8 @@ function VacationsPage({
         )}
       </Panel>
 
-      <CollapsibleForm title="Add vacation" open={adding} onToggle={setAdding}>
+      {adding && (
+        <FormDialog title="Add vacation" onClose={() => setAdding(false)}>
         <VacationForm
           vacation={null}
           onCancel={() => setAdding(false)}
@@ -6981,7 +6916,8 @@ function VacationsPage({
             showNotice(message);
           }}
         />
-      </CollapsibleForm>
+      </FormDialog>
+      )}
 
       {editing && (
         <FormDialog title="Edit vacation" onClose={() => setEditing(null)}>
@@ -7254,6 +7190,15 @@ function SubscriptionsPage({
 
   return (
     <div className="page-grid loans-page">
+      <PageHeader
+        title="AutoPay"
+        actions={
+          <button type="button" className="primary-action" onClick={() => setAdding(true)}>
+            <Plus size={17} />
+            Add subscription
+          </button>
+        }
+      />
       <section className="summary-grid mini loan-summary-grid">
         <SummaryCard label="Active subscriptions" value={String(activeCount)} icon={<CalendarClock />} />
         <SummaryCard label="Monthly total" value={formatINRWhole(monthlyTotal)} countPaise={monthlyTotal} icon={<ArrowDownUp />} tone="warning" />
@@ -7292,7 +7237,8 @@ function SubscriptionsPage({
           )}
       </Panel>
 
-      <CollapsibleForm title="Add subscription" open={adding} onToggle={setAdding}>
+      {adding && (
+        <FormDialog title="Add subscription" onClose={() => setAdding(false)}>
         <SubscriptionForm
           subscription={null}
           bankAccounts={bankAccounts}
@@ -7303,7 +7249,8 @@ function SubscriptionsPage({
             showNotice(message);
           }}
         />
-      </CollapsibleForm>
+      </FormDialog>
+      )}
 
       {editing && (
         <FormDialog title="Edit subscription" onClose={() => setEditing(null)}>
@@ -7628,6 +7575,15 @@ function CategoriesPage({
 
   return (
     <div className="page-grid">
+      <PageHeader
+        title="Categories"
+        actions={
+          <button type="button" className="primary-action" onClick={() => setAdding(true)}>
+            <Plus size={17} />
+            Create Type or SubType
+          </button>
+        }
+      />
       <Panel title="Type library">
         <div className="taxonomy-tree">
           {categoryTypes.map((categoryType) => {
@@ -7681,7 +7637,8 @@ function CategoriesPage({
         </div>
       </Panel>
 
-      <CollapsibleForm title="Create Type or SubType" open={adding} onToggle={setAdding}>
+      {adding && (
+        <FormDialog title="Create Type or SubType" onClose={() => setAdding(false)}>
         <form className="stack-form" onSubmit={submit}>
           <div className="segmented-control">
             <button type="button" className={mode === "subtype" ? "active" : ""} onClick={() => setMode("subtype")}>
@@ -7755,17 +7712,23 @@ function CategoriesPage({
               ))}
             </div>
           </div>
-          <button className="primary-action">
-            <Plus size={18} />
-            {mode === "type" ? "Add Type" : "Add SubType"}
-          </button>
+          <div className="dialog-form-actions">
+            <button type="button" className="secondary-action" onClick={() => setAdding(false)}>
+              Cancel
+            </button>
+            <button className="primary-action">
+              <Plus size={18} />
+              {mode === "type" ? "Add Type" : "Add SubType"}
+            </button>
+          </div>
         </form>
-      </CollapsibleForm>
+      </FormDialog>
+      )}
     </div>
   );
 }
 
-function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
+function AccountForm({ onCreated, onCancel }: { onCreated: () => Promise<void>; onCancel?: () => void }) {
   const [type, setType] = useState<Account["type"]>("bank");
   const [name, setName] = useState("");
   const [starting, setStarting] = useState("");
@@ -7861,10 +7824,17 @@ function AccountForm({ onCreated }: { onCreated: () => Promise<void> }) {
         </>
       )}
       {error && <p className="form-error">{error}</p>}
-      <button className="primary-action" disabled={saving}>
-        <Plus size={18} />
-        {saving ? "Adding..." : "Add account"}
-      </button>
+      <div className="dialog-form-actions">
+        {onCancel && (
+          <button type="button" className="secondary-action" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+        )}
+        <button className="primary-action" disabled={saving}>
+          <Plus size={18} />
+          {saving ? "Adding..." : "Add account"}
+        </button>
+      </div>
     </form>
   );
 }
@@ -8072,6 +8042,7 @@ function OutflowMixChart({
               onSegmentClick={onTypeClick ? (segment) => onTypeClick(segment.id) : undefined}
               centerLabel="Outflow"
               centerValue={formatINRWhole(outflowPaise)}
+              centerCountPaise={outflowPaise}
               className="report-donut-chart"
             />
           )}
@@ -8143,6 +8114,7 @@ function ReportTypeAnalytics({
             }
             centerLabel="Total"
             centerValue={formatINRWhole(selected.amountPaise)}
+            centerCountPaise={selected.amountPaise}
             className="report-donut-chart"
           />
         </div>
@@ -8157,6 +8129,7 @@ function DonutChart({
   ariaLabel,
   centerLabel,
   centerValue,
+  centerCountPaise,
   className = "",
   onSegmentClick
 }: {
@@ -8165,6 +8138,8 @@ function DonutChart({
   ariaLabel: string;
   centerLabel: string;
   centerValue: string;
+  /** Given, the figure in the middle counts up to it instead of simply appearing. */
+  centerCountPaise?: number;
   className?: string;
   onSegmentClick?: (segment: DonutSegment) => void;
 }) {
@@ -8229,9 +8204,20 @@ function DonutChart({
         <text className="donut-center-label" x={center} y={center - 8} textAnchor="middle">
           {centerLabel}
         </text>
-        <text className="donut-center-value" x={center} y={center + 16} textAnchor="middle">
-          {centerValue}
-        </text>
+        {centerCountPaise === undefined ? (
+          <text className="donut-center-value" x={center} y={center + 16} textAnchor="middle">
+            {centerValue}
+          </text>
+        ) : (
+          <CountUpText
+            className="donut-center-value"
+            x={center}
+            y={center + 16}
+            textAnchor="middle"
+            paise={centerCountPaise}
+            formatValue={formatINRWhole}
+          />
+        )}
       </svg>
       <ul className="donut-legend" aria-label={`${ariaLabel} legend`}>
         {slices.map((segment) => {
@@ -8285,6 +8271,7 @@ function MixChart({
   ariaLabel,
   centerLabel,
   centerValue,
+  centerCountPaise,
   className = "",
   emptyText,
   onSegmentClick
@@ -8294,6 +8281,8 @@ function MixChart({
   ariaLabel: string;
   centerLabel: string;
   centerValue: string;
+  /** Passed through to the ring: the figure in its middle counts up to this. */
+  centerCountPaise?: number;
   className?: string;
   emptyText: string;
   onSegmentClick?: (segment: DonutSegment) => void;
@@ -8326,6 +8315,7 @@ function MixChart({
           ariaLabel={ariaLabel}
           centerLabel={centerLabel}
           centerValue={centerValue}
+          centerCountPaise={centerCountPaise}
           className={className}
           onSegmentClick={onSegmentClick}
         />
@@ -8546,7 +8536,7 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "How do vacations work, and do trip expenses still count as normal expenses?",
     answer:
-      "A vacation is a label you put on expenses, not a new category. First create a trip on the Vacations page (optionally with dates and a budget). Then, when you add an Expense in Weekly Entry, tick 'Part of a vacation?' and choose the trip. That expense keeps its normal SubType (Food, Travel, Hotel…) and still counts in all your normal expense totals, reports and budgets, and it also rolls up under the trip. The Vacations page shows each trip's total spend, budget-vs-spent, and a breakdown by SubType. Deleting a trip only removes the grouping; the expenses themselves stay untouched."
+      "A vacation is a label you put on expenses, not a new category. First create a trip on the Vacations page (optionally with dates and a budget). Then, when you add an Expense from the Transactions page, tick 'Part of a vacation?' and choose the trip. That expense keeps its normal SubType (Food, Travel, Hotel…) and still counts in all your normal expense totals, reports and budgets, and it also rolls up under the trip. The Vacations page shows each trip's total spend, budget-vs-spent, and a breakdown by SubType. Deleting a trip only removes the grouping; the expenses themselves stay untouched."
   },
   {
     question: "How are Inflow, Outflow and Savings in Reports calculated?",
@@ -8690,26 +8680,6 @@ function FaqItem({ question, answer }: { question: string; answer: string }) {
   );
 }
 
-function AccountImpactCard({ account, transactions }: { account: Account; transactions: Transaction[] }) {
-  const impact = accountImpact(account, transactions);
-  const tone = impact.amountPaise === 0 ? "flat" : impact.isGood ? "positive" : "negative";
-
-  return (
-    <div className={`impact-card ${tone}`}>
-      <div className="impact-main">
-        <span className="impact-arrow">{impact.amountPaise > 0 ? "↑" : impact.amountPaise < 0 ? "↓" : "→"}</span>
-        <div>
-          <strong>{account.name}</strong>
-          <span>{impact.label}</span>
-        </div>
-      </div>
-      <div className="impact-values">
-        <strong>{signedImpact(impact.amountPaise)}</strong>
-        <span>{impact.percentLabel}</span>
-      </div>
-    </div>
-  );
-}
 
 /**
  * Changing your own password, from inside the application.
@@ -9390,10 +9360,13 @@ function Panel({
 function FormDialog({
   title,
   onClose,
+  wide = false,
   children
 }: {
   title: string;
   onClose: () => void;
+  /** For a form laid out in columns -- the entry form has four, and 560px gives it one. */
+  wide?: boolean;
   children: React.ReactNode;
 }) {
   const titleId = useId();
@@ -9468,7 +9441,7 @@ function FormDialog({
       }}
     >
       <div
-        className="form-dialog"
+        className={`form-dialog${wide ? " is-wide" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -9490,48 +9463,6 @@ function FormDialog({
   return typeof document === "undefined" ? content : createPortal(content, document.body);
 }
 
-/* An add form kept folded away. A section leads with what you already have; the form for adding
-   more is one row until you ask for it. The page owns `open` so that saving can fold it back up,
-   and so the fields leave the page entirely rather than being hidden in place. */
-function CollapsibleForm({
-  title,
-  open,
-  onToggle,
-  variant = "panel",
-  children
-}: {
-  title: string;
-  open: boolean;
-  onToggle: (open: boolean) => void;
-  variant?: "panel" | "inset";
-  children: React.ReactNode;
-}) {
-  const bodyId = useId();
-  return (
-    <section className={`collapsible-form as-${variant} ${open ? "open" : ""}`}>
-      <h2 className="collapsible-form-heading">
-        <button
-          type="button"
-          className="collapsible-form-toggle"
-          aria-expanded={open}
-          aria-controls={bodyId}
-          onClick={() => onToggle(!open)}
-        >
-          <span className="collapsible-form-mark">
-            <Plus size={16} />
-          </span>
-          <span className="collapsible-form-label">{title}</span>
-          <ChevronDown size={18} className="collapsible-form-chevron" />
-        </button>
-      </h2>
-      {open && (
-        <div className="collapsible-form-body" id={bodyId}>
-          {children}
-        </div>
-      )}
-    </section>
-  );
-}
 
 function SummaryCard({
   label,
@@ -9578,6 +9509,24 @@ function CountUp({ paise, label }: { paise: number; label: string }) {
       <span ref={ref} aria-hidden="true" className="count-up" />
     </>
   );
+}
+
+/**
+ * The figure in the middle of a ring, counting up to itself.
+ *
+ * SVG has no span to hide behind, so the accessible name is carried by the chart's own
+ * aria-label and this text is marked decorative: a screen reader would otherwise read a number
+ * that is still moving.
+ */
+function CountUpText({
+  paise,
+  /* Not `format`: SVG has an attribute of that name, so the prop would be handed to the element. */
+  formatValue,
+  ...props
+}: { paise: number; formatValue: (value: number) => string } & React.SVGProps<SVGTextElement>) {
+  const ref = useRef<SVGTextElement>(null);
+  useCountUp(ref, paise, formatValue);
+  return <text {...props} ref={ref} aria-hidden="true" />;
 }
 
 function ChangeVsLastMonth({
@@ -10231,9 +10180,9 @@ function formatBackupDetail(status: BackupStatus | null) {
 export {
   AccountForm,
   AccountsPage,
+  consolidateDonutSegments,
   BudgetPlannerPage,
   CategoriesPage,
-  CollapsibleForm,
   FormDialog,
   InvestmentForm,
   InvestmentsPage,

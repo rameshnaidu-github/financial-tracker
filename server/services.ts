@@ -2681,7 +2681,14 @@ export async function getOverview(accountId?: string, month = currentMonth()) {
       outflowPaise:previous.totalOutflowPaise
     },
     recentTransactions: await listTransactions({ accountId, limit: 5 }),
-    categoryReport: spendingCategories.slice(0, 6).map((category) => ({
+    /*
+     * Every spending category, not the top few. `spendingPaise` above sums all of them, and the
+     * overview's ring divides each slice by that total -- so publishing a truncated list drew a
+     * ring that did not close, and the uncovered arc showed the track through as a grey wedge
+     * with nothing in the legend to explain it. The client rolls the long tail into one named
+     * remainder, which is a slice with a figure beside it rather than a hole.
+     */
+    categoryReport: spendingCategories.map((category) => ({
       ...category,
       share: spendingPaise > 0 ? Math.round((Math.max(category.amountPaise, 0) / spendingPaise) * 1000) / 10 : 0
     }))

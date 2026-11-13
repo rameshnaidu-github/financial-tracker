@@ -2329,11 +2329,6 @@ a {
   line-height: 1.5;
 }
 
-.weekly-grid {
-  grid-template-columns: minmax(0, 1fr) 350px;
-  align-items: start;
-}
-
 .entry-form {
   display: grid;
   grid-template-columns: repeat(4, minmax(130px, 1fr));
@@ -4278,7 +4273,6 @@ a {
 
 @media (max-width: 1120px) {
   .app-shell,
-  .weekly-grid,
   .two-column {
     grid-template-columns: 1fr;
   }
@@ -4380,9 +4374,6 @@ a {
     color: var(--accent);
   }
 
-  .entry-form {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 720px) {
@@ -4411,7 +4402,6 @@ a {
   .summary-grid,
   .summary-grid.mini,
   .summary-grid.report-summary,
-  .entry-form,
   .budget-add-form,
   .budget-line-metrics,
   .report-filters,
@@ -4421,10 +4411,6 @@ a {
 
   .summary-card {
     min-height: 96px;
-  }
-
-  .entry-form .wide {
-    grid-column: auto;
   }
 
   .panel {
@@ -5369,6 +5355,10 @@ a {
   box-shadow: var(--shadow);
 }
 
+.form-dialog.is-wide {
+  width: min(960px, 100%);
+}
+
 .form-dialog:focus-visible {
   outline: 2px solid var(--accent-strong);
   outline-offset: 2px;
@@ -5394,82 +5384,6 @@ a {
   padding: 18px;
 }
 
-/* ---------- Add forms stay folded until they are wanted ----------
-   A section leads with what you already have. The form for adding more is one row until it is
-   asked for, and folds itself back up once it has saved. */
-.collapsible-form {
-  display: grid;
-  align-content: start;
-}
-
-.collapsible-form.as-panel {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  box-shadow: var(--shadow-soft);
-}
-
-.collapsible-form.as-inset {
-  border: 1px dashed var(--line-strong);
-  border-radius: 8px;
-  background: var(--panel-soft);
-}
-
-.collapsible-form-heading {
-  margin: 0;
-  font-size: inherit;
-}
-
-.collapsible-form-toggle {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  background: transparent;
-  color: inherit;
-  padding: 14px 18px;
-  text-align: left;
-  font-weight: 900;
-}
-
-.collapsible-form.as-inset .collapsible-form-toggle {
-  padding: 12px 14px;
-}
-
-.collapsible-form-label {
-  flex: 1;
-  min-width: 0;
-}
-
-.collapsible-form-mark {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  flex: none;
-  border-radius: 7px;
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-}
-
-.collapsible-form-chevron {
-  flex: none;
-  color: var(--muted);
-  transition: transform 0.18s ease;
-}
-
-.collapsible-form.open .collapsible-form-chevron {
-  transform: rotate(180deg);
-}
-
-.collapsible-form-body {
-  padding: 0 18px 18px;
-}
-
-.collapsible-form.as-inset .collapsible-form-body {
-  padding: 0 14px 14px;
-}
-
 @media (max-width: 720px) {
   .form-dialog-backdrop {
     padding: 12px;
@@ -5479,8 +5393,7 @@ a {
     max-height: calc(100dvh - 24px);
   }
 
-  .form-dialog-body,
-  .collapsible-form-body {
+  .form-dialog-body {
     padding-left: 14px;
     padding-right: 14px;
   }
