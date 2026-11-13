@@ -188,7 +188,6 @@ export function SidebarNav({
   newsUnread,
   badges,
   person,
-  standing,
   onNavigate
 }: {
   items: typeof navItems;
@@ -197,8 +196,6 @@ export function SidebarNav({
   /** How many things each section is waiting on. A page with nothing waiting is not in here. */
   badges?: Partial<Record<Page, number>>;
   person?: { name: string; email: string };
-  /** The one figure that stands above the person: what is left to spend, and what it is after. */
-  standing?: { label: string; value: string; detail: string; tone: "ok" | "warning" };
   onNavigate: (page: Page) => void;
 }) {
   const groups = NAV_GROUPS.filter((group) => items.some((item) => item.group === group));
@@ -237,15 +234,9 @@ export function SidebarNav({
           </div>
         ))}
       </nav>
-      {/* What is left to spend, then whose money it is. Both sit below the list so a short window
-          scrolls the sections past them rather than scrolling them away. */}
-      {standing && (
-        <div className={`sidebar-standing tone-${standing.tone}`}>
-          <span className="sidebar-standing-label">{standing.label}</span>
-          <strong className="sidebar-standing-value">{standing.value}</strong>
-          <span className="sidebar-standing-detail">{standing.detail}</span>
-        </div>
-      )}
+      {/* The person sits below the list so a short window scrolls the sections past them rather
+          than scrolling them away. A standing "safe to spend" figure used to sit above them;
+          the owner asked for it gone. */}
       <button
         className={`nav-item profile-nav-item ${activePage === "profile" ? "active" : ""}`}
         aria-current={activePage === "profile" ? "page" : undefined}
@@ -300,7 +291,40 @@ export function initialsOf(name: string, email: string): string {
 export function AttentionMenu({ items, onGo }: { items: AttentionItem[]; onGo: (page: Page) => void }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement | null>(null);
+  const panel = useRef<HTMLDivElement | null>(null);
   const listId = useId();
+  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
+
+  /*
+   * Where the panel goes, measured from the button rather than positioned against it.
+   *
+   * It used to sit inside this wrapper, absolutely positioned, and the page drew straight over
+   * it: every child of the content area carries `animation: rise ... both`, whose fill leaves a
+   * permanent transform behind, and a transformed element is a stacking context of its own. The
+   * page's sections therefore painted above anything in the top bar, whatever z-index it asked
+   * for -- the owner's screenshot has a summary card and an attention banner cutting through
+   * the middle of the list.
+   *
+   * So the panel is portalled onto the body, out of every one of those contexts, and anchored
+   * to the button's rectangle instead. Re-measured on scroll and resize, because a fixed thing
+   * anchored to a moving button drifts away from it otherwise.
+   */
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const button = wrap.current?.querySelector("button");
+      if (!button) return;
+      const rect = button.getBoundingClientRect();
+      setAt({ top: Math.round(rect.bottom + 8), right: Math.round(window.innerWidth - rect.right) });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -308,7 +332,11 @@ export function AttentionMenu({ items, onGo }: { items: AttentionItem[]; onGo: (
       if (event.key === "Escape") setOpen(false);
     };
     const onPointerDown = (event: MouseEvent) => {
-      if (wrap.current && !wrap.current.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      // The panel is no longer inside the wrapper, so closing on an outside click has to ask
+      // both of them whether the click was theirs.
+      if (wrap.current?.contains(target) || panel.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("keydown", onKeyDown);
     document.addEventListener("mousedown", onPointerDown);
@@ -332,8 +360,15 @@ export function AttentionMenu({ items, onGo }: { items: AttentionItem[]; onGo: (
         <CircleAlert size={17} />
         {count > 0 && <span className="attention-count" aria-hidden="true">{count}</span>}
       </button>
-      {open && (
-        <div className="attention-panel" id={listId} role="group" aria-label="Needs attention">
+      {open && at && portalled(
+        <div
+          className="attention-panel"
+          id={listId}
+          role="group"
+          aria-label="Needs attention"
+          ref={panel}
+          style={{ top: at.top, right: at.right }}
+        >
           {count === 0 ? (
             <p className="attention-empty">Nothing needs attention.</p>
           ) : (
@@ -359,6 +394,11 @@ export function AttentionMenu({ items, onGo }: { items: AttentionItem[]; onGo: (
       )}
     </div>
   );
+}
+
+/** Onto the body, where no page section's stacking context can paint over it. */
+function portalled(content: React.ReactNode) {
+  return typeof document === "undefined" ? content : createPortal(content, document.body);
 }
 
 /** What sits behind More on a phone, when there is more than one of them. */
@@ -1102,21 +1142,6 @@ export default function App() {
     ? { transactions: shellOverview.summary.uncategorizedCount }
     : {};
 
-  /* The figure that stands above the person: what is left after the bills this month has not
-     taken yet. Absent entirely until the month has been fetched, rather than showing a zero that
-     would read as "nothing left". */
-  const standingFigure = shellOverview
-    ? {
-        label: "Safe to spend",
-        value: formatINRWhole(shellOverview.summary.safeToSpendPaise),
-        detail:
-          shellOverview.summary.upcomingBillsPaise > 0
-            ? `after ${formatINRWhole(shellOverview.summary.upcomingBillsPaise)} of bills still to come`
-            : "no bills left this month",
-        tone: shellOverview.summary.safeToSpendPaise < 0 ? ("warning" as const) : ("ok" as const)
-      }
-    : undefined;
-
   const [search, setSearch] = useState("");
 
   /* One way to turn the theme over, now that two places offer it: the switch on the profile page
@@ -1487,7 +1512,6 @@ export default function App() {
           newsUnread={newsUnread}
           badges={sidebarBadges}
           person={{ name: profileDraft.name, email: profileDraft.email }}
-          standing={standingFigure}
           onNavigate={navigate}
         />
       </aside>
@@ -5932,47 +5956,55 @@ function AccountsPage({
         />
       </div>
 
-      {/* Above the accounts rather than below them, the way Investments puts its allocation
-          first: the shape of what is owed is the thing you read before the cards it is made of,
-          and at the foot of three rows of cards it was off the screen. */}
-      {cardOutstandingPaise > 0 && (
-        <Panel title="Card utilisation">
-          <MixChart
-            segments={cardSegments}
-            totalPaise={cardOutstandingPaise}
-            ariaLabel="Credit card utilisation"
-            centerLabel="Card debt"
-            centerValue={formatINRWhole(cardOutstandingPaise)}
-            className="overview-donut-chart"
-            emptyText="No credit card owes anything right now."
-          />
-        </Panel>
-      )}
 
-      {/* Grouped, and three across rather than the budget page's four -- an account's card
-          carries two bars and a legend where a budget's carries one bar. */}
-      {groups.map((group, index) => (
-        <section className="account-group" key={group.key}>
-          <h2 className="account-group-title">{group.title}</h2>
-          <div className="budget-grid accounts-grid">
-            {group.accounts.map((account) => (
-              <AccountCard
-                key={account.id}
-                account={account}
-                alertPercent={cardAlertPercent}
-                onStartEdit={() => setEditingId(account.id)}
-              />
-            ))}
-            {/* The way to add goes in the last group's own grid. On its own it took a whole row
-                for one cell and pushed everything under it -- the card utilisation among them --
-                off the first screen. */}
-            {index === groups.length - 1 && addCard}
-          </div>
-        </section>
-      ))}
 
-      {groups.length === 0 && <div className="budget-grid accounts-grid">{addCard}</div>}
 
+      <div className="accounts-split">
+        <div className="accounts-split-main">
+        {/* Grouped, and three across rather than the budget page's four -- an account's card
+            carries two bars and a legend where a budget's carries one bar. */}
+        {groups.map((group, index) => (
+          <section className="account-group" key={group.key}>
+            <h2 className="account-group-title">{group.title}</h2>
+            <div className="budget-grid accounts-grid">
+              {group.accounts.map((account) => (
+                <AccountCard
+                  key={account.id}
+                  account={account}
+                  alertPercent={cardAlertPercent}
+                  onStartEdit={() => setEditingId(account.id)}
+                />
+              ))}
+              {/* The way to add goes in the last group's own grid. On its own it took a whole row
+                  for one cell and pushed everything under it -- the card utilisation among them --
+                  off the first screen. */}
+              {index === groups.length - 1 && addCard}
+            </div>
+          </section>
+        ))}
+
+          {groups.length === 0 && <div className="budget-grid accounts-grid">{addCard}</div>}
+        </div>
+
+        <aside className="accounts-split-side">
+        {/* Beside the accounts rather than over them, which is what the owner asked for: full
+            width this was a very wide panel holding one small ring, and it pushed the cards down
+            the page. In a column of its own it stands next to what it describes. */}
+        {cardOutstandingPaise > 0 && (
+          <Panel title="Card utilisation">
+            <MixChart
+              segments={cardSegments}
+              totalPaise={cardOutstandingPaise}
+              ariaLabel="Credit card utilisation"
+              centerLabel="Card debt"
+              centerValue={formatINRWhole(cardOutstandingPaise)}
+              className="overview-donut-chart"
+              emptyText="No credit card owes anything right now."
+            />
+          </Panel>
+        )}
+        </aside>
+      </div>
 
       {adding && (
         <FormDialog title="New account" onClose={() => setAdding(false)}>

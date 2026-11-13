@@ -2697,19 +2697,12 @@ export async function getOverview(accountId?: string, month = currentMonth()) {
   const availableCashPaise = scopedAccounts
     .filter((account) => account.type === "bank" || account.type === "food_card")
     .reduce((sum, account) => sum + account.balancePaise, 0);
-  const bills = await upcomingBillsThisMonth(month, currentIsoDate());
 
   return {
     month,
     accounts: scopedAccounts,
     summary: {
       availableCashPaise,
-      /* Cash less the bills this month has not taken yet. It goes negative when they come to
-         more than there is, which is the case worth seeing rather than the one to hide. */
-      safeToSpendPaise: availableCashPaise - bills.totalPaise,
-      upcomingBillsPaise: bills.totalPaise,
-      upcomingSubscriptionPaise: bills.subscriptionPaise,
-      upcomingEmiPaise: bills.emiPaise,
       creditOutstandingPaise: scopedAccounts
         .filter((account) => account.type === "credit_card")
         .reduce((sum, account) => sum + account.outstandingPaise, 0),
@@ -2744,49 +2737,6 @@ export async function getOverview(accountId?: string, month = currentMonth()) {
   };
 }
 
-
-/**
- * The bills this month has not taken yet, and what is left of the cash after them.
- *
- * "Safe to spend today" is the figure the sidebar stands on, so what counts as a bill has to be
- * stated rather than felt: a subscription whose debit date falls between today and the end of
- * the month, and a loan instalment whose due day has not come round yet. Both are dated,
- * scheduled and already agreed to.
- *
- * What is deliberately not in it: a credit card's outstanding balance. It is owed, but when and
- * how much of it is paid is a decision rather than a schedule, and folding a revolving balance
- * into a daily spending figure would make the figure wrong for most people most of the time. A
- * card bill coming due is surfaced on the attention list instead, where it is a prompt rather
- * than a subtraction.
- *
- * Nothing is counted twice: a loan whose instalment this month has already been recorded has had
- * its due day pass, and a subscription already debited is behind `today` as well.
- */
-async function upcomingBillsThisMonth(month: string, today: string) {
-  const monthEnd = monthEndDate(month);
-  // A month that is not the current one has no "rest of it" to look forward to from today.
-  const from = today >= `${month}-01` && today <= monthEnd ? today : null;
-  if (!from) return { totalPaise: 0, subscriptionPaise: 0, emiPaise: 0 };
-
-  let subscriptionPaise = 0;
-  for (const subscription of await listAutopaySubscriptions(false)) {
-    if (subscription.status !== "active") continue;
-    const row = await requireAutopayRow(subscription.id);
-    // Dates strictly after today and no later than the month's end: today's own debit, if it was
-    // going to happen, has either happened or is not a thing still to come.
-    const due = autopayDueDates(row, from, monthEnd);
-    subscriptionPaise += due.length * subscription.amountPaise;
-  }
-
-  let emiPaise = 0;
-  const day = Number(from.slice(8, 10));
-  for (const loan of await listLoans(false)) {
-    if (loan.outstandingPaise <= 0 || loan.emiDueDay === null) continue;
-    if (loan.emiDueDay > day) emiPaise += loan.monthlyEmiPaise;
-  }
-
-  return { totalPaise: subscriptionPaise + emiPaise, subscriptionPaise, emiPaise };
-}
 
 /**
  * What was spent on credit cards this month, EMIs excluded.

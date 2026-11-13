@@ -3649,6 +3649,55 @@ button.budget-hint-chip:focus-visible {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+/*
+ * The accounts on one side, the chart on the other.
+ *
+ * The chart used to run the full width of the page, which made it a very wide panel holding one
+ * small ring and pushed the cards below the fold. Beside them it is the width it needs and the
+ * cards start at the top where they belong. The side column is sized to the ring rather than to
+ * a fraction, so the accounts keep as much room as there is.
+ */
+.accounts-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.accounts-split-main {
+  min-width: 0;
+}
+
+.accounts-split-side {
+  position: sticky;
+  /* Clear of the top bar, so scrolling a long list of accounts keeps the shape of the debt in
+     view beside it rather than scrolling it away. */
+  top: var(--space-4);
+  min-width: 0;
+}
+
+/* Two accounts across in the narrower main column, not three: at three they are slivers. */
+.accounts-split .budget-grid.accounts-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 1280px) {
+  /* Not enough width for both, so the chart goes back above the accounts rather than squeezing
+     them into a column too narrow to read. */
+  .accounts-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .accounts-split-side {
+    position: static;
+    order: -1;
+  }
+
+  .accounts-split .budget-grid.accounts-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 .account-group + .account-group {
   margin-top: var(--space-5);
 }
@@ -3717,13 +3766,15 @@ button.budget-hint-chip:focus-visible {
 }
 
 @media (max-width: 1240px) {
-  .budget-grid.accounts-grid {
+  .budget-grid.accounts-grid,
+  .accounts-split .budget-grid.accounts-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 720px) {
-  .budget-grid.accounts-grid {
+  .budget-grid.accounts-grid,
+  .accounts-split .budget-grid.accounts-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -3769,40 +3820,6 @@ button.budget-hint-chip:focus-visible {
   /* On the filled pill the soft accent disappears into it; this keeps the count legible. */
   background: color-mix(in srgb, var(--on-accent) 22%, transparent);
   color: var(--on-accent);
-}
-
-/* What is left to spend, standing above the person. */
-.sidebar-standing {
-  display: grid;
-  gap: 2px;
-  margin: 14px 0 8px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel-soft);
-}
-
-.sidebar-standing-label {
-  color: var(--muted);
-  font-size: 0.74rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.sidebar-standing-value {
-  font-size: 1.22rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.sidebar-standing.tone-warning .sidebar-standing-value {
-  color: var(--warning);
-}
-
-.sidebar-standing-detail {
-  color: var(--muted);
-  font-size: 0.74rem;
-  line-height: 1.35;
 }
 
 /* The person, at the foot of the sidebar and again in the top bar. */
@@ -3932,10 +3949,10 @@ button.budget-hint-chip:focus-visible {
 }
 
 .attention-panel {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  z-index: 40;
+  /* Fixed and portalled onto the body: the page's own sections each carry a transform, which
+     makes every one of them a stacking context that would otherwise paint straight over this. */
+  position: fixed;
+  z-index: var(--z-overlay);
   width: min(330px, calc(100vw - 32px));
   max-height: min(420px, 60vh);
   overflow-y: auto;
