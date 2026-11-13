@@ -7,6 +7,19 @@ export const AUTOPAY_SUBCATEGORY_ID = "sub_autopay";
 export const MUTUAL_FUNDS_SUBCATEGORY_ID = "sub_invest_mutual_funds";
 /** Where money a holding pays back is filed: interest earned, not a sale and not odd income. */
 export const INTEREST_SUBCATEGORY_ID = "sub_income_interest";
+/**
+ * Where income that arrives by itself is filed -- a bond's interest, a post office payout.
+ *
+ * The owner asked for Other income rather than Interest: a payout is not always interest, and
+ * one label for all of it beats a precise one that is wrong for half of them. It is also the
+ * fallback when a more specific SubType has been deleted, so an automatic credit never arrives
+ * with no category at all, waiting to be filed by hand.
+ */
+export const OTHER_INCOME_SUBCATEGORY_ID = "sub_other_income";
+export const ADJUSTMENT_TYPE_ID = "type_adjustment";
+/** Choosing this on a payment offers the EMIs that are running, the way AutoPay offers subscriptions. */
+export const EMI_SUBCATEGORY_ID = "sub_loan_emi";
+export const ADJUSTMENT_SUBCATEGORY_ID = "sub_adjustment_balance";
 export const INCOME_TYPE_ID = "type_income";
 export const SELF_TRANSFER_SUBCATEGORY_ID = "sub_transfer_self";
 export const AUTOPAY_DURATION_MONTH_OPTIONS = [1, 3, 6, 12, 24, 36] as const;
@@ -125,8 +138,20 @@ export const TAXONOMY_BEHAVIORS = [
   "investment",
   "transfer",
   "card_payment",
-  "refund"
+  "refund",
+  /*
+   * A correction, and nothing else. An adjustment is the ledger admitting it was wrong about a
+   * balance: it is neither money spent nor money earned, so it has a behaviour of its own rather
+   * than borrowing one. Filing it as income would inflate the month; as an expense it would
+   * inflate spending; as a transfer it would count as outflow, because transfers are budgetable
+   * here. With its own behaviour it moves the balance and leaves every figure about the month
+   * exactly where it was.
+   */
+  "adjustment"
 ] as const;
+
+/** Behaviours that describe money the month earned or paid out. An adjustment describes neither. */
+export const NEUTRAL_BEHAVIORS = new Set<string>(["adjustment"]);
 
 export const DEFAULT_CATEGORY_TYPES = [
   {
@@ -178,7 +203,14 @@ export const DEFAULT_CATEGORY_TYPES = [
       { id: "sub_home_loan", name: "Home", icon: "home", color: "#d97706" },
       { id: "sub_vehicle_loan", name: "Vehicle", icon: "car", color: "#2563eb" },
       { id: "sub_gold_loan", name: "Gold", icon: "landmark", color: "#d97706" },
-      { id: "sub_other_loan", name: "Other", icon: "calendar-clock", color: "#64748b" }
+      { id: "sub_other_loan", name: "Other", icon: "calendar-clock", color: "#64748b" },
+      /*
+       * The one the owner asked for, and the one that works like AutoPay: choosing it offers
+       * every EMI that is still running -- a card's and a loan's alike -- and the payment is
+       * linked to the one chosen. The five above are kinds of loan; this is the act of paying
+       * one, which is why it is a SubType beside them rather than one more kind.
+       */
+      { id: "sub_loan_emi", name: "EMI", icon: "calendar-clock", color: "#be123c" }
     ]
   },
   {
@@ -223,7 +255,17 @@ export const DEFAULT_CATEGORY_TYPES = [
     icon: "rotate-ccw",
     color: "#0891b2",
     subcategories: []
-  }
+  },
+  {
+    id: "type_adjustment",
+    name: "Adjustment",
+    behavior: "adjustment",
+    icon: "rotate-ccw",
+    color: "#64748b",
+    subcategories: [
+      { id: "sub_adjustment_balance", name: "Balance adjustment", icon: "rotate-ccw", color: "#64748b" }
+    ]
+  },
 ] as const;
 
 // Defaults added after the first release. A database created before the seeded-defaults ledger
@@ -234,7 +276,12 @@ export const DEFAULTS_ADDED_AFTER_LEDGER = new Set<string>([
   "sub_insurance",
   "sub_education",
   "sub_personal_care",
-  "type_refund"
+  "type_refund",
+  /* fixes-33: an existing database has never seen these, so they are inserted rather than
+     treated as defaults their owner deleted. */
+  "type_adjustment",
+  "sub_adjustment_balance",
+  "sub_loan_emi"
 ]);
 
 /**
@@ -276,7 +323,9 @@ export const transactionKindSchema = z.enum([
   "card_payment",
   "reversal",
   "investment",
-  "emi"
+  "emi",
+  /* A correction to a balance. Its own kind, for the same reason its behaviour is its own. */
+  "adjustment"
 ]);
 export const taxonomyBehaviorSchema = z.enum(TAXONOMY_BEHAVIORS);
 export const budgetScopeTypeSchema = z.enum(["type", "subcategory"]);

@@ -9,7 +9,9 @@ export type TransactionKind =
   | "card_payment"
   | "reversal"
   | "investment"
-  | "emi";
+  | "emi"
+  /** A correction to a balance: neither spending nor income. */
+  | "adjustment";
 export type PaymentMethod = "upi" | "credit_card" | "bank_transfer" | "cash" | "other";
 export type TaxonomyBehavior =
   | "expense"
@@ -18,7 +20,9 @@ export type TaxonomyBehavior =
   | "investment"
   | "transfer"
   | "card_payment"
-  | "refund";
+  | "refund"
+  /** A correction to a balance: counted in no total about the month. */
+  | "adjustment";
 export type BudgetScopeType = "type" | "subcategory";
 
 export type Account = {

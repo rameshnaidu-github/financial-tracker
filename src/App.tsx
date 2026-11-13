@@ -61,6 +61,7 @@ import {
   monthValue,
   outstandingSplit,
   parseAmountToPaise,
+  parseSignedAmount,
   signedAmount,
   splitMonth,
   todayISO,
@@ -109,6 +110,9 @@ import {
   AUTOPAY_DURATION_MONTH_OPTIONS,
   AUTOPAY_SUBCATEGORY_ID,
   MUTUAL_FUNDS_SUBCATEGORY_ID,
+  ADJUSTMENT_SUBCATEGORY_ID,
+  ADJUSTMENT_TYPE_ID,
+  EMI_SUBCATEGORY_ID,
   SELF_TRANSFER_SUBCATEGORY_ID,
   DEFAULT_HOLDING_GROUPING,
   HOLDING_GROUPINGS,
@@ -2223,7 +2227,19 @@ function TransactionEntryForm({
   const selectedType = categoryTypes.find((type) => type.id === form.typeId);
   const availableSubcategories = selectedType?.subcategories ?? [];
   const selectedBehavior = selectedType?.behavior ?? "expense";
-  const availableLoans = loans.filter((loan) => loan.subcategoryId === form.subcategoryId);
+  /*
+   * Which EMIs this payment could be for. The EMI SubType offers everything still running --
+   * a card's EMI and a loan's alike -- the way AutoPay offers every active subscription. The
+   * five loan kinds beside it still offer only their own, because picking "Home" and being shown
+   * a vehicle loan would be a worse list, not a longer one. Nothing paid off is offered: there
+   * is nothing left to pay.
+   */
+  const isEmiSelected = form.subcategoryId === EMI_SUBCATEGORY_ID;
+  const availableLoans = (isEmiSelected ? [...loans, ...cardEmis] : loans).filter((loan) =>
+    isEmiSelected
+      ? !loan.isArchived && loan.outstandingPaise > 0
+      : loan.subcategoryId === form.subcategoryId
+  );
   const isAutopaySelected = form.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
   const isMutualFundsSelected = form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
   const isSelfTransferSelected = form.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID;
@@ -2498,7 +2514,7 @@ function TransactionEntryForm({
       {selectedBehavior === "loan" && (
         <>
           <label>
-            Linked loan
+            {isEmiSelected ? "Linked EMI" : "Linked loan"}
             <select
               value={form.loanId}
               onChange={(event) => setForm({ ...form, loanId: event.target.value })}
@@ -5531,6 +5547,25 @@ export function AccountCard({
         </div>
       )}
 
+      {/*
+        * What the bar above just said, in words, directly under it -- the owner drew this: the
+        * percentage and what is left belong to the utilisation bar, so they sit against it
+        * rather than below a second bar that is about something else entirely.
+        */}
+      <div className="budget-card-foot">
+        {isCard ? (
+          <>
+            <span>{limit > 0 ? `${usage}% of ${formatINRWhole(limit)}` : "No limit set"}</span>
+            <span>{limit > 0 ? `${formatINRWhole(available)} left` : "Set one to see utilisation"}</span>
+          </>
+        ) : (
+          <>
+            <span>Opened at {formatINRWhole(account.startingBalancePaise)}</span>
+            <span>{minimum > 0 ? `${formatINRWhole(minimum)} minimum` : "No minimum set"}</span>
+          </>
+        )}
+      </div>
+
       {/* The second reading the owner asked for: what is owed, cut into this cycle's own
           spending and the EMIs still running. accounts-30 put this in the edit dialog; it
           belongs on the card, where the first reading already is. */}
@@ -5547,7 +5582,7 @@ export function AccountCard({
           <p className="outstanding-split-legend">
             <span className="spend">
               <i aria-hidden="true" />
-              Monthly {split.spendPercent}% · {formatINRWhole(split.spendPaise)}
+              Monthly spends {split.spendPercent}% · {formatINRWhole(split.spendPaise)}
             </span>
             <span className="emi">
               <i aria-hidden="true" />
@@ -5556,20 +5591,6 @@ export function AccountCard({
           </p>
         </>
       )}
-
-      <div className="budget-card-foot">
-        {isCard ? (
-          <>
-            <span>{limit > 0 ? `${usage}% of ${formatINRWhole(limit)}` : "No limit set"}</span>
-            <span>{limit > 0 ? `${formatINRWhole(available)} left` : "Set one to see utilisation"}</span>
-          </>
-        ) : (
-          <>
-            <span>Opened at {formatINRWhole(account.startingBalancePaise)}</span>
-            <span>{minimum > 0 ? `${formatINRWhole(minimum)} minimum` : "No minimum set"}</span>
-          </>
-        )}
-      </div>
 
       <button type="button" className="budget-card-edit" onClick={onStartEdit}>
         <Pencil size={15} />
@@ -5911,6 +5932,23 @@ function AccountsPage({
         />
       </div>
 
+      {/* Above the accounts rather than below them, the way Investments puts its allocation
+          first: the shape of what is owed is the thing you read before the cards it is made of,
+          and at the foot of three rows of cards it was off the screen. */}
+      {cardOutstandingPaise > 0 && (
+        <Panel title="Card utilisation">
+          <MixChart
+            segments={cardSegments}
+            totalPaise={cardOutstandingPaise}
+            ariaLabel="Credit card utilisation"
+            centerLabel="Card debt"
+            centerValue={formatINRWhole(cardOutstandingPaise)}
+            className="overview-donut-chart"
+            emptyText="No credit card owes anything right now."
+          />
+        </Panel>
+      )}
+
       {/* Grouped, and three across rather than the budget page's four -- an account's card
           carries two bars and a legend where a budget's carries one bar. */}
       {groups.map((group, index) => (
@@ -5935,21 +5973,6 @@ function AccountsPage({
 
       {groups.length === 0 && <div className="budget-grid accounts-grid">{addCard}</div>}
 
-      {/* Kept from before: the same card debt cut by card. The budget page has no second panel,
-          but dropping a view the owner already has to tighten a resemblance is the wrong trade. */}
-      {cardOutstandingPaise > 0 && (
-        <Panel title="Card utilisation">
-          <MixChart
-            segments={cardSegments}
-            totalPaise={cardOutstandingPaise}
-            ariaLabel="Credit card utilisation"
-            centerLabel="Card debt"
-            centerValue={formatINRWhole(cardOutstandingPaise)}
-            className="overview-donut-chart"
-            emptyText="No credit card owes anything right now."
-          />
-        </Panel>
-      )}
 
       {adding && (
         <FormDialog title="New account" onClose={() => setAdding(false)}>
@@ -7532,41 +7555,53 @@ function SubscriptionsPage({
 }) {
   const [editing, setEditing] = useState<AutopaySubscription | null>(null);
   const [adding, setAdding] = useState(false);
-  const bankAccounts = accounts.filter((account) => account.type === "bank");
+  /* A subscription charged to a card is the ordinary case, not an exception, and this list
+     showing banks alone is how the owner came to open the form and find their cards missing. */
+  const debitAccounts = accounts.filter(
+    (account) => !account.isArchived && (account.type === "bank" || account.type === "credit_card")
+  );
   const active = subscriptions.filter((subscription) => !subscription.isArchived);
-  const archived = subscriptions.filter((subscription) => subscription.isArchived);
   const activeCount = active.filter((subscription) => subscription.status === "active").length;
   const monthlyTotal = active
     .filter((subscription) => subscription.status === "active")
     .reduce((sum, subscription) => sum + subscription.amountPaise, 0);
 
-  function archive(subscription: AutopaySubscription) {
+  /* Running and finished, the way the accounts page groups banks and cards: a heading only
+     where something sits under it. "Expired" is the subscription's own word for a term that has
+     run its course -- it is not archived, and it is not gone. */
+  const subscriptionGroups = [
+    {
+      key: "running",
+      title: "Running",
+      subscriptions: active.filter((subscription) => subscription.status === "active")
+    },
+    {
+      key: "finished",
+      title: "Finished",
+      subscriptions: active.filter((subscription) => subscription.status !== "active")
+    }
+  ].filter((group) => group.subscriptions.length > 0);
+
+  function remove(subscription: AutopaySubscription) {
     requestConfirm({
-      message: "Are you sure you want to archive this subscription?",
-      detail: `${subscription.name} will move out of active tracking. Existing transactions and counts stay preserved.`,
-      confirmLabel: "Archive",
+      message: `Delete ${subscription.name}?`,
+      /* The thing worth saying plainly, because it is the thing that makes deleting safe: the
+         payments it already made are money that actually moved, and they stay. */
+      detail:
+        "The subscription goes and stops being counted. Every payment it has already made stays on your transactions, and your balances do not change.",
+      confirmLabel: "Delete",
       tone: "danger",
       onConfirm: async () => {
         try {
-          await Api.archiveSubscription(subscription.id);
+          await Api.deleteSubscription(subscription.id);
           if (editing?.id === subscription.id) setEditing(null);
           await refresh();
-          showNotice("Subscription archived.");
+          showNotice("Subscription deleted. Its payments are still on your transactions.");
         } catch (err) {
-          showNotice(err instanceof Error ? err.message : "Could not archive subscription.");
+          showNotice(err instanceof Error ? err.message : "Could not delete subscription.");
         }
       }
     });
-  }
-
-  async function restore(subscription: AutopaySubscription) {
-    try {
-      await Api.updateSubscription(subscription.id, { isArchived: false });
-      await refresh();
-      showNotice("Subscription restored.");
-    } catch (err) {
-      showNotice(err instanceof Error ? err.message : "Could not restore subscription.");
-    }
   }
 
   return (
@@ -7585,44 +7620,35 @@ function SubscriptionsPage({
         <SummaryCard label="Monthly total" value={formatINRWhole(monthlyTotal)} countPaise={monthlyTotal} icon={<ArrowDownUp />} tone="warning" />
       </section>
 
-      <Panel title="Subscription tracker">
-          {active.length === 0 ? (
-            <EmptyState text="No active subscriptions yet." />
-          ) : (
-            <div className="loan-card-grid">
-              {active.map((subscription) => (
-                <SubscriptionCard
-                  key={subscription.id}
-                  subscription={subscription}
-                  onEdit={setEditing}
-                  onArchive={archive}
-                />
-              ))}
-            </div>
-          )}
+      {/*
+        * Laid out like the Accounts page, which is what the owner asked for: the cards are the
+        * page rather than the contents of a panel on it, grouped by whether they are still
+        * running, three across. There is no archived group any more -- archive became delete,
+        * so a subscription is either here or gone.
+        */}
+      {subscriptionGroups.map((group) => (
+        <section className="account-group" key={group.key}>
+          <h2 className="account-group-title">{group.title}</h2>
+          <div className="budget-grid accounts-grid">
+            {group.subscriptions.map((subscription) => (
+              <SubscriptionCard
+                key={subscription.id}
+                subscription={subscription}
+                onEdit={setEditing}
+                onDelete={remove}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
 
-          {archived.length > 0 && (
-            <>
-              <h3 className="section-subtitle">Archived subscriptions</h3>
-              <div className="loan-card-grid archived-loans">
-                {archived.map((subscription) => (
-                  <SubscriptionCard
-                    key={subscription.id}
-                    subscription={subscription}
-                    onEdit={setEditing}
-                    onRestore={restore}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-      </Panel>
+      {subscriptionGroups.length === 0 && <EmptyState text="No subscriptions yet. Add one to start tracking." />}
 
       {adding && (
         <FormDialog title="Add subscription" onClose={() => setAdding(false)}>
         <SubscriptionForm
           subscription={null}
-          bankAccounts={bankAccounts}
+          debitAccounts={debitAccounts}
           onCancel={() => setAdding(false)}
           onSaved={async (message) => {
             setAdding(false);
@@ -7638,7 +7664,7 @@ function SubscriptionsPage({
           <SubscriptionForm
             key={editing.id}
             subscription={editing}
-            bankAccounts={bankAccounts}
+            debitAccounts={debitAccounts}
             onCancel={() => setEditing(null)}
             onSaved={async (message) => {
               setEditing(null);
@@ -7655,18 +7681,18 @@ function SubscriptionsPage({
 function SubscriptionCard({
   subscription,
   onEdit,
-  onArchive,
-  onRestore
+  onDelete
 }: {
   subscription: AutopaySubscription;
   onEdit: (subscription: AutopaySubscription) => void;
-  onArchive?: (subscription: AutopaySubscription) => void;
-  onRestore?: (subscription: AutopaySubscription) => void;
+  /* Archive and Restore were a pair; the owner asked for delete instead, and there is nothing
+     to restore from. The payments a deleted subscription made stay on the transactions. */
+  onDelete?: (subscription: AutopaySubscription) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const expired = subscription.status === "expired";
   return (
-    <article className={`loan-card ${subscription.isArchived ? "archived" : ""}`}>
+    <article className="loan-card">
       <div className="loan-card-header">
         <div className="loan-title">
           <span className="loan-icon" style={{ color: "#4f46e5", background: "#4f46e514" }}>
@@ -7728,16 +7754,10 @@ function SubscriptionCard({
           <Pencil size={16} />
           Edit
         </button>
-        {onRestore && (
-          <button type="button" className="secondary-action" onClick={() => onRestore(subscription)}>
-            <RotateCcw size={16} />
-            Restore
-          </button>
-        )}
-        {onArchive && (
-          <button type="button" className="secondary-action danger-action" onClick={() => onArchive(subscription)}>
-            <Archive size={16} />
-            Archive
+        {onDelete && (
+          <button type="button" className="secondary-action danger-action" onClick={() => onDelete(subscription)}>
+            <Trash2 size={16} />
+            Delete
           </button>
         )}
       </div>
@@ -7750,12 +7770,13 @@ function SubscriptionCard({
 
 function SubscriptionForm({
   subscription,
-  bankAccounts,
+  debitAccounts,
   onSaved,
   onCancel
 }: {
   subscription: AutopaySubscription | null;
-  bankAccounts: Account[];
+  /** Every account an AutoPay can come out of: a bank or a card. */
+  debitAccounts: Account[];
   onSaved: (message: string) => Promise<void>;
   onCancel?: () => void;
 }) {
@@ -7828,9 +7849,9 @@ function SubscriptionForm({
         Paid from
         <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
           <option value="">Just remind me</option>
-          {bankAccounts.map((account) => (
+          {debitAccounts.map((account) => (
             <option key={account.id} value={account.id}>
-              {account.name}
+              {account.name} · {accountTypeLabel(account.type)}
             </option>
           ))}
         </select>
@@ -7839,7 +7860,7 @@ function SubscriptionForm({
           being asked each time, so it says plainly what it will and will not do. */}
       <p className="field-hint investment-form-hint">
         {accountId
-          ? "Each payment is taken from that account on its day, from today onwards, but only when the balance covers it. A month it cannot cover stays listed in Upcoming payments until it can."
+          ? "Each payment is taken from that account on its day, from today onwards, but only when there is room for it -- the balance on a bank, what is left of the limit on a card. A month it cannot cover stays listed in Upcoming payments until it can."
           : "Left as a reminder, this is listed in Upcoming payments and you record each payment yourself."}
       </p>
       {error && <p className="form-error">{error}</p>}
@@ -9607,8 +9628,49 @@ export function AccountEditDialog({
     name: account.name,
     opening: amountInputFromPaise(account.startingBalancePaise),
     limit: account.creditLimitPaise === null ? "" : amountInputFromPaise(account.creditLimitPaise),
-    dueDay: account.paymentDueDay ? String(account.paymentDueDay) : ""
+    dueDay: account.paymentDueDay ? String(account.paymentDueDay) : "",
+    // Blank and zero both mean no alert, which is what an account starts with.
+    minimum: account.minimumBalancePaise ? amountInputFromPaise(account.minimumBalancePaise) : ""
   }));
+  /* Kept apart from the draft above on purpose. Everything else in this dialog describes the
+     account; this writes a transaction, and it applies when it is pressed rather than riding
+     along with Save -- so saving the name twice cannot correct the balance twice. */
+  const adjustHintId = useId();
+  const [adjustment, setAdjustment] = useState("");
+  const [adjusting, setAdjusting] = useState(false);
+
+  async function applyAdjustment() {
+    const parsed = parseSignedAmount(adjustment);
+    if (!parsed) {
+      onError("Type how much to adjust by, as +500 or -500.");
+      return;
+    }
+    setAdjusting(true);
+    try {
+      await Api.createTransaction({
+        date: todayISO(),
+        accountId: account.id,
+        method: account.type === "credit_card" ? "credit_card" : "bank_transfer",
+        merchant: "Balance adjustment",
+        typeId: ADJUSTMENT_TYPE_ID,
+        subcategoryId: ADJUSTMENT_SUBCATEGORY_ID,
+        amountPaise: parsed.paise,
+        direction: parsed.direction,
+        kind: "adjustment"
+      });
+      const moved = parsed.direction === "inflow" ? parsed.paise : -parsed.paise;
+      setAdjustment("");
+      await onSaved(
+        `Balance adjusted by ${signedAmount(parsed.paise, parsed.direction)}. Now ${formatINRWhole(
+          account.balancePaise + moved
+        )}.`
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Could not adjust the balance.");
+    } finally {
+      setAdjusting(false);
+    }
+  }
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -9628,12 +9690,18 @@ export function AccountEditDialog({
       onError("Payment due day must be a day of the month, 1 to 31.");
       return;
     }
+    const minimumPaise = isCard ? undefined : parseAmountToPaise(draft.minimum || "0");
+    if (minimumPaise !== undefined && minimumPaise < 0) {
+      onError("A minimum balance can't be negative.");
+      return;
+    }
     setSaving(true);
     try {
       await Api.updateAccount(account.id, {
         name: draft.name.trim(),
         startingBalancePaise: openingPaise,
-        ...(limitPaise !== undefined ? { creditLimitPaise: limitPaise, paymentDueDay: dueDay } : {})
+        ...(limitPaise !== undefined ? { creditLimitPaise: limitPaise, paymentDueDay: dueDay } : {}),
+        ...(minimumPaise !== undefined ? { minimumBalancePaise: minimumPaise } : {})
       });
       const shift = openingPaise - account.startingBalancePaise;
       await onSaved(
@@ -9694,6 +9762,50 @@ export function AccountEditDialog({
               </small>
             </label>
           </>
+        )}
+        {!isCard && (
+          <label>
+            Minimum balance
+            <input
+              inputMode="decimal"
+              value={draft.minimum}
+              onChange={(event) => setDraft({ ...draft, minimum: event.target.value })}
+              placeholder="0"
+            />
+            <small className="field-hint">
+              The app flags this account when it falls below this. Leave it blank for no alert.
+            </small>
+          </label>
+        )}
+        {!isCard && (
+          <div className="account-adjust">
+            <label>
+              Adjust balance
+              <div className="account-adjust-row">
+                <input
+                  inputMode="text"
+                  value={adjustment}
+                  onChange={(event) => setAdjustment(event.target.value)}
+                  placeholder="+500 or -500"
+                  aria-describedby={`${adjustHintId}`}
+                />
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={applyAdjustment}
+                  disabled={adjusting || !adjustment.trim()}
+                >
+                  {adjusting ? "Adjusting..." : "Apply"}
+                </button>
+              </div>
+              <small className="field-hint" id={adjustHintId}>
+                For when the app and your bank disagree. The amount is the size of the correction,
+                so +500 raises the balance by ₹500 and -500 lowers it. It is written as its own
+                transaction, which you can delete to undo it, and it counts as neither spending
+                nor income.
+              </small>
+            </label>
+          </div>
         )}
         <div className="budget-dialog-actions">
           <button type="button" className="secondary-action danger-action" onClick={onDelete} disabled={saving}>

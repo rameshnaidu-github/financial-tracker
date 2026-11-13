@@ -68,18 +68,32 @@
 }
 
 :root[data-theme="dark"] {
+  /*
+   * The surfaces are neutral, the accent is not.
+   *
+   * Every one of these used to be a tint of the accent -- the page at 30% saturation, the panels
+   * at 24%, even the body text at 17% -- and the owner's word for the result was that it was too
+   * green. A theme in which everything is the accent has no accent: the one colour that is
+   * supposed to mean "this matters" was also the paper it was printed on.
+   *
+   * So each surface keeps its lightness exactly, which is what the contrast of every pair above
+   * it depends on, and gives up its saturation: a few per cent at the accent's own hue, enough
+   * that the greys are not cold beside a green button and not enough to read as a colour. The
+   * accent, the status colours and their tints are untouched -- they are the things that are
+   * meant to be seen.
+   */
   /* Sampled from the reference's own frames over rectangles, not points: its chrome is
      translucent over a photograph, so a single pixel lands wherever that photo is bright. The
      accent is #7de2af across 1481 samples of a primary button, and the same colour carries its
      active navigation pill. "Close" is #f5d082 over 785. */
-  --bg: #0e1a12;
-  --bg-deep: #0a140e;
-  --panel: #142116;
-  --panel-soft: #1a2a1d;
-  --text: #e4ece5;
-  --muted: #93a797;
-  --line: #263a2b;
-  --line-strong: #35503c;
+  --bg: #131514;
+  --bg-deep: #0e100f;
+  --panel: #191c1a;
+  --panel-soft: #202322;
+  --text: #e7e9e8;
+  --muted: #9aa19d;
+  --line: #2d3330;
+  --line-strong: #3f4642;
   --accent: #7de2af;
   --accent-strong: #9aecc2;
   --accent-soft: #15301f;
@@ -91,7 +105,7 @@
   --danger-soft: #30201c;
   --warning: #f5d082;
   --warning-soft: #2e2817;
-  --track: #3a4840;
+  --track: #3e4440;
 
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 26px -16px rgba(0, 0, 0, 0.6);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 26px 52px -26px rgba(0, 0, 0, 0.75);
@@ -129,8 +143,10 @@ body {
 
 :root[data-theme="dark"] body {
   background:
-    radial-gradient(1200px 520px at 12% -10%, rgba(125, 226, 175, 0.08), transparent 60%),
-    radial-gradient(900px 480px at 110% 8%, rgba(76, 195, 138, 0.04), transparent 60%),
+    /* The wash over the ground, now that the ground itself is neutral: a quarter of what it was.
+       At 8% over a surface already tinted green it was the loudest green on the page. */
+    radial-gradient(1200px 520px at 12% -10%, rgba(125, 226, 175, 0.022), transparent 60%),
+    radial-gradient(900px 480px at 110% 8%, rgba(76, 195, 138, 0.012), transparent 60%),
     var(--bg);
 }
 
