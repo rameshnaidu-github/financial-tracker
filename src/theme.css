@@ -2306,6 +2306,11 @@ body::before {
   }
 }
 
+/* Profile Save shares the primary look: dark label on the light accent in dark mode (white was ~2.4:1). */
+.profile-menu .profile-save-button:hover {
+  background: var(--accent-strong);
+}
+
 :root[data-theme="dark"] .profile-save-button,
 :root[data-theme="dark"] .profile-menu .profile-save-button,
 :root[data-theme="dark"] .profile-menu .profile-save-button:hover {

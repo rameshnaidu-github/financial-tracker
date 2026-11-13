@@ -651,11 +651,6 @@ a {
   transform: rotate(180deg);
 }
 
-@keyframes disclosure-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
 .panel-header h2 {
   margin: 0;
   font-size: 1.12rem;
