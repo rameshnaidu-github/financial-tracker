@@ -714,6 +714,139 @@ textarea:focus {
   animation-delay: 240ms;
 }
 
+/*
+ * Rows arrive one after another rather than all at once.
+ *
+ * The page-level cascade above moves whole sections; this moves what is inside them, so a list
+ * reads as it fills rather than appearing complete. Only the first twelve rows are animated: a
+ * ledger can run to hundreds, and animating all of them would be hundreds of composited layers
+ * for motion nobody is looking at -- row thirteen onward is simply there. The step is small
+ * enough that the last animated row has arrived within half a second.
+ */
+.ledger-row,
+.donut-legend-row,
+.budget-grid > *,
+.metric-list > *,
+.impact-stack > *,
+.taxonomy-tree > * {
+  animation: rise-row var(--dur-slow) var(--ease-out) both;
+}
+
+@keyframes rise-row {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ledger-row:nth-child(1),
+.donut-legend-row:nth-child(1),
+.budget-grid > *:nth-child(1),
+.metric-list > *:nth-child(1),
+.impact-stack > *:nth-child(1),
+.taxonomy-tree > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+
+.ledger-row:nth-child(2),
+.donut-legend-row:nth-child(2),
+.budget-grid > *:nth-child(2),
+.metric-list > *:nth-child(2),
+.impact-stack > *:nth-child(2),
+.taxonomy-tree > *:nth-child(2) {
+  animation-delay: 35ms;
+}
+
+.ledger-row:nth-child(3),
+.donut-legend-row:nth-child(3),
+.budget-grid > *:nth-child(3),
+.metric-list > *:nth-child(3),
+.impact-stack > *:nth-child(3),
+.taxonomy-tree > *:nth-child(3) {
+  animation-delay: 70ms;
+}
+
+.ledger-row:nth-child(4),
+.donut-legend-row:nth-child(4),
+.budget-grid > *:nth-child(4),
+.metric-list > *:nth-child(4),
+.impact-stack > *:nth-child(4),
+.taxonomy-tree > *:nth-child(4) {
+  animation-delay: 105ms;
+}
+
+.ledger-row:nth-child(5),
+.donut-legend-row:nth-child(5),
+.budget-grid > *:nth-child(5),
+.metric-list > *:nth-child(5),
+.impact-stack > *:nth-child(5),
+.taxonomy-tree > *:nth-child(5) {
+  animation-delay: 140ms;
+}
+
+.ledger-row:nth-child(6),
+.donut-legend-row:nth-child(6),
+.budget-grid > *:nth-child(6),
+.metric-list > *:nth-child(6),
+.impact-stack > *:nth-child(6),
+.taxonomy-tree > *:nth-child(6) {
+  animation-delay: 175ms;
+}
+
+.ledger-row:nth-child(7),
+.donut-legend-row:nth-child(7),
+.budget-grid > *:nth-child(7),
+.metric-list > *:nth-child(7),
+.taxonomy-tree > *:nth-child(7) {
+  animation-delay: 210ms;
+}
+
+.ledger-row:nth-child(8),
+.donut-legend-row:nth-child(8),
+.budget-grid > *:nth-child(8),
+.metric-list > *:nth-child(8),
+.taxonomy-tree > *:nth-child(8) {
+  animation-delay: 245ms;
+}
+
+.ledger-row:nth-child(9),
+.budget-grid > *:nth-child(9),
+.taxonomy-tree > *:nth-child(9) {
+  animation-delay: 280ms;
+}
+
+.ledger-row:nth-child(10),
+.budget-grid > *:nth-child(10),
+.taxonomy-tree > *:nth-child(10) {
+  animation-delay: 315ms;
+}
+
+.ledger-row:nth-child(11),
+.budget-grid > *:nth-child(11),
+.taxonomy-tree > *:nth-child(11) {
+  animation-delay: 350ms;
+}
+
+.ledger-row:nth-child(12),
+.budget-grid > *:nth-child(12),
+.taxonomy-tree > *:nth-child(12) {
+  animation-delay: 385ms;
+}
+
+/* Past the twelfth, no animation at all rather than a longer and longer wait. */
+.ledger-row:nth-child(n + 13),
+.donut-legend-row:nth-child(n + 9),
+.budget-grid > *:nth-child(n + 13),
+.metric-list > *:nth-child(n + 9),
+.impact-stack > *:nth-child(n + 7),
+.taxonomy-tree > *:nth-child(n + 13) {
+  animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
@@ -843,8 +976,12 @@ textarea:focus {
   }
 }
 
-/* The entry form reflows by the width of its own panel, not the window, so it never clips. */
-.weekly-grid > * {
+/*
+ * The entry form reflows by the width of what holds it rather than the window, so it never
+ * clips. That used to be the Weekly Entry panel; the form now lives in a dialog, so the
+ * dialog's body is the container it measures itself against.
+ */
+.form-dialog-body {
   container-type: inline-size;
 }
 
@@ -2050,6 +2187,40 @@ button.donut-legend-item:hover {
   }
 }
 
+/*
+ * With a direction, the two pages move rather than only fade: going further down the sidebar,
+ * the old page lifts away and the new one rises into its place; going back up, both go the other
+ * way. The distance is small on purpose -- far enough to say which way you moved, not so far that
+ * the page appears to be thrown.
+ */
+@keyframes page-out-forward {
+  to {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+}
+
+@keyframes page-in-forward {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+}
+
+@keyframes page-out-back {
+  to {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+
+@keyframes page-in-back {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+}
+
 .content-area {
   view-transition-name: page;
 }
@@ -2066,6 +2237,22 @@ button.donut-legend-item:hover {
 
 ::view-transition-new(page) {
   animation: page-in 280ms var(--ease-out) 40ms both;
+}
+
+:root[data-page-direction="forward"]::view-transition-old(page) {
+  animation: page-out-forward 150ms var(--ease-out) both;
+}
+
+:root[data-page-direction="forward"]::view-transition-new(page) {
+  animation: page-in-forward 300ms var(--ease-out) 40ms both;
+}
+
+:root[data-page-direction="back"]::view-transition-old(page) {
+  animation: page-out-back 150ms var(--ease-out) both;
+}
+
+:root[data-page-direction="back"]::view-transition-new(page) {
+  animation: page-in-back 300ms var(--ease-out) 40ms both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2394,19 +2581,45 @@ button.mix-bar-head:hover > span {
   cursor: default;
 }
 
-/* ---------- Weekly Entry: the action sits under the middle of its form ---------- */
-.entry-form .add-button {
-  grid-column: 1 / -1;
-  justify-self: center;
-  min-width: 220px;
+/* ---------- A dialog's own way out, beside the way on ---------- */
+/*
+ * Cancel and the primary action share a row at the end of a form shown in a dialog. Cancel is
+ * first in the markup so the keyboard reaches it on the way to the action rather than past it,
+ * and the pair sits to the right, under the fields, where the eye finishes.
+ */
+.entry-form-actions,
+.dialog-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
   margin-top: 4px;
 }
 
-@media (max-width: 720px) {
-  /* A phone has no room for a centred island: the action takes the full width. */
-  .entry-form .add-button {
-    width: 100%;
+.entry-form-actions {
+  grid-column: 1 / -1;
+}
+
+.entry-form-actions .add-button {
+  min-width: 200px;
+}
+
+@container (max-width: 480px) {
+  /* Narrow enough that two buttons on a row would each be too small to read. */
+  .entry-form-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .entry-form-actions .add-button {
     min-width: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .dialog-form-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
   }
 }
 
