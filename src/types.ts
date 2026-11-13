@@ -228,6 +228,11 @@ export type Overview = {
   accounts: Account[];
   summary: {
     availableCashPaise: number;
+    /** Cash less the bills this month has not taken yet. Negative when they exceed it. */
+    safeToSpendPaise: number;
+    upcomingBillsPaise: number;
+    upcomingSubscriptionPaise: number;
+    upcomingEmiPaise: number;
     creditOutstandingPaise: number;
     /** What was spent on credit cards this month, EMI installments excluded. */
     cardSpendingPaise: number;

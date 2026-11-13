@@ -122,14 +122,14 @@ body {
   color: var(--text);
   font-variant-numeric: tabular-nums;
   background:
-    radial-gradient(1200px 520px at 12% -10%, rgba(58, 85, 180, 0.07), transparent 60%),
+    radial-gradient(1200px 520px at 12% -10%, rgba(16, 121, 78, 0.07), transparent 60%),
     radial-gradient(900px 480px at 110% 8%, rgba(31, 138, 91, 0.045), transparent 60%),
     var(--bg);
 }
 
 :root[data-theme="dark"] body {
   background:
-    radial-gradient(1200px 520px at 12% -10%, rgba(143, 163, 234, 0.08), transparent 60%),
+    radial-gradient(1200px 520px at 12% -10%, rgba(125, 226, 175, 0.08), transparent 60%),
     radial-gradient(900px 480px at 110% 8%, rgba(76, 195, 138, 0.04), transparent 60%),
     var(--bg);
 }
@@ -353,12 +353,12 @@ p {
   border-radius: 12px;
   background: var(--accent-soft);
   color: var(--accent);
-  box-shadow: inset 0 0 0 1px rgba(58, 85, 180, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(16, 121, 78, 0.1);
 }
 
 :root[data-theme="dark"] .summary-card > span {
   background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px rgba(143, 163, 234, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(125, 226, 175, 0.14);
 }
 
 .summary-card strong {
@@ -3716,5 +3716,311 @@ button.budget-hint-chip:focus-visible {
   .outstanding-bar-spend,
   .outstanding-bar-emi {
     transition: none;
+  }
+}
+
+/* ---------- The shell the reference draws: what the sidebar and the top bar carry ---------- */
+/*
+ * Everything in this section is a control that does something. The reference's chrome has a
+ * search, a bell and an avatar on it; what is here searches the ledger, lists what is actually
+ * waiting, and goes to the profile. Nothing was added because the picture had one.
+ */
+
+/* The month under the name, so the figure further down has a period attached to it. */
+.brand small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  letter-spacing: 0.01em;
+}
+
+/* A count beside a section, where that section is waiting on something. */
+.nav-badge {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.nav-item.active .nav-badge {
+  /* On the filled pill the soft accent disappears into it; this keeps the count legible. */
+  background: color-mix(in srgb, var(--on-accent) 22%, transparent);
+  color: var(--on-accent);
+}
+
+/* What is left to spend, standing above the person. */
+.sidebar-standing {
+  display: grid;
+  gap: 2px;
+  margin: 14px 0 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-soft);
+}
+
+.sidebar-standing-label {
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sidebar-standing-value {
+  font-size: 1.22rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-standing.tone-warning .sidebar-standing-value {
+  color: var(--warning);
+}
+
+.sidebar-standing-detail {
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+/* The person, at the foot of the sidebar and again in the top bar. */
+.sidebar-avatar,
+.topbar-person > span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.sidebar-person {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  text-align: left;
+}
+
+.sidebar-person strong {
+  font-size: 0.86rem;
+  font-weight: 620;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-person small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-item.active .sidebar-avatar {
+  background: color-mix(in srgb, var(--on-accent) 22%, transparent);
+  color: var(--on-accent);
+}
+
+.nav-item.active .sidebar-person small {
+  color: inherit;
+  opacity: 0.8;
+}
+
+/* Search, which goes to the ledger with what was typed. */
+.topbar-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: min(260px, 32vw);
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-soft);
+  color: var(--muted);
+}
+
+.topbar-search:focus-within {
+  border-color: var(--accent-strong);
+  color: var(--text);
+}
+
+.topbar-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.topbar-search input:focus {
+  outline: none;
+}
+
+.topbar-person {
+  display: grid;
+  place-items: center;
+  /* Sized like the icon buttons beside it rather than left to its content. On a phone the whole
+     bar becomes a single-column grid, and without a size of its own the person stretched to the
+     full width of the screen as a lozenge reading "RN". */
+  width: 36px;
+  height: 36px;
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  cursor: pointer;
+}
+
+.topbar-person:hover {
+  border-color: var(--line-strong);
+}
+
+/* The bell, and the list behind it. */
+.attention-wrap {
+  position: relative;
+}
+
+.attention-button.has-items {
+  color: var(--warning);
+}
+
+.attention-count {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--warning);
+  color: var(--on-accent);
+  font-size: 0.66rem;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.attention-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(330px, calc(100vw - 32px));
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  animation: rise var(--dur-fast) var(--ease-out) both;
+}
+
+.attention-empty {
+  margin: 0;
+  padding: 14px 12px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.attention-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.attention-item {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px 10px 20px;
+  position: relative;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.attention-item::before {
+  content: "";
+  position: absolute;
+  top: 15px;
+  left: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.attention-item.tone-warning::before {
+  background: var(--warning);
+}
+
+.attention-item.tone-danger::before {
+  background: var(--danger);
+}
+
+.attention-item:hover {
+  background: var(--panel-soft);
+}
+
+.attention-item strong {
+  font-size: 0.88rem;
+  font-weight: 620;
+}
+
+.attention-item small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+@media (max-width: 1120px) {
+  /* No sidebar at this width, so the shell's own controls carry it; the search gives up its room
+     first because the ledger has a search box of its own. */
+  .topbar-search {
+    width: min(200px, 40vw);
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar-search {
+    display: none;
+  }
+
+  /*
+   * The bar is a single-column grid at this width, which puts every control on a line of its own
+   * and stretches it. The account filter wants that width; the shell's three controls want to
+   * sit together in a row under it, each its own size.
+   */
+  .topbar-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .topbar-actions > .account-filter {
+    flex: 1 0 100%;
   }
 }

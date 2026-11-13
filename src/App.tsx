@@ -182,11 +182,19 @@ export function SidebarNav({
   items,
   activePage,
   newsUnread,
+  badges,
+  person,
+  standing,
   onNavigate
 }: {
   items: typeof navItems;
   activePage: Page;
   newsUnread: boolean;
+  /** How many things each section is waiting on. A page with nothing waiting is not in here. */
+  badges?: Partial<Record<Page, number>>;
+  person?: { name: string; email: string };
+  /** The one figure that stands above the person: what is left to spend, and what it is after. */
+  standing?: { label: string; value: string; detail: string; tone: "ok" | "warning" };
   onNavigate: (page: Page) => void;
 }) {
   const groups = NAV_GROUPS.filter((group) => items.some((item) => item.group === group));
@@ -211,6 +219,13 @@ export function SidebarNav({
                   >
                     <Icon size={18} />
                     <span>{item.label}</span>
+                    {/* A count, where there is something to count. Never a zero: a badge reading
+                        nought is a thing to read and dismiss on every single render. */}
+                    {badges?.[item.page] ? (
+                      <span className="nav-badge" aria-label={`${badges[item.page]} waiting`}>
+                        {badges[item.page]}
+                      </span>
+                    ) : null}
                     {item.page === "whatsNew" && newsUnread && <span className="nav-dot" aria-label="Unread" />}
                   </button>
                 );
@@ -218,16 +233,127 @@ export function SidebarNav({
           </div>
         ))}
       </nav>
-      {/* Profile sits below the list so it stays visible even when a short window scrolls the list. */}
+      {/* What is left to spend, then whose money it is. Both sit below the list so a short window
+          scrolls the sections past them rather than scrolling them away. */}
+      {standing && (
+        <div className={`sidebar-standing tone-${standing.tone}`}>
+          <span className="sidebar-standing-label">{standing.label}</span>
+          <strong className="sidebar-standing-value">{standing.value}</strong>
+          <span className="sidebar-standing-detail">{standing.detail}</span>
+        </div>
+      )}
       <button
         className={`nav-item profile-nav-item ${activePage === "profile" ? "active" : ""}`}
         aria-current={activePage === "profile" ? "page" : undefined}
         onClick={() => onNavigate("profile")}
       >
-        <UserCircle size={18} />
-        <span>Profile</span>
+        {person ? (
+          <>
+            <span className="sidebar-avatar" aria-hidden="true">
+              {initialsOf(person.name, person.email)}
+            </span>
+            <span className="sidebar-person">
+              <strong>{person.name || "Your profile"}</strong>
+              {person.email ? <small>{person.email}</small> : null}
+            </span>
+          </>
+        ) : (
+          <>
+            <UserCircle size={18} />
+            <span>Profile</span>
+          </>
+        )}
       </button>
     </>
+  );
+}
+
+/**
+ * One or two letters to stand for a person: their initials where they have given a name, the
+ * first letter of their address where they have not, and a neutral mark where there is neither.
+ * Never a generic avatar glyph -- an initial says which account this is, and a silhouette does
+ * not.
+ */
+export function initialsOf(name: string, email: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  const local = email.trim();
+  return local ? local[0].toUpperCase() : "\u00b7";
+}
+
+/**
+ * The bell in the top bar, and what is behind it.
+ *
+ * Lit only when something is actually waiting, carrying the count rather than a dot, and opening
+ * a list in which every line goes somewhere the thing can be dealt with. With nothing waiting it
+ * is still pressable and still says so -- a control that disappears when there is no news leaves
+ * you wondering whether it was ever there.
+ *
+ * It closes on Escape, on a click outside it, and on going somewhere, which is every way out a
+ * small popover needs. It is not a dialog: it traps nothing and holds nothing still behind it.
+ */
+export function AttentionMenu({ items, onGo }: { items: AttentionItem[]; onGo: (page: Page) => void }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement | null>(null);
+  const listId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const onPointerDown = (event: MouseEvent) => {
+      if (wrap.current && !wrap.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("mousedown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("mousedown", onPointerDown);
+    };
+  }, [open]);
+
+  const count = items.length;
+  return (
+    <div className="attention-wrap" ref={wrap}>
+      <button
+        type="button"
+        className={`icon-button attention-button${count > 0 ? " has-items" : ""}`}
+        aria-label={count === 0 ? "Nothing needs attention" : `${count} ${count === 1 ? "thing needs" : "things need"} attention`}
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <CircleAlert size={17} />
+        {count > 0 && <span className="attention-count" aria-hidden="true">{count}</span>}
+      </button>
+      {open && (
+        <div className="attention-panel" id={listId} role="group" aria-label="Needs attention">
+          {count === 0 ? (
+            <p className="attention-empty">Nothing needs attention.</p>
+          ) : (
+            <ul className="attention-list">
+              {items.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    className={`attention-item tone-${item.tone}`}
+                    onClick={() => {
+                      setOpen(false);
+                      onGo(item.page);
+                    }}
+                  >
+                    <strong>{item.label}</strong>
+                    <small>{item.detail}</small>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -368,11 +494,28 @@ function withPageTransition(update: () => void, direction: "forward" | "back" | 
   if (direction !== "none") {
     document.documentElement.dataset.pageDirection = direction;
   }
-  const transition = doc.startViewTransition(() => flushSync(update));
+  /*
+   * The browser decides when to run this callback: it waits until it can take the "before"
+   * snapshot. A page that is not being painted -- which a browser will still report as visible --
+   * may never reach that point, and then the page simply never changes, because the state update
+   * is inside the callback. The floor below applies the update directly if the transition has
+   * not done it shortly; `update` only sets the page it was given, so applying it twice settles
+   * on the same place.
+   */
+  let applied = false;
+  const apply = () => {
+    if (applied) return;
+    applied = true;
+    update();
+  };
+  const transition = doc.startViewTransition(() => flushSync(apply));
+  const floor = window.setTimeout(apply, 400);
   const clearDirection = () => {
+    window.clearTimeout(floor);
     delete document.documentElement.dataset.pageDirection;
   };
   transition?.finished?.then(clearDirection, clearDirection);
+  transition?.updateCallbackDone?.then(() => window.clearTimeout(floor), () => window.clearTimeout(floor));
   // An interrupted or skipped transition rejects all three of these. The page has already changed
   // by then, so none of them is an error worth surfacing; leaving any uncaught logs to the console.
   transition?.finished?.catch(() => {});
@@ -921,6 +1064,72 @@ export default function App() {
   const simpleMode = simpleModeFromSettings(bootstrap?.settings);
   const navigationModel = navigationFor(simpleMode);
 
+  /*
+   * The sidebar's standing figure and the top bar's attention list both need the month as the
+   * server sees it, and the shell outlives every page, so it holds that one payload itself
+   * rather than each page handing it upward. It is refetched on the same key a page refetches
+   * on, so recording something moves the figure above the fold at the same moment it moves the
+   * page. A failure here leaves the figure absent rather than wrong: the sidebar shows nothing
+   * where it would have been, and nothing else on screen depends on it.
+   */
+  const [shellOverview, setShellOverview] = useState<Overview | null>(null);
+  useEffect(() => {
+    /* `signedIn` is three-valued, and null is the ordinary case: it means nobody has been asked
+       to sign in because a session was already there, which is every visit after the first. Only
+       an explicit false is "not signed in" -- the shell itself renders on null too. Reading it as
+       a boolean is why the first version of this never fetched anything at all. */
+    if (signedIn === false) return;
+    let cancelled = false;
+    Api.overview()
+      .then((next) => {
+        if (!cancelled) setShellOverview(next);
+      })
+      .catch(() => {
+        if (!cancelled) setShellOverview(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [signedIn, refreshKey]);
+
+  /* What each section is waiting on. Only counts the application can account for, and only
+     where the count is not zero -- SidebarNav drops a falsy one rather than drawing a nought. */
+  const sidebarBadges: Partial<Record<Page, number>> = shellOverview
+    ? { transactions: shellOverview.summary.uncategorizedCount }
+    : {};
+
+  /* The figure that stands above the person: what is left after the bills this month has not
+     taken yet. Absent entirely until the month has been fetched, rather than showing a zero that
+     would read as "nothing left". */
+  const standingFigure = shellOverview
+    ? {
+        label: "Safe to spend",
+        value: formatINRWhole(shellOverview.summary.safeToSpendPaise),
+        detail:
+          shellOverview.summary.upcomingBillsPaise > 0
+            ? `after ${formatINRWhole(shellOverview.summary.upcomingBillsPaise)} of bills still to come`
+            : "no bills left this month",
+        tone: shellOverview.summary.safeToSpendPaise < 0 ? ("warning" as const) : ("ok" as const)
+      }
+    : undefined;
+
+  const [search, setSearch] = useState("");
+
+  /* One way to turn the theme over, now that two places offer it: the switch on the profile page
+     and the one in the top bar. Written here rather than twice, so they cannot drift over
+     whether the choice is remembered. */
+  const toggleTheme = useCallback(() => {
+    setTheme((value) => {
+      const next = value === "dark" ? "light" : "dark";
+      try {
+        window.localStorage.setItem(THEME_KEY, next);
+      } catch {
+        // Private windows can refuse storage; the choice still applies for this visit.
+      }
+      return next;
+    });
+  }, []);
+
   const canOpen = useCallback((page: Page) => pageAllowedIn(page, simpleMode), [simpleMode]);
 
   const saveSimpleMode = useCallback(
@@ -945,6 +1154,18 @@ export default function App() {
     return Number.isFinite(parsed) && parsed >= 1 && parsed <= 100 ? Math.round(parsed) : 30;
   })();
   const activeAccounts = accounts.filter((account) => !account.isArchived);
+
+  /* What needs attention, worked out from what the shell already holds. The list is the rule's
+     output: nothing qualifying means an empty list, and the control says so rather than hiding. */
+  const attention = attentionItems({
+    accounts: activeAccounts,
+    loans: [...loans, ...cardEmis],
+    subscriptions,
+    uncategorizedCount: shellOverview?.summary.uncategorizedCount ?? 0,
+    cardAlertPercent,
+    today: todayISO()
+  });
+
 
   // A failed boot must not sit behind a film: if the app cannot load, show why at once.
   useEffect(() => {
@@ -1234,17 +1455,7 @@ export default function App() {
                       onSaveSimpleMode={saveSimpleMode}
               onDownloadReport={() => setPrinting(true)}
               preparingReport={printing}
-                      onThemeToggle={() =>
-                        setTheme((value) => {
-                          const next = value === "dark" ? "light" : "dark";
-                          try {
-                            window.localStorage.setItem(THEME_KEY, next);
-                          } catch {
-                            // Private windows can refuse storage; the choice still applies for this visit.
-                          }
-                          return next;
-                        })
-                      }
+                      onThemeToggle={toggleTheme}
                     />
         );
       default:
@@ -1260,6 +1471,9 @@ export default function App() {
           <div className="brand-mark">₹</div>
           <div>
             <strong>Financial Tracker</strong>
+            {/* The month this is all about, so the figure below the list has a period attached
+                to it rather than floating free. */}
+            <small>{formatMonth(shellOverview?.month ?? todayISO().slice(0, 7))}</small>
           </div>
         </div>
 
@@ -1267,6 +1481,9 @@ export default function App() {
           items={navigationModel.items}
           activePage={activePage}
           newsUnread={newsUnread}
+          badges={sidebarBadges}
+          person={{ name: profileDraft.name, email: profileDraft.email }}
+          standing={standingFigure}
           onNavigate={navigate}
         />
       </aside>
@@ -1293,6 +1510,50 @@ export default function App() {
               <ChevronDown size={16} />
             </label>
             )}
+
+            {/* Search goes to the ledger with what was typed, which is the only place in the
+                application that can answer it. Not a box that filters whatever page you are on
+                into something smaller. */}
+            <form
+              className="topbar-search"
+              role="search"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const term = search.trim();
+                if (!term) return;
+                navigate("transactions", { search: term });
+                setSearch("");
+              }}
+            >
+              <Search size={16} aria-hidden="true" />
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search transactions"
+                aria-label="Search transactions"
+              />
+            </form>
+
+            <AttentionMenu items={attention} onGo={(page) => navigate(page)} />
+
+            <button
+              type="button"
+              className="icon-button topbar-theme"
+              aria-label={theme === "dark" ? "Switch to the light theme" : "Switch to the dark theme"}
+              onClick={toggleTheme}
+            >
+              {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
+
+            <button
+              type="button"
+              className="topbar-person"
+              aria-label={`${profileDraft.name || profileDraft.email || "Your profile"} — open your profile`}
+              onClick={() => navigate("profile")}
+            >
+              <span aria-hidden="true">{initialsOf(profileDraft.name, profileDraft.email)}</span>
+            </button>
           </div>
         </header>
 
@@ -5370,6 +5631,126 @@ export function accountTotals(accounts: Account[]) {
 }
 
 /** How much of its limit a card is using, as a whole percent. A card with no limit uses none. */
+/** One thing asking to be looked at, and where looking at it happens. */
+export type AttentionItem = {
+  id: string;
+  label: string;
+  detail: string;
+  page: Page;
+  tone: "warning" | "danger" | "neutral";
+};
+
+/**
+ * What actually needs attention, in the order it deserves it.
+ *
+ * The reference's shell has a bell on it. A bell that is always lit, or lit by nothing, is
+ * decoration -- so this is a rule rather than a list: each item is a condition that is either
+ * true of the data or absent entirely. Nothing needing attention produces nothing, and the
+ * control says so rather than showing an empty tray.
+ *
+ * Three conditions, each one the owner can act on today:
+ *   - transactions with no category, which quietly fall out of every report and budget
+ *   - a bill due in the next week: a card's payment, a loan's instalment, a subscription's debit
+ *   - a card past the utilisation the owner themselves set as the line
+ *
+ * `today` is passed rather than read, so the same data gives the same answer on any day a test
+ * cares to ask about.
+ */
+export function attentionItems({
+  accounts,
+  loans,
+  subscriptions,
+  uncategorizedCount,
+  cardAlertPercent,
+  today
+}: {
+  accounts: Account[];
+  loans: Loan[];
+  subscriptions: AutopaySubscription[];
+  uncategorizedCount: number;
+  cardAlertPercent: number;
+  today: string;
+}): AttentionItem[] {
+  const items: AttentionItem[] = [];
+  const day = Number(today.slice(8, 10));
+  const daysInMonth = new Date(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 0).getDate();
+  /* "Within the next week" has to wrap: on the 28th, a bill on the 2nd is four days off, not
+     twenty-six days behind. A day already past this month is not due again until next month. */
+  const daysAway = (dueDay: number) => (dueDay >= day ? dueDay - day : dueDay + daysInMonth - day);
+  const soon = (dueDay: number | null) => dueDay !== null && dueDay >= 1 && daysAway(dueDay) <= 7;
+  const live = accounts.filter((account) => !account.isArchived);
+
+  if (uncategorizedCount > 0) {
+    items.push({
+      id: "uncategorized",
+      label: `${uncategorizedCount} transaction${uncategorizedCount === 1 ? "" : "s"} need${
+        uncategorizedCount === 1 ? "s" : ""
+      } a category`,
+      detail: "Until they have one they are missing from reports and budgets.",
+      page: "transactions",
+      tone: "warning"
+    });
+  }
+
+  for (const account of live) {
+    if (account.type !== "credit_card" || account.outstandingPaise <= 0) continue;
+    if (!soon(account.paymentDueDay)) continue;
+    const away = daysAway(account.paymentDueDay as number);
+    items.push({
+      id: `card-due-${account.id}`,
+      label: `${account.name} bill due ${away === 0 ? "today" : away === 1 ? "tomorrow" : `in ${away} days`}`,
+      detail: `${formatINRWhole(account.outstandingPaise)} outstanding.`,
+      page: "accounts",
+      tone: away <= 1 ? "danger" : "warning"
+    });
+  }
+
+  for (const loan of loans) {
+    if (loan.isArchived || loan.outstandingPaise <= 0 || !soon(loan.emiDueDay)) continue;
+    const away = daysAway(loan.emiDueDay as number);
+    items.push({
+      id: `emi-due-${loan.id}`,
+      label: `${loan.name} instalment due ${away === 0 ? "today" : away === 1 ? "tomorrow" : `in ${away} days`}`,
+      detail: `${formatINRWhole(loan.monthlyEmiPaise)} a month.`,
+      page: "loans",
+      tone: away <= 1 ? "danger" : "warning"
+    });
+  }
+
+  for (const subscription of subscriptions) {
+    if (subscription.isArchived || subscription.status !== "active") continue;
+    const debitDay = Number(subscription.startDate.slice(8, 10));
+    if (!soon(debitDay)) continue;
+    const away = daysAway(debitDay);
+    items.push({
+      id: `autopay-${subscription.id}`,
+      label: `${subscription.name} debits ${away === 0 ? "today" : away === 1 ? "tomorrow" : `in ${away} days`}`,
+      detail: `${formatINRWhole(subscription.amountPaise)}${
+        subscription.accountName ? ` from ${subscription.accountName}` : ", with no account to take it from"
+      }.`,
+      page: "subscriptions",
+      tone: subscription.accountName ? "neutral" : "warning"
+    });
+  }
+
+  for (const account of live) {
+    if (account.type !== "credit_card") continue;
+    const used = cardUsagePercent(account);
+    if (used < cardAlertPercent) continue;
+    items.push({
+      id: `card-usage-${account.id}`,
+      label: `${account.name} is ${used}% used`,
+      detail: `Your alert is set at ${cardAlertPercent}%.`,
+      page: "accounts",
+      tone: used >= 90 ? "danger" : "warning"
+    });
+  }
+
+  // Worst first, so the control's own count and its first line agree about what matters.
+  const weight = { danger: 0, warning: 1, neutral: 2 } as const;
+  return items.sort((a, b) => weight[a.tone] - weight[b.tone]);
+}
+
 export function cardUsagePercent(account: Account): number {
   const limit = account.creditLimitPaise ?? 0;
   if (limit <= 0) {

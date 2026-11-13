@@ -7,50 +7,18 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
 
-  color: #10201d;
-  background: #f3f8fb;
-  font-family: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* The palette is declared once, in theme.css, which loads after this file and so has the last
+     word on every one of these. A second set here was a blue one left over from before the
+     reference was measured: not one of its values survived the cascade, and keeping a dead
+     palette next to the live one is how the two drift apart. Colours, fonts and shadows all come
+     from there now; what stays here is the hardware's own edges. */
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --bg: #f3f8fb;
-  --panel: #ffffff;
-  --panel-soft: #f7fbfd;
-  --text: #10201d;
-  --muted: #62716d;
-  --line: #dce8ec;
-  --line-strong: #bfd4dc;
-  --accent: #2563eb;
-  --accent-strong: #1d4ed8;
-  --accent-soft: #e8f0ff;
-  --accent-blue: #2563eb;
-  --warning: #ea580c;
-  --warning-soft: #fff1df;
-  --danger: #dc2626;
-  --good: #059669;
-  --shadow: 0 18px 44px rgba(16, 24, 40, 0.1);
-  --shadow-soft: 0 10px 26px rgba(16, 24, 40, 0.07);
 }
 
 :root[data-theme="dark"] {
-  color: #f3f7ff;
-  background: #090d14;
-  --bg: #090d14;
-  --panel: #121821;
-  --panel-soft: #0e141d;
-  --text: #f3f7ff;
-  --muted: #aeb9ca;
-  --line: #273142;
-  --line-strong: #3b4960;
-  --accent: #7de2af;
-  --accent-strong: #9aecc2;
-  --accent-soft: #15301f;
-  --accent-blue: #7de2af;
-  --warning: #f59e0b;
-  --warning-soft: #3a2610;
-  --danger: #f87171;
-  --good: #34d399;
-  --shadow: 0 16px 42px rgba(0, 0, 0, 0.38);
-  --shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.28);
+  /* Same again: theme.css declares the dark palette, and did so for every token that used to be
+     here -- including the page's own colour and ground, which it sets from those tokens. */
 }
 
 * {
@@ -61,11 +29,8 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100dvh;
-  background: linear-gradient(180deg, #fbfefd 0%, var(--bg) 45%, #edf6ff 100%);
-}
-
-:root[data-theme="dark"] body {
-  background: linear-gradient(180deg, #101622 0%, var(--bg) 48%, #06080d 100%);
+  /* The ground itself is drawn in theme.css, which loads after this and overrode the gradient
+     that used to be here in both themes. */
 }
 
 button,
@@ -3392,8 +3357,10 @@ a {
 }
 
 :root[data-theme="dark"] .transaction-tag.method {
-  border-color: rgba(96, 165, 250, 0.28);
-  background: rgba(59, 130, 246, 0.14);
+  /* The method tag was tinted blue to sit beside a blue accent. The accent is green now, and the
+     tag takes its tint from it rather than from the colour it used to be. */
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent);
 }
 
@@ -3418,7 +3385,9 @@ a {
 }
 
 :root[data-theme="dark"] .ledger-item:nth-child(odd) .ledger-row {
-  background: rgba(96, 165, 250, 0.08);
+  /* Alternate rows are a shade apart, not a different hue: a blue wash under green rows read as
+     a highlight rather than as striping. */
+  background: var(--panel-soft);
 }
 
 .ledger-row > div:first-child {
