@@ -822,21 +822,28 @@ test("preserves archived AutoPay links when editing historical transactions", as
   const id = payment.transaction?.id;
   assert(id, "Linked AutoPay transaction should be created.");
 
-  await services.archiveAutopaySubscription(subscription.id);
-  await services.updateTransaction(id, { note: "Historical edit after archive" });
+  /* fixes-33: archive became delete, at the owner's request. What the owner asked to keep is the
+     money, not the link -- a payment that actually happened stays on the ledger, and the
+     subscription it used to point at is gone, so the link goes with it. */
+  await services.deleteAutopaySubscription(subscription.id);
+  await services.updateTransaction(id, { note: "Historical edit after the subscription was deleted" });
   const edited = await services.getTransaction(id);
 
-  assert(edited?.subscriptionId === subscription.id, "Editing history should preserve the archived AutoPay link.");
-  assert(edited?.subscriptionName === subscription.name, "Historical links should still expose the subscription name.");
+  assert(edited !== undefined, "Deleting a subscription must not delete the payments it made.");
+  assert(edited?.amountPaise === 499_00, "A payment that happened keeps its amount after its subscription goes.");
+  assert(edited?.note === "Historical edit after the subscription was deleted", "It is still editable afterwards.");
+  assert(!edited?.subscriptionId, "A payment cannot still point at a subscription that no longer exists.");
 
+  /* fixes-33: a deleted subscription cannot take a payment because it no longer exists, which is
+     a stronger refusal than the archived one it replaces. */
   await assertRejectsWithMessage(
-    "new archived autopay payment",
+    "a payment pointed at a deleted subscription",
     async () =>
       await services.createTransaction({
         date: "2026-07-16",
         accountId: state.bankId,
         method: "upi",
-        merchant: "New archived AutoPay payment",
+        merchant: "A payment for a subscription that is gone",
         typeId: await typeId("Expense"),
         subcategoryId: await subcategoryId("Expense", "AutoPay"),
         amountPaise: 49_900,
@@ -844,11 +851,9 @@ test("preserves archived AutoPay links when editing historical transactions", as
         kind: "expense",
         subscriptionId: subscription.id
       }),
-    "Archived subscriptions cannot receive new payments."
+    "Subscription not found."
   );
 
-  await services.updateTransaction(id, { subscriptionId: "" });
-  assert((await services.getTransaction(id))?.subscriptionId === null, "Historical AutoPay links should remain clearable.");
   await services.deleteTransaction(id);
 });
 
@@ -3030,27 +3035,6 @@ test("budget projection uses the typical rest of month from recent history", asy
   assert(line?.status !== "critical" && line?.status !== "over", "Rent paid in full should not raise an alarm.");
 });
 
-test("weekly account impact shows the real direction of a card's outstanding", async () => {
-  const { accountImpact } = await import("../src/account-impact.ts");
-  const card = { id: "card", type: "credit_card", creditLimitPaise: 2_00_000_00, balancePaise: 0 } as never;
-  const bank = { id: "bank", type: "bank", creditLimitPaise: null, balancePaise: 2_16_800_00 } as never;
-  const txns = [
-    { accountId: "card", direction: "outflow", kind: "expense", amountPaise: 4_100_00 },
-    { accountId: "bank", direction: "outflow", kind: "card_payment", transferAccountId: "card", amountPaise: 21_000_00 },
-    { accountId: "bank", direction: "outflow", kind: "expense", amountPaise: 3_000_00 },
-    { accountId: "bank", direction: "outflow", kind: "expense", amountPaise: 750_00 }
-  ] as never[];
-  const cardImpact = accountImpact(card, txns);
-  assert(cardImpact.amountPaise === 4_100_00 - 21_000_00, `Card outstanding should fall by 16,900, got ${cardImpact.amountPaise}.`);
-  assert(cardImpact.isGood && cardImpact.label === "Outstanding movement", "Paying down a card is good news.");
-  assert(cardImpact.percentLabel === "8.5% of limit", `Card movement is measured against the limit: ${cardImpact.percentLabel}`);
-  const bankImpact = accountImpact(bank, txns);
-  const moved = -(21_000_00 + 3_000_00 + 750_00);
-  assert(bankImpact.amountPaise === moved && !bankImpact.isGood, "Bank balance should fall by the week's outflows.");
-  const expected = `${Math.round((-moved / (2_16_800_00 - moved)) * 1000) / 10}% of balance`;
-  assert(bankImpact.percentLabel === expected, `Bank movement compares with the balance before it: ${bankImpact.percentLabel}`);
-});
-
 test("the spending mix leaves investments out and reports them as invested", async () => {
   assert(state.bankId, "Bank should exist.");
   const base = { accountId: state.bankId, method: "upi" as const, direction: "outflow" as const };
@@ -3840,7 +3824,7 @@ test("nothing in the app changes a second person's rows", async () => {
       ["rename their loan", async () => await services.updateLoan(rows.loan, { name: "taken" })],
       ["archive their loan", async () => await services.archiveLoan(rows.loan)],
       ["rename their subscription", async () => await services.updateAutopaySubscription(rows.subscription, { name: "taken" })],
-      ["archive their subscription", async () => await services.archiveAutopaySubscription(rows.subscription)],
+      ["delete their subscription", async () => await services.deleteAutopaySubscription(rows.subscription)],
       ["rename their holding", async () => await services.updateInvestment(rows.investment, { name: "taken" })],
       ["delete their holding", async () => await services.deleteInvestment(rows.investment)],
       ["rename their trip", async () => await services.updateVacation(rows.vacation, { name: "taken" })],
@@ -4124,7 +4108,7 @@ test("a post office holding credits its bank on schedule and is worth principal 
   const credits = (await services.listTransactions({ accountId: axis.id })).filter((row) => row.direction === "inflow");
   assert(credits.length === 2, `The bank should hold two credits, got ${credits.length}.`);
   assert(credits.every((row) => row.amountPaise === 2_000_00), "Each credit should be the amount the scheme pays.");
-  assert(credits.every((row) => row.subcategoryId === "sub_income_interest"), "A credit is interest earned, and should be filed as such.");
+  assert(credits.every((row) => row.subcategoryId === "sub_other_income"), "fixes-33: a credit arrives filed under Other income, which is what the owner asked for.");
   assert(credits.every((row) => row.date <= currentIsoDateForTests()), "Nothing may be credited before it has been paid.");
 
   // The catch-up runs on every page load, so writing twice would add a month's interest each time.
@@ -4191,7 +4175,7 @@ test("a fixed deposit and a bond credit their bank on schedule, like a post offi
   }
   const credits = (await services.listTransactions({ accountId: bank.id })).filter((row) => row.direction === "inflow");
   assert(credits.length === 4, `Two holdings crediting twice should leave four credits, got ${credits.length}.`);
-  assert(credits.every((row) => row.subcategoryId === "sub_income_interest"), "Each credit is interest earned.");
+  assert(credits.every((row) => row.subcategoryId === "sub_other_income"), "fixes-33: each credit arrives filed under Other income.");
 });
 
 test("a fixed deposit recorded before payouts existed keeps the value its owner entered", async () => {

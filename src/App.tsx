@@ -61,6 +61,7 @@ import {
   monthValue,
   outstandingSplit,
   parseAmountToPaise,
+  parseSignedAmount,
   signedAmount,
   splitMonth,
   todayISO,
@@ -109,6 +110,9 @@ import {
   AUTOPAY_DURATION_MONTH_OPTIONS,
   AUTOPAY_SUBCATEGORY_ID,
   MUTUAL_FUNDS_SUBCATEGORY_ID,
+  ADJUSTMENT_SUBCATEGORY_ID,
+  ADJUSTMENT_TYPE_ID,
+  EMI_SUBCATEGORY_ID,
   SELF_TRANSFER_SUBCATEGORY_ID,
   DEFAULT_HOLDING_GROUPING,
   HOLDING_GROUPINGS,
@@ -182,11 +186,16 @@ export function SidebarNav({
   items,
   activePage,
   newsUnread,
+  badges,
+  person,
   onNavigate
 }: {
   items: typeof navItems;
   activePage: Page;
   newsUnread: boolean;
+  /** How many things each section is waiting on. A page with nothing waiting is not in here. */
+  badges?: Partial<Record<Page, number>>;
+  person?: { name: string; email: string };
   onNavigate: (page: Page) => void;
 }) {
   const groups = NAV_GROUPS.filter((group) => items.some((item) => item.group === group));
@@ -211,6 +220,13 @@ export function SidebarNav({
                   >
                     <Icon size={18} />
                     <span>{item.label}</span>
+                    {/* A count, where there is something to count. Never a zero: a badge reading
+                        nought is a thing to read and dismiss on every single render. */}
+                    {badges?.[item.page] ? (
+                      <span className="nav-badge" aria-label={`${badges[item.page]} waiting`}>
+                        {badges[item.page]}
+                      </span>
+                    ) : null}
                     {item.page === "whatsNew" && newsUnread && <span className="nav-dot" aria-label="Unread" />}
                   </button>
                 );
@@ -218,17 +234,171 @@ export function SidebarNav({
           </div>
         ))}
       </nav>
-      {/* Profile sits below the list so it stays visible even when a short window scrolls the list. */}
+      {/* The person sits below the list so a short window scrolls the sections past them rather
+          than scrolling them away. A standing "safe to spend" figure used to sit above them;
+          the owner asked for it gone. */}
       <button
         className={`nav-item profile-nav-item ${activePage === "profile" ? "active" : ""}`}
         aria-current={activePage === "profile" ? "page" : undefined}
         onClick={() => onNavigate("profile")}
       >
-        <UserCircle size={18} />
-        <span>Profile</span>
+        {person ? (
+          <>
+            <span className="sidebar-avatar" aria-hidden="true">
+              {initialsOf(person.name, person.email)}
+            </span>
+            <span className="sidebar-person">
+              <strong>{person.name || "Your profile"}</strong>
+              {person.email ? <small>{person.email}</small> : null}
+            </span>
+          </>
+        ) : (
+          <>
+            <UserCircle size={18} />
+            <span>Profile</span>
+          </>
+        )}
       </button>
     </>
   );
+}
+
+/**
+ * One or two letters to stand for a person: their initials where they have given a name, the
+ * first letter of their address where they have not, and a neutral mark where there is neither.
+ * Never a generic avatar glyph -- an initial says which account this is, and a silhouette does
+ * not.
+ */
+export function initialsOf(name: string, email: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  const local = email.trim();
+  return local ? local[0].toUpperCase() : "\u00b7";
+}
+
+/**
+ * The bell in the top bar, and what is behind it.
+ *
+ * Lit only when something is actually waiting, carrying the count rather than a dot, and opening
+ * a list in which every line goes somewhere the thing can be dealt with. With nothing waiting it
+ * is still pressable and still says so -- a control that disappears when there is no news leaves
+ * you wondering whether it was ever there.
+ *
+ * It closes on Escape, on a click outside it, and on going somewhere, which is every way out a
+ * small popover needs. It is not a dialog: it traps nothing and holds nothing still behind it.
+ */
+export function AttentionMenu({ items, onGo }: { items: AttentionItem[]; onGo: (page: Page) => void }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement | null>(null);
+  const panel = useRef<HTMLDivElement | null>(null);
+  const listId = useId();
+  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
+
+  /*
+   * Where the panel goes, measured from the button rather than positioned against it.
+   *
+   * It used to sit inside this wrapper, absolutely positioned, and the page drew straight over
+   * it: every child of the content area carries `animation: rise ... both`, whose fill leaves a
+   * permanent transform behind, and a transformed element is a stacking context of its own. The
+   * page's sections therefore painted above anything in the top bar, whatever z-index it asked
+   * for -- the owner's screenshot has a summary card and an attention banner cutting through
+   * the middle of the list.
+   *
+   * So the panel is portalled onto the body, out of every one of those contexts, and anchored
+   * to the button's rectangle instead. Re-measured on scroll and resize, because a fixed thing
+   * anchored to a moving button drifts away from it otherwise.
+   */
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const button = wrap.current?.querySelector("button");
+      if (!button) return;
+      const rect = button.getBoundingClientRect();
+      setAt({ top: Math.round(rect.bottom + 8), right: Math.round(window.innerWidth - rect.right) });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      // The panel is no longer inside the wrapper, so closing on an outside click has to ask
+      // both of them whether the click was theirs.
+      if (wrap.current?.contains(target) || panel.current?.contains(target)) return;
+      setOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("mousedown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("mousedown", onPointerDown);
+    };
+  }, [open]);
+
+  const count = items.length;
+  return (
+    <div className="attention-wrap" ref={wrap}>
+      <button
+        type="button"
+        className={`icon-button attention-button${count > 0 ? " has-items" : ""}`}
+        aria-label={count === 0 ? "Nothing needs attention" : `${count} ${count === 1 ? "thing needs" : "things need"} attention`}
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <CircleAlert size={17} />
+        {count > 0 && <span className="attention-count" aria-hidden="true">{count}</span>}
+      </button>
+      {open && at && portalled(
+        <div
+          className="attention-panel"
+          id={listId}
+          role="group"
+          aria-label="Needs attention"
+          ref={panel}
+          style={{ top: at.top, right: at.right }}
+        >
+          {count === 0 ? (
+            <p className="attention-empty">Nothing needs attention.</p>
+          ) : (
+            <ul className="attention-list">
+              {items.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    className={`attention-item tone-${item.tone}`}
+                    onClick={() => {
+                      setOpen(false);
+                      onGo(item.page);
+                    }}
+                  >
+                    <strong>{item.label}</strong>
+                    <small>{item.detail}</small>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Onto the body, where no page section's stacking context can paint over it. */
+function portalled(content: React.ReactNode) {
+  return typeof document === "undefined" ? content : createPortal(content, document.body);
 }
 
 /** What sits behind More on a phone, when there is more than one of them. */
@@ -368,11 +538,28 @@ function withPageTransition(update: () => void, direction: "forward" | "back" | 
   if (direction !== "none") {
     document.documentElement.dataset.pageDirection = direction;
   }
-  const transition = doc.startViewTransition(() => flushSync(update));
+  /*
+   * The browser decides when to run this callback: it waits until it can take the "before"
+   * snapshot. A page that is not being painted -- which a browser will still report as visible --
+   * may never reach that point, and then the page simply never changes, because the state update
+   * is inside the callback. The floor below applies the update directly if the transition has
+   * not done it shortly; `update` only sets the page it was given, so applying it twice settles
+   * on the same place.
+   */
+  let applied = false;
+  const apply = () => {
+    if (applied) return;
+    applied = true;
+    update();
+  };
+  const transition = doc.startViewTransition(() => flushSync(apply));
+  const floor = window.setTimeout(apply, 400);
   const clearDirection = () => {
+    window.clearTimeout(floor);
     delete document.documentElement.dataset.pageDirection;
   };
   transition?.finished?.then(clearDirection, clearDirection);
+  transition?.updateCallbackDone?.then(() => window.clearTimeout(floor), () => window.clearTimeout(floor));
   // An interrupted or skipped transition rejects all three of these. The page has already changed
   // by then, so none of them is an error worth surfacing; leaving any uncaught logs to the console.
   transition?.finished?.catch(() => {});
@@ -921,6 +1108,57 @@ export default function App() {
   const simpleMode = simpleModeFromSettings(bootstrap?.settings);
   const navigationModel = navigationFor(simpleMode);
 
+  /*
+   * The sidebar's standing figure and the top bar's attention list both need the month as the
+   * server sees it, and the shell outlives every page, so it holds that one payload itself
+   * rather than each page handing it upward. It is refetched on the same key a page refetches
+   * on, so recording something moves the figure above the fold at the same moment it moves the
+   * page. A failure here leaves the figure absent rather than wrong: the sidebar shows nothing
+   * where it would have been, and nothing else on screen depends on it.
+   */
+  const [shellOverview, setShellOverview] = useState<Overview | null>(null);
+  useEffect(() => {
+    /* `signedIn` is three-valued, and null is the ordinary case: it means nobody has been asked
+       to sign in because a session was already there, which is every visit after the first. Only
+       an explicit false is "not signed in" -- the shell itself renders on null too. Reading it as
+       a boolean is why the first version of this never fetched anything at all. */
+    if (signedIn === false) return;
+    let cancelled = false;
+    Api.overview()
+      .then((next) => {
+        if (!cancelled) setShellOverview(next);
+      })
+      .catch(() => {
+        if (!cancelled) setShellOverview(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [signedIn, refreshKey]);
+
+  /* What each section is waiting on. Only counts the application can account for, and only
+     where the count is not zero -- SidebarNav drops a falsy one rather than drawing a nought. */
+  const sidebarBadges: Partial<Record<Page, number>> = shellOverview
+    ? { transactions: shellOverview.summary.uncategorizedCount }
+    : {};
+
+  const [search, setSearch] = useState("");
+
+  /* One way to turn the theme over, now that two places offer it: the switch on the profile page
+     and the one in the top bar. Written here rather than twice, so they cannot drift over
+     whether the choice is remembered. */
+  const toggleTheme = useCallback(() => {
+    setTheme((value) => {
+      const next = value === "dark" ? "light" : "dark";
+      try {
+        window.localStorage.setItem(THEME_KEY, next);
+      } catch {
+        // Private windows can refuse storage; the choice still applies for this visit.
+      }
+      return next;
+    });
+  }, []);
+
   const canOpen = useCallback((page: Page) => pageAllowedIn(page, simpleMode), [simpleMode]);
 
   const saveSimpleMode = useCallback(
@@ -945,6 +1183,18 @@ export default function App() {
     return Number.isFinite(parsed) && parsed >= 1 && parsed <= 100 ? Math.round(parsed) : 30;
   })();
   const activeAccounts = accounts.filter((account) => !account.isArchived);
+
+  /* What needs attention, worked out from what the shell already holds. The list is the rule's
+     output: nothing qualifying means an empty list, and the control says so rather than hiding. */
+  const attention = attentionItems({
+    accounts: activeAccounts,
+    loans: [...loans, ...cardEmis],
+    subscriptions,
+    uncategorizedCount: shellOverview?.summary.uncategorizedCount ?? 0,
+    cardAlertPercent,
+    today: todayISO()
+  });
+
 
   // A failed boot must not sit behind a film: if the app cannot load, show why at once.
   useEffect(() => {
@@ -1234,17 +1484,7 @@ export default function App() {
                       onSaveSimpleMode={saveSimpleMode}
               onDownloadReport={() => setPrinting(true)}
               preparingReport={printing}
-                      onThemeToggle={() =>
-                        setTheme((value) => {
-                          const next = value === "dark" ? "light" : "dark";
-                          try {
-                            window.localStorage.setItem(THEME_KEY, next);
-                          } catch {
-                            // Private windows can refuse storage; the choice still applies for this visit.
-                          }
-                          return next;
-                        })
-                      }
+                      onThemeToggle={toggleTheme}
                     />
         );
       default:
@@ -1260,6 +1500,9 @@ export default function App() {
           <div className="brand-mark">₹</div>
           <div>
             <strong>Financial Tracker</strong>
+            {/* The month this is all about, so the figure below the list has a period attached
+                to it rather than floating free. */}
+            <small>{formatMonth(shellOverview?.month ?? todayISO().slice(0, 7))}</small>
           </div>
         </div>
 
@@ -1267,6 +1510,8 @@ export default function App() {
           items={navigationModel.items}
           activePage={activePage}
           newsUnread={newsUnread}
+          badges={sidebarBadges}
+          person={{ name: profileDraft.name, email: profileDraft.email }}
           onNavigate={navigate}
         />
       </aside>
@@ -1293,6 +1538,50 @@ export default function App() {
               <ChevronDown size={16} />
             </label>
             )}
+
+            {/* Search goes to the ledger with what was typed, which is the only place in the
+                application that can answer it. Not a box that filters whatever page you are on
+                into something smaller. */}
+            <form
+              className="topbar-search"
+              role="search"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const term = search.trim();
+                if (!term) return;
+                navigate("transactions", { search: term });
+                setSearch("");
+              }}
+            >
+              <Search size={16} aria-hidden="true" />
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search transactions"
+                aria-label="Search transactions"
+              />
+            </form>
+
+            <AttentionMenu items={attention} onGo={(page) => navigate(page)} />
+
+            <button
+              type="button"
+              className="icon-button topbar-theme"
+              aria-label={theme === "dark" ? "Switch to the light theme" : "Switch to the dark theme"}
+              onClick={toggleTheme}
+            >
+              {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
+
+            <button
+              type="button"
+              className="topbar-person"
+              aria-label={`${profileDraft.name || profileDraft.email || "Your profile"} — open your profile`}
+              onClick={() => navigate("profile")}
+            >
+              <span aria-hidden="true">{initialsOf(profileDraft.name, profileDraft.email)}</span>
+            </button>
           </div>
         </header>
 
@@ -1962,7 +2251,19 @@ function TransactionEntryForm({
   const selectedType = categoryTypes.find((type) => type.id === form.typeId);
   const availableSubcategories = selectedType?.subcategories ?? [];
   const selectedBehavior = selectedType?.behavior ?? "expense";
-  const availableLoans = loans.filter((loan) => loan.subcategoryId === form.subcategoryId);
+  /*
+   * Which EMIs this payment could be for. The EMI SubType offers everything still running --
+   * a card's EMI and a loan's alike -- the way AutoPay offers every active subscription. The
+   * five loan kinds beside it still offer only their own, because picking "Home" and being shown
+   * a vehicle loan would be a worse list, not a longer one. Nothing paid off is offered: there
+   * is nothing left to pay.
+   */
+  const isEmiSelected = form.subcategoryId === EMI_SUBCATEGORY_ID;
+  const availableLoans = (isEmiSelected ? [...loans, ...cardEmis] : loans).filter((loan) =>
+    isEmiSelected
+      ? !loan.isArchived && loan.outstandingPaise > 0
+      : loan.subcategoryId === form.subcategoryId
+  );
   const isAutopaySelected = form.subcategoryId === AUTOPAY_SUBCATEGORY_ID;
   const isMutualFundsSelected = form.subcategoryId === MUTUAL_FUNDS_SUBCATEGORY_ID;
   const isSelfTransferSelected = form.subcategoryId === SELF_TRANSFER_SUBCATEGORY_ID;
@@ -2237,7 +2538,7 @@ function TransactionEntryForm({
       {selectedBehavior === "loan" && (
         <>
           <label>
-            Linked loan
+            {isEmiSelected ? "Linked EMI" : "Linked loan"}
             <select
               value={form.loanId}
               onChange={(event) => setForm({ ...form, loanId: event.target.value })}
@@ -5270,6 +5571,25 @@ export function AccountCard({
         </div>
       )}
 
+      {/*
+        * What the bar above just said, in words, directly under it -- the owner drew this: the
+        * percentage and what is left belong to the utilisation bar, so they sit against it
+        * rather than below a second bar that is about something else entirely.
+        */}
+      <div className="budget-card-foot">
+        {isCard ? (
+          <>
+            <span>{limit > 0 ? `${usage}% of ${formatINRWhole(limit)}` : "No limit set"}</span>
+            <span>{limit > 0 ? `${formatINRWhole(available)} left` : "Set one to see utilisation"}</span>
+          </>
+        ) : (
+          <>
+            <span>Opened at {formatINRWhole(account.startingBalancePaise)}</span>
+            <span>{minimum > 0 ? `${formatINRWhole(minimum)} minimum` : "No minimum set"}</span>
+          </>
+        )}
+      </div>
+
       {/* The second reading the owner asked for: what is owed, cut into this cycle's own
           spending and the EMIs still running. accounts-30 put this in the edit dialog; it
           belongs on the card, where the first reading already is. */}
@@ -5286,7 +5606,7 @@ export function AccountCard({
           <p className="outstanding-split-legend">
             <span className="spend">
               <i aria-hidden="true" />
-              Monthly {split.spendPercent}% · {formatINRWhole(split.spendPaise)}
+              Monthly spends {split.spendPercent}% · {formatINRWhole(split.spendPaise)}
             </span>
             <span className="emi">
               <i aria-hidden="true" />
@@ -5295,20 +5615,6 @@ export function AccountCard({
           </p>
         </>
       )}
-
-      <div className="budget-card-foot">
-        {isCard ? (
-          <>
-            <span>{limit > 0 ? `${usage}% of ${formatINRWhole(limit)}` : "No limit set"}</span>
-            <span>{limit > 0 ? `${formatINRWhole(available)} left` : "Set one to see utilisation"}</span>
-          </>
-        ) : (
-          <>
-            <span>Opened at {formatINRWhole(account.startingBalancePaise)}</span>
-            <span>{minimum > 0 ? `${formatINRWhole(minimum)} minimum` : "No minimum set"}</span>
-          </>
-        )}
-      </div>
 
       <button type="button" className="budget-card-edit" onClick={onStartEdit}>
         <Pencil size={15} />
@@ -5370,6 +5676,126 @@ export function accountTotals(accounts: Account[]) {
 }
 
 /** How much of its limit a card is using, as a whole percent. A card with no limit uses none. */
+/** One thing asking to be looked at, and where looking at it happens. */
+export type AttentionItem = {
+  id: string;
+  label: string;
+  detail: string;
+  page: Page;
+  tone: "warning" | "danger" | "neutral";
+};
+
+/**
+ * What actually needs attention, in the order it deserves it.
+ *
+ * The reference's shell has a bell on it. A bell that is always lit, or lit by nothing, is
+ * decoration -- so this is a rule rather than a list: each item is a condition that is either
+ * true of the data or absent entirely. Nothing needing attention produces nothing, and the
+ * control says so rather than showing an empty tray.
+ *
+ * Three conditions, each one the owner can act on today:
+ *   - transactions with no category, which quietly fall out of every report and budget
+ *   - a bill due in the next week: a card's payment, a loan's instalment, a subscription's debit
+ *   - a card past the utilisation the owner themselves set as the line
+ *
+ * `today` is passed rather than read, so the same data gives the same answer on any day a test
+ * cares to ask about.
+ */
+export function attentionItems({
+  accounts,
+  loans,
+  subscriptions,
+  uncategorizedCount,
+  cardAlertPercent,
+  today
+}: {
+  accounts: Account[];
+  loans: Loan[];
+  subscriptions: AutopaySubscription[];
+  uncategorizedCount: number;
+  cardAlertPercent: number;
+  today: string;
+}): AttentionItem[] {
+  const items: AttentionItem[] = [];
+  const day = Number(today.slice(8, 10));
+  const daysInMonth = new Date(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 0).getDate();
+  /* "Within the next week" has to wrap: on the 28th, a bill on the 2nd is four days off, not
+     twenty-six days behind. A day already past this month is not due again until next month. */
+  const daysAway = (dueDay: number) => (dueDay >= day ? dueDay - day : dueDay + daysInMonth - day);
+  const soon = (dueDay: number | null) => dueDay !== null && dueDay >= 1 && daysAway(dueDay) <= 7;
+  const live = accounts.filter((account) => !account.isArchived);
+
+  if (uncategorizedCount > 0) {
+    items.push({
+      id: "uncategorized",
+      label: `${uncategorizedCount} transaction${uncategorizedCount === 1 ? "" : "s"} need${
+        uncategorizedCount === 1 ? "s" : ""
+      } a category`,
+      detail: "Until they have one they are missing from reports and budgets.",
+      page: "transactions",
+      tone: "warning"
+    });
+  }
+
+  for (const account of live) {
+    if (account.type !== "credit_card" || account.outstandingPaise <= 0) continue;
+    if (!soon(account.paymentDueDay)) continue;
+    const away = daysAway(account.paymentDueDay as number);
+    items.push({
+      id: `card-due-${account.id}`,
+      label: `${account.name} bill due ${away === 0 ? "today" : away === 1 ? "tomorrow" : `in ${away} days`}`,
+      detail: `${formatINRWhole(account.outstandingPaise)} outstanding.`,
+      page: "accounts",
+      tone: away <= 1 ? "danger" : "warning"
+    });
+  }
+
+  for (const loan of loans) {
+    if (loan.isArchived || loan.outstandingPaise <= 0 || !soon(loan.emiDueDay)) continue;
+    const away = daysAway(loan.emiDueDay as number);
+    items.push({
+      id: `emi-due-${loan.id}`,
+      label: `${loan.name} instalment due ${away === 0 ? "today" : away === 1 ? "tomorrow" : `in ${away} days`}`,
+      detail: `${formatINRWhole(loan.monthlyEmiPaise)} a month.`,
+      page: "loans",
+      tone: away <= 1 ? "danger" : "warning"
+    });
+  }
+
+  for (const subscription of subscriptions) {
+    if (subscription.isArchived || subscription.status !== "active") continue;
+    const debitDay = Number(subscription.startDate.slice(8, 10));
+    if (!soon(debitDay)) continue;
+    const away = daysAway(debitDay);
+    items.push({
+      id: `autopay-${subscription.id}`,
+      label: `${subscription.name} debits ${away === 0 ? "today" : away === 1 ? "tomorrow" : `in ${away} days`}`,
+      detail: `${formatINRWhole(subscription.amountPaise)}${
+        subscription.accountName ? ` from ${subscription.accountName}` : ", with no account to take it from"
+      }.`,
+      page: "subscriptions",
+      tone: subscription.accountName ? "neutral" : "warning"
+    });
+  }
+
+  for (const account of live) {
+    if (account.type !== "credit_card") continue;
+    const used = cardUsagePercent(account);
+    if (used < cardAlertPercent) continue;
+    items.push({
+      id: `card-usage-${account.id}`,
+      label: `${account.name} is ${used}% used`,
+      detail: `Your alert is set at ${cardAlertPercent}%.`,
+      page: "accounts",
+      tone: used >= 90 ? "danger" : "warning"
+    });
+  }
+
+  // Worst first, so the control's own count and its first line agree about what matters.
+  const weight = { danger: 0, warning: 1, neutral: 2 } as const;
+  return items.sort((a, b) => weight[a.tone] - weight[b.tone]);
+}
+
 export function cardUsagePercent(account: Account): number {
   const limit = account.creditLimitPaise ?? 0;
   if (limit <= 0) {
@@ -5530,45 +5956,55 @@ function AccountsPage({
         />
       </div>
 
-      {/* Grouped, and three across rather than the budget page's four -- an account's card
-          carries two bars and a legend where a budget's carries one bar. */}
-      {groups.map((group, index) => (
-        <section className="account-group" key={group.key}>
-          <h2 className="account-group-title">{group.title}</h2>
-          <div className="budget-grid accounts-grid">
-            {group.accounts.map((account) => (
-              <AccountCard
-                key={account.id}
-                account={account}
-                alertPercent={cardAlertPercent}
-                onStartEdit={() => setEditingId(account.id)}
-              />
-            ))}
-            {/* The way to add goes in the last group's own grid. On its own it took a whole row
-                for one cell and pushed everything under it -- the card utilisation among them --
-                off the first screen. */}
-            {index === groups.length - 1 && addCard}
-          </div>
-        </section>
-      ))}
 
-      {groups.length === 0 && <div className="budget-grid accounts-grid">{addCard}</div>}
 
-      {/* Kept from before: the same card debt cut by card. The budget page has no second panel,
-          but dropping a view the owner already has to tighten a resemblance is the wrong trade. */}
-      {cardOutstandingPaise > 0 && (
-        <Panel title="Card utilisation">
-          <MixChart
-            segments={cardSegments}
-            totalPaise={cardOutstandingPaise}
-            ariaLabel="Credit card utilisation"
-            centerLabel="Card debt"
-            centerValue={formatINRWhole(cardOutstandingPaise)}
-            className="overview-donut-chart"
-            emptyText="No credit card owes anything right now."
-          />
-        </Panel>
-      )}
+
+      <div className="accounts-split">
+        <div className="accounts-split-main">
+        {/* Grouped, and three across rather than the budget page's four -- an account's card
+            carries two bars and a legend where a budget's carries one bar. */}
+        {groups.map((group, index) => (
+          <section className="account-group" key={group.key}>
+            <h2 className="account-group-title">{group.title}</h2>
+            <div className="budget-grid accounts-grid">
+              {group.accounts.map((account) => (
+                <AccountCard
+                  key={account.id}
+                  account={account}
+                  alertPercent={cardAlertPercent}
+                  onStartEdit={() => setEditingId(account.id)}
+                />
+              ))}
+              {/* The way to add goes in the last group's own grid. On its own it took a whole row
+                  for one cell and pushed everything under it -- the card utilisation among them --
+                  off the first screen. */}
+              {index === groups.length - 1 && addCard}
+            </div>
+          </section>
+        ))}
+
+          {groups.length === 0 && <div className="budget-grid accounts-grid">{addCard}</div>}
+        </div>
+
+        <aside className="accounts-split-side">
+        {/* Beside the accounts rather than over them, which is what the owner asked for: full
+            width this was a very wide panel holding one small ring, and it pushed the cards down
+            the page. In a column of its own it stands next to what it describes. */}
+        {cardOutstandingPaise > 0 && (
+          <Panel title="Card utilisation">
+            <MixChart
+              segments={cardSegments}
+              totalPaise={cardOutstandingPaise}
+              ariaLabel="Credit card utilisation"
+              centerLabel="Card debt"
+              centerValue={formatINRWhole(cardOutstandingPaise)}
+              className="overview-donut-chart"
+              emptyText="No credit card owes anything right now."
+            />
+          </Panel>
+        )}
+        </aside>
+      </div>
 
       {adding && (
         <FormDialog title="New account" onClose={() => setAdding(false)}>
@@ -7151,41 +7587,53 @@ function SubscriptionsPage({
 }) {
   const [editing, setEditing] = useState<AutopaySubscription | null>(null);
   const [adding, setAdding] = useState(false);
-  const bankAccounts = accounts.filter((account) => account.type === "bank");
+  /* A subscription charged to a card is the ordinary case, not an exception, and this list
+     showing banks alone is how the owner came to open the form and find their cards missing. */
+  const debitAccounts = accounts.filter(
+    (account) => !account.isArchived && (account.type === "bank" || account.type === "credit_card")
+  );
   const active = subscriptions.filter((subscription) => !subscription.isArchived);
-  const archived = subscriptions.filter((subscription) => subscription.isArchived);
   const activeCount = active.filter((subscription) => subscription.status === "active").length;
   const monthlyTotal = active
     .filter((subscription) => subscription.status === "active")
     .reduce((sum, subscription) => sum + subscription.amountPaise, 0);
 
-  function archive(subscription: AutopaySubscription) {
+  /* Running and finished, the way the accounts page groups banks and cards: a heading only
+     where something sits under it. "Expired" is the subscription's own word for a term that has
+     run its course -- it is not archived, and it is not gone. */
+  const subscriptionGroups = [
+    {
+      key: "running",
+      title: "Running",
+      subscriptions: active.filter((subscription) => subscription.status === "active")
+    },
+    {
+      key: "finished",
+      title: "Finished",
+      subscriptions: active.filter((subscription) => subscription.status !== "active")
+    }
+  ].filter((group) => group.subscriptions.length > 0);
+
+  function remove(subscription: AutopaySubscription) {
     requestConfirm({
-      message: "Are you sure you want to archive this subscription?",
-      detail: `${subscription.name} will move out of active tracking. Existing transactions and counts stay preserved.`,
-      confirmLabel: "Archive",
+      message: `Delete ${subscription.name}?`,
+      /* The thing worth saying plainly, because it is the thing that makes deleting safe: the
+         payments it already made are money that actually moved, and they stay. */
+      detail:
+        "The subscription goes and stops being counted. Every payment it has already made stays on your transactions, and your balances do not change.",
+      confirmLabel: "Delete",
       tone: "danger",
       onConfirm: async () => {
         try {
-          await Api.archiveSubscription(subscription.id);
+          await Api.deleteSubscription(subscription.id);
           if (editing?.id === subscription.id) setEditing(null);
           await refresh();
-          showNotice("Subscription archived.");
+          showNotice("Subscription deleted. Its payments are still on your transactions.");
         } catch (err) {
-          showNotice(err instanceof Error ? err.message : "Could not archive subscription.");
+          showNotice(err instanceof Error ? err.message : "Could not delete subscription.");
         }
       }
     });
-  }
-
-  async function restore(subscription: AutopaySubscription) {
-    try {
-      await Api.updateSubscription(subscription.id, { isArchived: false });
-      await refresh();
-      showNotice("Subscription restored.");
-    } catch (err) {
-      showNotice(err instanceof Error ? err.message : "Could not restore subscription.");
-    }
   }
 
   return (
@@ -7204,44 +7652,35 @@ function SubscriptionsPage({
         <SummaryCard label="Monthly total" value={formatINRWhole(monthlyTotal)} countPaise={monthlyTotal} icon={<ArrowDownUp />} tone="warning" />
       </section>
 
-      <Panel title="Subscription tracker">
-          {active.length === 0 ? (
-            <EmptyState text="No active subscriptions yet." />
-          ) : (
-            <div className="loan-card-grid">
-              {active.map((subscription) => (
-                <SubscriptionCard
-                  key={subscription.id}
-                  subscription={subscription}
-                  onEdit={setEditing}
-                  onArchive={archive}
-                />
-              ))}
-            </div>
-          )}
+      {/*
+        * Laid out like the Accounts page, which is what the owner asked for: the cards are the
+        * page rather than the contents of a panel on it, grouped by whether they are still
+        * running, three across. There is no archived group any more -- archive became delete,
+        * so a subscription is either here or gone.
+        */}
+      {subscriptionGroups.map((group) => (
+        <section className="account-group" key={group.key}>
+          <h2 className="account-group-title">{group.title}</h2>
+          <div className="budget-grid accounts-grid">
+            {group.subscriptions.map((subscription) => (
+              <SubscriptionCard
+                key={subscription.id}
+                subscription={subscription}
+                onEdit={setEditing}
+                onDelete={remove}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
 
-          {archived.length > 0 && (
-            <>
-              <h3 className="section-subtitle">Archived subscriptions</h3>
-              <div className="loan-card-grid archived-loans">
-                {archived.map((subscription) => (
-                  <SubscriptionCard
-                    key={subscription.id}
-                    subscription={subscription}
-                    onEdit={setEditing}
-                    onRestore={restore}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-      </Panel>
+      {subscriptionGroups.length === 0 && <EmptyState text="No subscriptions yet. Add one to start tracking." />}
 
       {adding && (
         <FormDialog title="Add subscription" onClose={() => setAdding(false)}>
         <SubscriptionForm
           subscription={null}
-          bankAccounts={bankAccounts}
+          debitAccounts={debitAccounts}
           onCancel={() => setAdding(false)}
           onSaved={async (message) => {
             setAdding(false);
@@ -7257,7 +7696,7 @@ function SubscriptionsPage({
           <SubscriptionForm
             key={editing.id}
             subscription={editing}
-            bankAccounts={bankAccounts}
+            debitAccounts={debitAccounts}
             onCancel={() => setEditing(null)}
             onSaved={async (message) => {
               setEditing(null);
@@ -7274,18 +7713,18 @@ function SubscriptionsPage({
 function SubscriptionCard({
   subscription,
   onEdit,
-  onArchive,
-  onRestore
+  onDelete
 }: {
   subscription: AutopaySubscription;
   onEdit: (subscription: AutopaySubscription) => void;
-  onArchive?: (subscription: AutopaySubscription) => void;
-  onRestore?: (subscription: AutopaySubscription) => void;
+  /* Archive and Restore were a pair; the owner asked for delete instead, and there is nothing
+     to restore from. The payments a deleted subscription made stay on the transactions. */
+  onDelete?: (subscription: AutopaySubscription) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const expired = subscription.status === "expired";
   return (
-    <article className={`loan-card ${subscription.isArchived ? "archived" : ""}`}>
+    <article className="loan-card">
       <div className="loan-card-header">
         <div className="loan-title">
           <span className="loan-icon" style={{ color: "#4f46e5", background: "#4f46e514" }}>
@@ -7347,16 +7786,10 @@ function SubscriptionCard({
           <Pencil size={16} />
           Edit
         </button>
-        {onRestore && (
-          <button type="button" className="secondary-action" onClick={() => onRestore(subscription)}>
-            <RotateCcw size={16} />
-            Restore
-          </button>
-        )}
-        {onArchive && (
-          <button type="button" className="secondary-action danger-action" onClick={() => onArchive(subscription)}>
-            <Archive size={16} />
-            Archive
+        {onDelete && (
+          <button type="button" className="secondary-action danger-action" onClick={() => onDelete(subscription)}>
+            <Trash2 size={16} />
+            Delete
           </button>
         )}
       </div>
@@ -7369,12 +7802,13 @@ function SubscriptionCard({
 
 function SubscriptionForm({
   subscription,
-  bankAccounts,
+  debitAccounts,
   onSaved,
   onCancel
 }: {
   subscription: AutopaySubscription | null;
-  bankAccounts: Account[];
+  /** Every account an AutoPay can come out of: a bank or a card. */
+  debitAccounts: Account[];
   onSaved: (message: string) => Promise<void>;
   onCancel?: () => void;
 }) {
@@ -7447,9 +7881,9 @@ function SubscriptionForm({
         Paid from
         <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
           <option value="">Just remind me</option>
-          {bankAccounts.map((account) => (
+          {debitAccounts.map((account) => (
             <option key={account.id} value={account.id}>
-              {account.name}
+              {account.name} · {accountTypeLabel(account.type)}
             </option>
           ))}
         </select>
@@ -7458,7 +7892,7 @@ function SubscriptionForm({
           being asked each time, so it says plainly what it will and will not do. */}
       <p className="field-hint investment-form-hint">
         {accountId
-          ? "Each payment is taken from that account on its day, from today onwards, but only when the balance covers it. A month it cannot cover stays listed in Upcoming payments until it can."
+          ? "Each payment is taken from that account on its day, from today onwards, but only when there is room for it -- the balance on a bank, what is left of the limit on a card. A month it cannot cover stays listed in Upcoming payments until it can."
           : "Left as a reminder, this is listed in Upcoming payments and you record each payment yourself."}
       </p>
       {error && <p className="form-error">{error}</p>}
@@ -9226,8 +9660,49 @@ export function AccountEditDialog({
     name: account.name,
     opening: amountInputFromPaise(account.startingBalancePaise),
     limit: account.creditLimitPaise === null ? "" : amountInputFromPaise(account.creditLimitPaise),
-    dueDay: account.paymentDueDay ? String(account.paymentDueDay) : ""
+    dueDay: account.paymentDueDay ? String(account.paymentDueDay) : "",
+    // Blank and zero both mean no alert, which is what an account starts with.
+    minimum: account.minimumBalancePaise ? amountInputFromPaise(account.minimumBalancePaise) : ""
   }));
+  /* Kept apart from the draft above on purpose. Everything else in this dialog describes the
+     account; this writes a transaction, and it applies when it is pressed rather than riding
+     along with Save -- so saving the name twice cannot correct the balance twice. */
+  const adjustHintId = useId();
+  const [adjustment, setAdjustment] = useState("");
+  const [adjusting, setAdjusting] = useState(false);
+
+  async function applyAdjustment() {
+    const parsed = parseSignedAmount(adjustment);
+    if (!parsed) {
+      onError("Type how much to adjust by, as +500 or -500.");
+      return;
+    }
+    setAdjusting(true);
+    try {
+      await Api.createTransaction({
+        date: todayISO(),
+        accountId: account.id,
+        method: account.type === "credit_card" ? "credit_card" : "bank_transfer",
+        merchant: "Balance adjustment",
+        typeId: ADJUSTMENT_TYPE_ID,
+        subcategoryId: ADJUSTMENT_SUBCATEGORY_ID,
+        amountPaise: parsed.paise,
+        direction: parsed.direction,
+        kind: "adjustment"
+      });
+      const moved = parsed.direction === "inflow" ? parsed.paise : -parsed.paise;
+      setAdjustment("");
+      await onSaved(
+        `Balance adjusted by ${signedAmount(parsed.paise, parsed.direction)}. Now ${formatINRWhole(
+          account.balancePaise + moved
+        )}.`
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Could not adjust the balance.");
+    } finally {
+      setAdjusting(false);
+    }
+  }
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -9247,12 +9722,18 @@ export function AccountEditDialog({
       onError("Payment due day must be a day of the month, 1 to 31.");
       return;
     }
+    const minimumPaise = isCard ? undefined : parseAmountToPaise(draft.minimum || "0");
+    if (minimumPaise !== undefined && minimumPaise < 0) {
+      onError("A minimum balance can't be negative.");
+      return;
+    }
     setSaving(true);
     try {
       await Api.updateAccount(account.id, {
         name: draft.name.trim(),
         startingBalancePaise: openingPaise,
-        ...(limitPaise !== undefined ? { creditLimitPaise: limitPaise, paymentDueDay: dueDay } : {})
+        ...(limitPaise !== undefined ? { creditLimitPaise: limitPaise, paymentDueDay: dueDay } : {}),
+        ...(minimumPaise !== undefined ? { minimumBalancePaise: minimumPaise } : {})
       });
       const shift = openingPaise - account.startingBalancePaise;
       await onSaved(
@@ -9313,6 +9794,50 @@ export function AccountEditDialog({
               </small>
             </label>
           </>
+        )}
+        {!isCard && (
+          <label>
+            Minimum balance
+            <input
+              inputMode="decimal"
+              value={draft.minimum}
+              onChange={(event) => setDraft({ ...draft, minimum: event.target.value })}
+              placeholder="0"
+            />
+            <small className="field-hint">
+              The app flags this account when it falls below this. Leave it blank for no alert.
+            </small>
+          </label>
+        )}
+        {!isCard && (
+          <div className="account-adjust">
+            <label>
+              Adjust balance
+              <div className="account-adjust-row">
+                <input
+                  inputMode="text"
+                  value={adjustment}
+                  onChange={(event) => setAdjustment(event.target.value)}
+                  placeholder="+500 or -500"
+                  aria-describedby={`${adjustHintId}`}
+                />
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={applyAdjustment}
+                  disabled={adjusting || !adjustment.trim()}
+                >
+                  {adjusting ? "Adjusting..." : "Apply"}
+                </button>
+              </div>
+              <small className="field-hint" id={adjustHintId}>
+                For when the app and your bank disagree. The amount is the size of the correction,
+                so +500 raises the balance by ₹500 and -500 lowers it. It is written as its own
+                transaction, which you can delete to undo it, and it counts as neither spending
+                nor income.
+              </small>
+            </label>
+          </div>
         )}
         <div className="budget-dialog-actions">
           <button type="button" className="secondary-action danger-action" onClick={onDelete} disabled={saving}>

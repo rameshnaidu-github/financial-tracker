@@ -44,6 +44,22 @@ export function parseAmountToPaise(value: string) {
   return Math.round(amount * 100);
 }
 
+/**
+ * A typed correction, as paise and a direction. `null` when it is not a usable figure.
+ *
+ * Separate from parseAmountToPaise, which floors a negative at zero because every other amount
+ * in the application is a size rather than a change. Here the sign is the point: "+500" and
+ * "-500" are opposite corrections, and a bare "500" is read as adding, which is what typing a
+ * plain number into a box labelled "adjust by" means.
+ */
+export function parseSignedAmount(value: string): { paise: number; direction: "inflow" | "outflow" } | null {
+  const normalized = value.replace(/[₹,\s]/g, "");
+  if (!normalized || normalized === "+" || normalized === "-") return null;
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount) || amount === 0) return null;
+  return { paise: Math.round(Math.abs(amount) * 100), direction: amount > 0 ? "inflow" : "outflow" };
+}
+
 export function signedAmount(paise: number, direction: "inflow" | "outflow") {
   return `${direction === "inflow" ? "+" : "-"}${formatINR(paise)}`;
 }

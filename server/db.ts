@@ -376,6 +376,33 @@ export async function seedPerson(userId: string): Promise<void> {
   });
 }
 
+/**
+ * Widens the two CHECK constraints that list allowed values, for a database that already exists.
+ *
+ * Every statement in schema.sql is IF NOT EXISTS, which is what lets it run on every cold start
+ * and change nothing. The cost is that a table already there keeps the constraints it was made
+ * with: adding a behaviour or a transaction kind to the schema reaches a new database and no
+ * existing one, and the first row carrying the new value is rejected by a rule written before
+ * the value existed.
+ *
+ * So these two are dropped and re-added from the schema's own text, which is both idempotent and
+ * self-updating: the lists below are read out of SCHEMA_SQL rather than repeated here, so they
+ * cannot drift from it. It runs inside the same transaction and lock as the schema itself.
+ */
+async function widenValueConstraints() {
+  const constraints: Array<{ table: string; column: string; name: string }> = [
+    { table: "category_types", column: "behavior", name: "category_types_behavior_check" },
+    { table: "transactions", column: "kind", name: "transactions_kind_check" }
+  ];
+  for (const { table, column, name } of constraints) {
+    const declared = new RegExp(`${column} TEXT NOT NULL CHECK \\(${column} IN \\(([^)]*)\\)\\)`).exec(SCHEMA_SQL);
+    if (!declared) continue;
+    const values = declared[1];
+    await db.prepare(`ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${name}`).run();
+    await db.prepare(`ALTER TABLE ${table} ADD CONSTRAINT ${name} CHECK (${column} IN (${values}))`).run();
+  }
+}
+
 export async function initDatabase() {
   if (!(await schemaIsCurrent())) {
     await db.transaction(async () => {
@@ -384,6 +411,7 @@ export async function initDatabase() {
       if (await schemaIsCurrent()) return;
 
       await db.exec(SCHEMA_SQL);
+      await widenValueConstraints();
       if (isHostedDatabase) await revokeRestApiRoles();
       await db
         .prepare(

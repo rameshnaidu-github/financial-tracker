@@ -7,6 +7,8 @@ import {
   INCOME_TYPE_ID,
   INFLOW_BEHAVIORS,
   INTEREST_SUBCATEGORY_ID,
+  NEUTRAL_BEHAVIORS,
+  OTHER_INCOME_SUBCATEGORY_ID,
   MUTUAL_FUNDS_SUBCATEGORY_ID,
   PAYOUT_INVESTMENT_TYPES,
   isPayoutInvestmentType,
@@ -777,10 +779,18 @@ function autopayDebitedThrough(row: AutopaySubscriptionRow, today: string) {
 }
 
 /** An AutoPay is taken from a real bank account; a card has an outstanding, not a balance. */
+/**
+ * The account an AutoPay can be taken from.
+ *
+ * A bank or a card. It used to be a bank alone, which is how the owner came to open the form and
+ * find their cards missing from it -- a subscription charged to a card is the ordinary case, not
+ * an exception. What a card cannot do is pay for itself, so a card's own bill is still settled
+ * from somewhere else; that is a different flow and is unaffected here.
+ */
 async function requireDebitAccount(id: string) {
   const account = await requireAccount(id);
-  if (account.type !== "bank") {
-    throw badRequest("An AutoPay has to be taken from a bank account.");
+  if (account.type !== "bank" && account.type !== "credit_card") {
+    throw badRequest("An AutoPay has to be taken from a bank account or a credit card.");
   }
   return account;
 }
@@ -835,10 +845,24 @@ export async function catchUpAutopayDebits(today = currentIsoDate()) {
         through = date;
         continue;
       }
-      // Measured now, not as of the due date: the question this answers is whether the money is
-      // there to take, and a balance that has since been spent cannot be taken from.
-      const balance = (await mapAccountWithBalance(await requireAccount(row.account_id as string))).balancePaise;
-      if (balance < row.amount_paise) {
+      /*
+       * Is there room for it? Measured now, not as of the due date: the question this answers is
+       * whether the money is there to take, and a balance that has since been spent cannot be
+       * taken from.
+       *
+       * For a card the room is what is left of the limit rather than a balance, because a card
+       * is borrowed against rather than drawn down. A card with no limit recorded has no ceiling
+       * to check against, so the charge goes through -- the alternative is refusing to record a
+       * payment the bank has already made, on the grounds that the app was not told the limit.
+       */
+      const from = await mapAccountWithBalance(await requireAccount(row.account_id as string));
+      const room =
+        from.type === "credit_card"
+          ? from.creditLimitPaise === null
+            ? Number.MAX_SAFE_INTEGER
+            : (from.availableLimitPaise ?? Math.max(from.creditLimitPaise - from.outstandingPaise, 0))
+          : from.balancePaise;
+      if (room < row.amount_paise) {
         skipped.push({ id: row.id, dueDate: date, reason: "short" });
         break;
       }
@@ -847,7 +871,8 @@ export async function catchUpAutopayDebits(today = currentIsoDate()) {
           createTransactionSchema.parse({
             date,
             accountId: row.account_id,
-            method: "bank_transfer",
+            // A charge to a card is a card payment method; money leaving a bank is a transfer.
+            method: from.type === "credit_card" ? "credit_card" : "bank_transfer",
             merchant: row.name,
             subcategoryId: AUTOPAY_SUBCATEGORY_ID,
             amountPaise: row.amount_paise,
@@ -886,12 +911,20 @@ function autopayDueDates(row: AutopaySubscriptionRow, afterDate: string, through
   return dates;
 }
 
-export async function archiveAutopaySubscription(id: string) {
+/**
+ * Deletes a subscription and leaves every payment it ever made.
+ *
+ * The owner asked for delete in place of archive, and the thing that makes that safe is what
+ * does *not* go with it: the transactions are money that actually moved, and a subscription
+ * being wrong about the future says nothing about the past. The link rows in autopay_payments
+ * go, because they point at something that no longer exists -- the foreign key cascades them --
+ * and the transactions they pointed at are untouched by that cascade, which is the whole reason
+ * the link lives in a table of its own rather than in a column on the transaction.
+ */
+export async function deleteAutopaySubscription(id: string) {
   await requireAutopayRow(id);
-  (await db.prepare(
-    "UPDATE autopay_subscriptions SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?"
-  ).run(id, currentUserId()));
-  return { ok: true, mode: "archived" as const };
+  (await db.prepare("DELETE FROM autopay_subscriptions WHERE id = ? AND user_id = ?").run(id, currentUserId()));
+  return { ok: true, mode: "deleted" as const };
 }
 
 type InvestmentRow = {
@@ -1303,9 +1336,16 @@ export async function catchUpPayoutCredits(today = currentIsoDate()) {
     const due = payoutDueDates(row, from, today);
     if (!due.length) continue;
 
-    // The SubType these are filed under is a shipped default, and a default can be deleted. The
-    // credit is still worth recording without it; it simply arrives needing a category.
-    const interest = await getSubcategoryRow(INTEREST_SUBCATEGORY_ID);
+    /*
+     * Other income, which is what the owner asked for: a payout from a bond or a post office
+     * scheme is income that arrives without anyone touching it, and it should arrive filed
+     * rather than waiting to be categorised by hand.
+     *
+     * A shipped SubType can be deleted, so Interest is the fallback and no category at all is
+     * the last resort -- the credit is worth recording either way.
+     */
+    const filedUnder =
+      (await getSubcategoryRow(OTHER_INCOME_SUBCATEGORY_ID)) ?? (await getSubcategoryRow(INTEREST_SUBCATEGORY_ID));
     await transaction(async () => {
       for (const date of due) {
         const transactionId = await insertValidatedTransaction(
@@ -1315,7 +1355,7 @@ export async function catchUpPayoutCredits(today = currentIsoDate()) {
             method: "bank_transfer",
             merchant: row.name,
             typeId: INCOME_TYPE_ID,
-            subcategoryId: interest?.id,
+            subcategoryId: filedUnder?.id,
             amountPaise: row.payout_amount_paise,
             direction: "inflow",
             kind: "income"
@@ -2654,13 +2694,15 @@ export async function getOverview(accountId?: string, month = currentMonth()) {
   );
   const spendingPaise = spendingCategories.reduce((sum, category) => sum + Math.max(category.amountPaise, 0), 0);
 
+  const availableCashPaise = scopedAccounts
+    .filter((account) => account.type === "bank" || account.type === "food_card")
+    .reduce((sum, account) => sum + account.balancePaise, 0);
+
   return {
     month,
     accounts: scopedAccounts,
     summary: {
-      availableCashPaise: scopedAccounts
-        .filter((account) => account.type === "bank" || account.type === "food_card")
-        .reduce((sum, account) => sum + account.balancePaise, 0),
+      availableCashPaise,
       creditOutstandingPaise: scopedAccounts
         .filter((account) => account.type === "credit_card")
         .reduce((sum, account) => sum + account.outstandingPaise, 0),
@@ -2694,6 +2736,7 @@ export async function getOverview(accountId?: string, month = currentMonth()) {
     }))
   };
 }
+
 
 /**
  * What was spent on credit cards this month, EMIs excluded.
@@ -3721,8 +3764,11 @@ export async function getMonthlyReport(
     )
     .sort((a, b) => b.amountPaise - a.amountPaise);
   const categoryTotalPaise = categoryRows.reduce((sum, row) => sum + row.amountPaise, 0);
+  /* A correction is neither side of the month: it is not money that left and not money that
+     arrived, so it is out of both totals as well as out of the spending mix above. */
   const totalOutflowPaise = reportTypes.reduce(
-    (sum, type) => (INFLOW_BEHAVIORS.has(type.behavior) ? sum : sum + type.amountPaise),
+    (sum, type) =>
+      INFLOW_BEHAVIORS.has(type.behavior) || NEUTRAL_BEHAVIORS.has(type.behavior) ? sum : sum + type.amountPaise,
     0
   );
   // Inflow uses the same behaviour rule the Reports page applies (Income + Refund), so
@@ -5612,6 +5658,8 @@ function behaviorToKinds(behavior: TaxonomyBehavior): TransactionKind[] {
       return ["card_payment"];
     case "refund":
       return ["refund", "reversal"];
+    case "adjustment":
+      return ["adjustment"];
   }
 }
 

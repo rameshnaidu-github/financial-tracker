@@ -1,4 +1,4 @@
-import { INFLOW_BEHAVIORS } from "../shared/finance.ts";
+import { INFLOW_BEHAVIORS, NEUTRAL_BEHAVIORS } from "../shared/finance.ts";
 import type { ReportType } from "./types";
 
 export { INFLOW_BEHAVIORS };
@@ -11,8 +11,15 @@ export type CashflowPart = {
 };
 
 export function cashflowPartsFromTypes(types: ReportType[], tone: "in" | "out"): CashflowPart[] {
+  /* A correction belongs to neither side: it did not come in and it did not go out, it only
+     says the balance was wrong. Without this it would show up as an outflow the size of the
+     mistake. */
   const matchingTypes = types.filter((type) =>
-    tone === "in" ? INFLOW_BEHAVIORS.has(type.behavior) : !INFLOW_BEHAVIORS.has(type.behavior)
+    NEUTRAL_BEHAVIORS.has(type.behavior)
+      ? false
+      : tone === "in"
+        ? INFLOW_BEHAVIORS.has(type.behavior)
+        : !INFLOW_BEHAVIORS.has(type.behavior)
   );
 
   const parts =

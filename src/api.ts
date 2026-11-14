@@ -217,7 +217,7 @@ export const Api = {
       isArchived: boolean;
     }>
   ) => api<AutopaySubscription>(`/api/subscriptions/${id}`, { method: "PATCH", body }),
-  archiveSubscription: (id: string) =>
+  deleteSubscription: (id: string) =>
     api<{ ok: true; mode: "archived" }>(`/api/subscriptions/${id}`, { method: "DELETE" }),
   investments: () => api<Investment[]>("/api/investments"),
   createInvestment: (body: InvestmentPayload) =>

@@ -33,7 +33,7 @@ import {
   createSubcategory,
   createTransaction,
   createVacation,
-  archiveAutopaySubscription,
+  deleteAutopaySubscription,
   archiveLoan,
   deleteAccount,
   deleteBudgetLine,
@@ -424,7 +424,7 @@ app.patch("/api/subscriptions/:id", async (request) => {
 
 app.delete("/api/subscriptions/:id", async (request) => {
   const params = request.params as { id: string };
-  return archiveAutopaySubscription(params.id);
+  return deleteAutopaySubscription(params.id);
 });
 
 app.get("/api/batches/current", async (request) => {
