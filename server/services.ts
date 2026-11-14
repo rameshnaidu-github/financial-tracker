@@ -6,7 +6,7 @@ import {
   AUTOPAY_SUBCATEGORY_ID,
   INCOME_TYPE_ID,
   INFLOW_BEHAVIORS,
-  EMI_SUBCATEGORY_ID,
+  EMI_SUBCATEGORY_IDS,
   INTEREST_SUBCATEGORY_ID,
   NEUTRAL_BEHAVIORS,
   OTHER_INCOME_SUBCATEGORY_ID,
@@ -2723,7 +2723,6 @@ export async function getOverview(accountId?: string, month = currentMonth()) {
       inflowPaise:previous.totalInflowPaise,
       outflowPaise:previous.totalOutflowPaise
     },
-    recentTransactions: await listTransactions({ accountId, limit: 5 }),
     /*
      * Every spending category, not the top few. `spendingPaise` above sums all of them, and the
      * overview's ring divides each slice by that total -- so publishing a truncated list drew a
@@ -5214,7 +5213,7 @@ async function syncLoanPaymentForTransaction(transactionId: string, input: Creat
    * listed EMIs the server then refused -- it offered them because they were running, and this
    * rejected them because they were filed under their own kind rather than under EMI.
    */
-  if (input.subcategoryId !== EMI_SUBCATEGORY_ID && (await loan).subcategory_id !== input.subcategoryId) {
+  if (!EMI_SUBCATEGORY_IDS.has(input.subcategoryId ?? "") && (await loan).subcategory_id !== input.subcategoryId) {
     throw badRequest("Linked loan must match the selected Loan SubType.");
   }
 
@@ -5552,6 +5551,12 @@ async function resolveTransactionTaxonomy(input: CreateTransactionInput) {
     if (!expectedKinds.includes(input.kind)) {
       throw badRequest(`Selected Type does not match the transaction behavior.`);
     }
+    /* The EMI kind under an expense Type is for instalments, and an instalment is what an EMI
+       SubType says it is. Without this, widening the Type above would let anything filed under
+       Expense arrive as an EMI payment. */
+    if (type.behavior === "expense" && input.kind === "emi" && !EMI_SUBCATEGORY_IDS.has(subcategory?.id ?? "")) {
+      throw badRequest("Only an EMI SubType can record an instalment under Expense.");
+    }
   }
 
   return {
@@ -5658,7 +5663,18 @@ async function getTransactionSplits(transactionId: string): Promise<{ subcategor
 function behaviorToKinds(behavior: TaxonomyBehavior): TransactionKind[] {
   switch (behavior) {
     case "expense":
-      return ["expense"];
+      /*
+       * An expense is ordinarily just an expense. "emi" is admitted beside it so that an
+       * instalment can be filed under Expense as well as under Loan, which the owner asked for
+       * -- a payment going out of the account reads as money spent to them, whatever the loan
+       * is doing underneath.
+       *
+       * This widens what the Type will accept, not what any particular transaction is: the kind
+       * is set by the SubType chosen, and a payment can only be linked to an EMI when it is
+       * filed under an EMI SubType. The check below enforces that, so an ordinary Groceries
+       * expense cannot quietly arrive carrying the EMI kind.
+       */
+      return ["expense", "emi"];
     case "income":
       return ["income"];
     case "loan":
