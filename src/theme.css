@@ -4006,3 +4006,35 @@ button.budget-hint-chip:focus-visible {
     flex: 1 0 100%;
   }
 }
+
+/* ---------- Correcting a balance, in the account editor ---------- */
+/*
+ * The amount and the button that applies it sit on one row: this is a sentence -- adjust by
+ * this much, now -- and splitting it over two lines made the button look like the form's own
+ * submit rather than the field's. Added after the merge that swept out unused classes showed
+ * these two had never had any rules at all: the markup shipped in fixes-33 and the styles did
+ * not, so the row had been falling back to block layout.
+ */
+.account-adjust-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.account-adjust-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.account-adjust-row button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  /* Narrow enough that the two together leave the amount unreadably short. */
+  .account-adjust-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
