@@ -6091,6 +6091,13 @@ function LoansPage({
     }))
     .sort((a, b) => b.amountPaise - a.amountPaise);
 
+  /* Running and archived, each heading present only where something sits under it -- the same
+     rule the accounts page follows for banks and cards. */
+  const loanGroups = [
+    { key: "running", title: `Active ${noun}s`, loans: activeLoans },
+    { key: "archived", title: `Archived ${noun}s`, loans: archivedLoans }
+  ].filter((group) => group.loans.length > 0);
+
   async function restore(loan: Loan) {
     try {
       await Api.updateLoan(loan.id, { isArchived: false });
@@ -6127,52 +6134,45 @@ function LoansPage({
         />
       </section>
 
-      <div className="two-column loans-layout">
-        <Panel title={isCardEmi ? "EMI tracker" : "Loan tracker"}>
-          {activeLoans.length === 0 ? (
-            <EmptyState text="No active loans yet." />
-          ) : (
-            <div className="loan-card-grid">
-              {activeLoans.map((loan) => (
-                <LoanCard
-                  key={loan.id}
-                  loan={loan}
-                  onEdit={setEditingLoan}
-                  onArchive={archive}
-                />
-              ))}
-            </div>
-          )}
-
-          {archivedLoans.length > 0 && (
-            <>
-              <h3 className="section-subtitle">Archived loans</h3>
-              <div className="loan-card-grid archived-loans">
-                {archivedLoans.map((loan) => (
+      {/* The Accounts page's shape, which the owner asked every list page to wear: the cards are
+          the page rather than the contents of a panel on it, grouped under named headings, with
+          the chart in a column beside them. A loan and an EMI differ only in where the thing was
+          bought, so the two readings of this page look identical. */}
+      <div className="accounts-split">
+        <div className="accounts-split-main">
+          {loanGroups.map((group) => (
+            <section className="account-group" key={group.key}>
+              <h2 className="account-group-title">{group.title}</h2>
+              <div className="budget-grid accounts-grid">
+                {group.loans.map((loan) => (
                   <LoanCard
                     key={loan.id}
                     loan={loan}
                     onEdit={setEditingLoan}
-                    onRestore={restore}
+                    onArchive={group.key === "running" ? archive : undefined}
+                    onRestore={group.key === "archived" ? restore : undefined}
                   />
                 ))}
               </div>
-            </>
-          )}
-        </Panel>
+            </section>
+          ))}
+          {loanGroups.length === 0 && <EmptyState text={`No ${noun}s yet. Add one to start tracking.`} />}
+        </div>
 
-        <Panel title={`Outstanding by ${noun}`}>
-          <MixChart
-            segments={loanSegments}
-            totalPaise={activeOutstanding}
-            ariaLabel={`Outstanding by ${noun}`}
-            centerLabel="Outstanding"
-            centerValue={formatINRWhole(activeOutstanding)}
-            centerCountPaise={activeOutstanding}
-            className="overview-donut-chart"
-            emptyText={`Nothing outstanding yet. Add ${isCardEmi ? "an EMI" : "a loan"} to see the split.`}
-          />
-        </Panel>
+        <aside className="accounts-split-side">
+          <Panel title={`Outstanding by ${noun}`}>
+            <MixChart
+              segments={loanSegments}
+              totalPaise={activeOutstanding}
+              ariaLabel={`Outstanding by ${noun}`}
+              centerLabel="Outstanding"
+              centerValue={formatINRWhole(activeOutstanding)}
+              centerCountPaise={activeOutstanding}
+              className="overview-donut-chart"
+              emptyText={`Nothing outstanding yet. Add ${isCardEmi ? "an EMI" : "a loan"} to see the split.`}
+            />
+          </Panel>
+        </aside>
       </div>
 
       {adding && (
@@ -6656,10 +6656,12 @@ function InvestmentsPage({
         />
       </section>
 
-      <div className="two-column loans-layout">
-        <Panel title="Portfolio">
+      {/* The Accounts page's shape: holdings grouped under their own headings, the chart in a
+          column beside them, no panel around the cards. */}
+      <div className="accounts-split">
+        <div className="accounts-split-main">
           {groups.length === 0 ? (
-            <EmptyState text="No investments yet. Add your first holding below." />
+            <EmptyState text="No investments yet. Add your first holding to start tracking." />
           ) : (
             <div className="investment-groups">
               {groups.map((group) => (
@@ -6674,8 +6676,9 @@ function InvestmentsPage({
               ))}
             </div>
           )}
-        </Panel>
+        </div>
 
+        <aside className="accounts-split-side">
         <Panel
           title={chartType ? `${chartType.label} holdings` : "Current value by type"}
           action={
@@ -6704,6 +6707,7 @@ function InvestmentsPage({
             onSegmentClick={chartType ? undefined : (segment) => setChartTypeId(segment.id)}
           />
         </Panel>
+        </aside>
       </div>
 
       {adding && (
@@ -6923,7 +6927,9 @@ function InvestmentGroup({
                 <span className="investment-group-count">{period.items.length}</span>
               </h4>
             )}
-            <div className="loan-card-grid">
+            {/* The same grid the accounts use, so a holding sits in a row of the same width as
+                an account, a loan or a trip. */}
+            <div className="budget-grid accounts-grid">
               {period.items.map((investment) => (
                 <InvestmentCard key={investment.id} investment={investment} onEdit={onEdit} onDelete={onDelete} />
               ))}
@@ -7317,17 +7323,20 @@ function VacationsPage({
         Tag any expense to a trip when you add it. It still counts in your normal expenses, and also rolls up here.
       </p>
 
-      <Panel title="Your trips">
-        {vacations.length === 0 ? (
-          <EmptyState text="No vacations yet. Add your first trip below, then tag expenses to it." />
-        ) : (
-          <div className="vacation-list">
+      {/* The Accounts page's shape. No column beside it: a trip has no chart of its own, and an
+          empty side would be a hole rather than a space. */}
+      {vacations.length === 0 ? (
+        <EmptyState text="No vacations yet. Add your first trip, then tag expenses to it." />
+      ) : (
+        <section className="account-group">
+          <h2 className="account-group-title">Your trips</h2>
+          <div className="budget-grid accounts-grid">
             {vacations.map((vacation) => (
               <VacationCard key={vacation.id} vacation={vacation} onEdit={setEditing} onDelete={remove} />
             ))}
           </div>
-        )}
-      </Panel>
+        </section>
+      )}
 
       {adding && (
         <FormDialog title="Add vacation" onClose={() => setAdding(false)}>
@@ -9797,36 +9806,6 @@ export function AccountEditDialog({
             </small>
           </label>
         )}
-        {!isCard && (
-          <div className="account-adjust">
-            <label>
-              Adjust balance
-              <div className="account-adjust-row">
-                <input
-                  inputMode="text"
-                  value={adjustment}
-                  onChange={(event) => setAdjustment(event.target.value)}
-                  placeholder="+500 or -500"
-                  aria-describedby={`${adjustHintId}`}
-                />
-                <button
-                  type="button"
-                  className="secondary-action"
-                  onClick={applyAdjustment}
-                  disabled={adjusting || !adjustment.trim()}
-                >
-                  {adjusting ? "Adjusting..." : "Apply"}
-                </button>
-              </div>
-              <small className="field-hint" id={adjustHintId}>
-                For when the app and your bank disagree. The amount is the size of the correction,
-                so +500 raises the balance by ₹500 and -500 lowers it. It is written as its own
-                transaction, which you can delete to undo it, and it counts as neither spending
-                nor income.
-              </small>
-            </label>
-          </div>
-        )}
         <div className="budget-dialog-actions">
           <button type="button" className="secondary-action danger-action" onClick={onDelete} disabled={saving}>
             <Trash2 size={16} />
@@ -9843,6 +9822,45 @@ export function AccountEditDialog({
           </div>
         </div>
       </form>
+
+      {/*
+        * Its own form, beside the account's rather than inside it.
+        *
+        * This block used to sit within the account-edit form, and a field inside a form submits
+        * that form on Enter -- so typing "+500" and pressing Enter saved the account, closed the
+        * dialog, said "Account updated." and threw the adjustment away without a word. Pressing
+        * Apply had always worked; Enter is the ordinary gesture in a form, which is why this
+        * read as the feature not working at all.
+        *
+        * Nested forms are not allowed in HTML, so this is a sibling. Enter in the amount now
+        * applies the adjustment, and Enter anywhere in the account's fields still saves the
+        * account.
+        */}
+      {!isCard && (
+        <form className="account-adjust" onSubmit={(event) => { event.preventDefault(); void applyAdjustment(); }}>
+          <label>
+            Adjust balance
+            <div className="account-adjust-row">
+              <input
+                inputMode="text"
+                value={adjustment}
+                onChange={(event) => setAdjustment(event.target.value)}
+                placeholder="+500 or -500"
+                aria-describedby={adjustHintId}
+              />
+              <button type="submit" className="secondary-action" disabled={adjusting || !adjustment.trim()}>
+                {adjusting ? "Adjusting..." : "Apply"}
+              </button>
+            </div>
+            <small className="field-hint" id={adjustHintId}>
+              For when the app and your bank disagree. The amount is the size of the correction, so
+              +500 raises the balance by ₹500 and -500 lowers it. It is written as its own
+              transaction, which you can delete to undo it, and it counts as neither spending nor
+              income.
+            </small>
+          </label>
+        </form>
+      )}
     </FormDialog>
   );
 }

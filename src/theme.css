@@ -578,15 +578,30 @@ textarea:focus {
   outline-offset: 2px;
 }
 
-/* A field wrapper (label + select) lights up as one control when anything inside has focus. */
+/*
+ * A field wrapper (label + select) lights up as one control when anything inside has focus.
+ *
+ * Quietly, though. This used to put the accent on the border and a four-pixel accent-soft halo
+ * around the whole thing, and on a search box it read as a green-outlined, green-filled box the
+ * moment it was clicked -- the owner's screenshot. Green means something in this application:
+ * it is the accent, it marks the thing that matters on a page. A field being typed into is not
+ * that; it only needs to say where the caret is.
+ *
+ * So focus is shown by the border going from quiet to strong, which is the same step a hover
+ * makes, plus a hairline ring in the same colour. No hue, no halo.
+ */
 .control-field:focus-within,
-.search-box:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+.search-box:focus-within,
+.topbar-search:focus-within {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 3px var(--track);
 }
 
 .control-field select:focus-visible,
-.search-box input:focus-visible {
+.search-box input:focus-visible,
+.topbar-search input:focus-visible {
+  /* The wrapper shows the focus, so the control inside must not draw a second ring around
+     itself -- two rings, one inside the other, is what a box in a box looks like. */
   outline: none;
 }
 
@@ -3820,12 +3835,55 @@ button.budget-hint-chip:focus-visible {
   opacity: 0.8;
 }
 
+/*
+ * The account filter, shaped like the search beside it.
+ *
+ * It was a raised white pill with its label inside and a shadow, next to a flat quiet field and
+ * two plain circles -- four controls on one row agreeing about nothing. The row is a band of
+ * controls, so they share a height, a ground, a border and a corner, and the one that is a
+ * filter is told apart by its own chevron and its label rather than by being a different
+ * material.
+ */
+.topbar-actions .account-filter {
+  min-width: 0;
+  width: min(260px, 32vw);
+  padding: 0 34px 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-soft);
+  box-shadow: none;
+  align-content: center;
+  /* The same height as the search beside it, to the pixel: a two-pixel difference between two
+     controls on one row is the kind of thing you see without being able to name. */
+  min-height: 46px;
+}
+
+.topbar-actions .account-filter .control-label {
+  font-size: 0.66rem;
+  line-height: 1.1;
+}
+
+.topbar-actions .account-filter select {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+  background-image: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+:root[data-theme="dark"] .topbar-actions .account-filter {
+  background-color: var(--panel-soft);
+}
+
 /* Search, which goes to the ledger with what was typed. */
 .topbar-search {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  min-height: 46px;
   width: min(260px, 32vw);
   padding: 0 10px;
   border: 1px solid var(--line);
@@ -3835,7 +3893,10 @@ button.budget-hint-chip:focus-visible {
 }
 
 .topbar-search:focus-within {
-  border-color: var(--accent-strong);
+  /* The border and ring are set once with the other fields, further up. What is left here is
+     the one thing particular to this field: its magnifier and placeholder are muted until you
+     are typing in it. Setting the accent on the border here is what kept the green outline
+     after the shared rule stopped drawing one. */
   color: var(--text);
 }
 
@@ -3851,6 +3912,12 @@ button.budget-hint-chip:focus-visible {
 
 .topbar-search input:focus {
   outline: none;
+}
+
+/* The three round controls agree with each other as well: the bell and the theme were rounded
+   squares beside a circular avatar, which is a difference that means nothing. */
+.topbar-actions .icon-button {
+  border-radius: 999px;
 }
 
 .topbar-person {
