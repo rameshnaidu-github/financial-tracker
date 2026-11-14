@@ -2234,17 +2234,23 @@ function TransactionEntryForm({
    * a vehicle loan would be a worse list, not a longer one. Nothing paid off is offered: there
    * is nothing left to pay.
    */
-  const isEmiSelected = form.subcategoryId === EMI_SUBCATEGORY_ID;
   /*
-   * The same SubType under Expense, for an instalment the owner thinks of as money spent. It
-   * offers what the EMI page lists -- card EMIs -- rather than everything running, which is the
-   * choice the owner made between the two. Loan → EMI keeps the wider list: that is the loan
-   * page's own tool.
+   * Each EMI SubType offers its own section, and nothing else.
+   *
+   * The owner keeps two: Loans is money borrowed -- a home loan, a personal loan -- and EMI is a
+   * thing bought on a credit card and paid off monthly. They behave identically; only where the
+   * money came from differs, which is exactly the line the database draws.
+   *
+   * So Loan → EMI offers the loans and Expense → EMI offers the card EMIs. They used to differ:
+   * the one under Loan offered everything running, both sections at once, which made two
+   * controls of the same name show different lists for no reason a reader could name.
+   *
+   * The five loan kinds beside it -- Home, Vehicle, Gold -- still offer only their own, because
+   * picking "Home" and being shown a vehicle loan would be a worse list, not a longer one.
    */
+  const isEmiSelected = form.subcategoryId === EMI_SUBCATEGORY_ID;
   const isExpenseEmiSelected = form.subcategoryId === EXPENSE_EMI_SUBCATEGORY_ID;
-  const availableLoans = (
-    isExpenseEmiSelected ? cardEmis : isEmiSelected ? [...loans, ...cardEmis] : loans
-  ).filter((loan) =>
+  const availableLoans = (isExpenseEmiSelected ? cardEmis : loans).filter((loan) =>
     isEmiSelected || isExpenseEmiSelected
       ? !loan.isArchived && loan.outstandingPaise > 0
       : loan.subcategoryId === form.subcategoryId
