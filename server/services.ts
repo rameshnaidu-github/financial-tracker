@@ -6,6 +6,7 @@ import {
   AUTOPAY_SUBCATEGORY_ID,
   INCOME_TYPE_ID,
   INFLOW_BEHAVIORS,
+  EMI_SUBCATEGORY_ID,
   INTEREST_SUBCATEGORY_ID,
   NEUTRAL_BEHAVIORS,
   OTHER_INCOME_SUBCATEGORY_ID,
@@ -5201,7 +5202,19 @@ async function syncLoanPaymentForTransaction(transactionId: string, input: Creat
   }
 
   const loan = await requireActiveLoan(input.loanId);
-  if ((await loan).subcategory_id !== input.subcategoryId) {
+  /*
+   * Which loans a payment may be linked to.
+   *
+   * Under one of the loan kinds -- Home, Vehicle, Gold -- the loan has to be filed under that
+   * same kind, so a payment marked "Home" cannot be attached to a vehicle loan.
+   *
+   * The EMI SubType is the exception, and it is the whole point of it: it is the dedicated
+   * SubType for paying an instalment, and it offers every EMI still running, exactly as the
+   * AutoPay SubType offers every active subscription. Without this the picker fixes-33 added
+   * listed EMIs the server then refused -- it offered them because they were running, and this
+   * rejected them because they were filed under their own kind rather than under EMI.
+   */
+  if (input.subcategoryId !== EMI_SUBCATEGORY_ID && (await loan).subcategory_id !== input.subcategoryId) {
     throw badRequest("Linked loan must match the selected Loan SubType.");
   }
 

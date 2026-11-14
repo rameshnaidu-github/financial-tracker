@@ -104,7 +104,6 @@ import type {
   BudgetTrendPoint,
   UserProfile,
   WealthSummary,
-  UpcomingPayments
 } from "./types";
 import {
   AUTOPAY_DURATION_MONTH_OPTIONS,
@@ -1723,7 +1722,6 @@ function OverviewPage({
   const [loadError, setLoadError] = useState("");
   const [budgetPlan, setBudgetPlan] = useState<BudgetPlan | null>(null);
   const [wealth, setWealth] = useState<WealthSummary | null>(null);
-  const [upcoming, setUpcoming] = useState<UpcomingPayments | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -1761,20 +1759,6 @@ function OverviewPage({
       })
       .catch(() => {
         if (active) setWealth(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, [refreshKey]);
-
-  useEffect(() => {
-    let active = true;
-    Api.upcoming()
-      .then((next) => {
-        if (active) setUpcoming(next);
-      })
-      .catch(() => {
-        if (active) setUpcoming(null);
       });
     return () => {
       active = false;
@@ -1937,18 +1921,13 @@ function OverviewPage({
         </Panel>
       </OverviewBand>
 
-      <OverviewBand title="Activity & upcoming">
-        <div className="two-column overview-band-pair">
-          <Panel title="Recent activity" action={<button onClick={() => onNavigate("transactions")}>View all</button>}>
-            <TransactionTable transactions={overview.recentTransactions} empty="No transactions yet." compact />
-          </Panel>
-          {/* No action here: the list already groups by AutoPay, loans and cards, and the
-              sidebar is how you get to AutoPay itself. */}
-          <Panel title={`Coming up in ${upcoming?.windowDays ?? 7} days`}>
-            <UpcomingPaymentsList upcoming={upcoming} availableCashPaise={overview.summary.availableCashPaise} />
-          </Panel>
-        </div>
-      </OverviewBand>
+      {/* The owner asked for the "Activity & upcoming" band and the "Coming up in 7 days" panel
+          to go. Recent activity was not named, so it stays -- as a panel of its own now, which
+          is all the band was giving it. What is coming up is still on the AutoPay and Loans
+          pages, and anything due within the week is raised by the bell in the top bar. */}
+      <Panel title="Recent activity" action={<button onClick={() => onNavigate("transactions")}>View all</button>}>
+        <TransactionTable transactions={overview.recentTransactions} empty="No transactions yet." compact />
+      </Panel>
 
       <OverviewBand title="Wealth">
         <div className="two-column overview-band-pair">
@@ -10083,81 +10062,6 @@ function ChangeVsLastMonth({
   );
 }
 
-function UpcomingPaymentsList({
-  upcoming,
-  availableCashPaise
-}: {
-  upcoming: UpcomingPayments | null;
-  availableCashPaise: number;
-}) {
-  if (!upcoming) {
-    return <PanelLoader label="Checking what's due" />;
-  }
-  if (upcoming.items.length === 0) {
-    return <EmptyState text="Nothing due soon. AutoPay renewals, loan EMIs and card bills appear here before they're charged." />;
-  }
-  const dueLabel = (daysAway: number, dueDate: string) =>
-    daysAway === 0
-      ? "Due today"
-      : daysAway === 1
-        ? "Due tomorrow"
-        : `In ${daysAway} days, ${formatDateWithYear(dueDate).replace(/ \d{4}$/, "")}`;
-  // One block per kind, always in this order, and a kind with nothing due is left out.
-  const groups = [
-    { kind: "autopay" as const, title: "AutoPay", icon: <CalendarClock size={16} /> },
-    { kind: "loan" as const, title: "Loans", icon: <Landmark size={16} /> },
-    { kind: "sip" as const, title: "Fund instalments", icon: <TrendingUp size={16} /> },
-    { kind: "card" as const, title: "Credit card payments", icon: <CreditCard size={16} /> }
-  ]
-    .map((group) => ({ ...group, items: upcoming.items.filter((item) => item.kind === group.kind) }))
-    .filter((group) => group.items.length > 0);
-
-  return (
-    <div className="upcoming-list">
-      {groups.map((group) => {
-        const groupTotal = group.items.reduce((sum, item) => sum + item.amountPaise, 0);
-        return (
-          <section className="upcoming-group" key={group.kind}>
-            <header className="upcoming-group-head">
-              <h3>{group.title}</h3>
-              <strong>{formatINR(groupTotal)}</strong>
-            </header>
-            {group.items.map((item) => (
-              <div
-                className={`upcoming-row${item.notCoveredBy ? " held" : item.daysAway <= 2 ? " soon" : ""}`}
-                key={`${item.kind}-${item.id}`}
-              >
-                <span className="upcoming-icon">{group.icon}</span>
-                <div className="upcoming-main">
-                  <strong>{item.name}</strong>
-                  {/* An AutoPay that fell due and could not be taken says so here rather than
-                      disappearing: nothing was recorded, so this is the only sign it is owed. */}
-                  <small>
-                    {item.notCoveredBy
-                      ? item.heldBecause === "archived"
-                        ? `Due ${formatShortDate(item.dueDate)} · ${item.notCoveredBy} is archived`
-                        : `Due ${formatShortDate(item.dueDate)} · not enough in ${item.notCoveredBy}`
-                      : dueLabel(item.daysAway, item.dueDate)}
-                  </small>
-                </div>
-                <strong className="amount-out">{formatINR(item.amountPaise)}</strong>
-              </div>
-            ))}
-          </section>
-        );
-      })}
-      <div className="upcoming-total">
-        <span>Total due</span>
-        <strong>{formatINR(upcoming.totalPaise)}</strong>
-      </div>
-      {upcoming.totalPaise > availableCashPaise && (
-        <p className="upcoming-warning">
-          <CircleAlert size={14} /> That's more than your available cash of {formatINR(availableCashPaise)}.
-        </p>
-      )}
-    </div>
-  );
-}
 
 function Metric({ label, value, warning = false }: { label: string; value: string; warning?: boolean }) {
   return (

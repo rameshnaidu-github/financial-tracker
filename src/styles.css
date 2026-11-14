@@ -67,6 +67,30 @@ select {
   border-color: var(--line);
 }
 
+/*
+ * An input inside a field draws nothing of its own.
+ *
+ * Some controls are a field in themselves and some are a field WITH something -- a search has a
+ * magnifier beside it, so the box is the wrapper and the input is just the typing part of it.
+ * The dark rule above is (0,2,1) and a component rule like `.topbar-search input` is (0,1,1),
+ * so the input kept painting --bg-deep with a 12px radius inside its own lighter, 9px-radius
+ * wrapper: a box in a box, which is what the owner photographed. It was on both searches, not
+ * only the one in the screenshot.
+ *
+ * Written here, beside the rule that causes it and with the specificity to beat it, rather than
+ * patched at each of the places it surfaces -- the next field built this way would have
+ * inherited the same bug.
+ */
+:root[data-theme="dark"] .topbar-search input,
+:root[data-theme="dark"] .search-box input,
+.topbar-search input,
+.search-box input {
+  background-color: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 input:focus,
 select:focus {
   border-color: var(--accent);
