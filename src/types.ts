@@ -251,7 +251,6 @@ export type Overview = {
     inflowPaise: number;
     outflowPaise: number;
   };
-  recentTransactions: Transaction[];
   categoryReport: ReportCategory[];
 };
 

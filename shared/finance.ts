@@ -19,6 +19,16 @@ export const OTHER_INCOME_SUBCATEGORY_ID = "sub_other_income";
 export const ADJUSTMENT_TYPE_ID = "type_adjustment";
 /** Choosing this on a payment offers the EMIs that are running, the way AutoPay offers subscriptions. */
 export const EMI_SUBCATEGORY_ID = "sub_loan_emi";
+/**
+ * The same thing under Expense, because the owner asked for it in both places.
+ *
+ * Which one you file a payment under decides which bucket it lands in on the reports -- Expense
+ * or Loan -- and nothing else: both carry the EMI kind, both reduce the EMI they name. The
+ * choice is the point of having it twice.
+ */
+export const EXPENSE_EMI_SUBCATEGORY_ID = "sub_expense_emi";
+/** Every SubType that means "this is an instalment", wherever it hangs. */
+export const EMI_SUBCATEGORY_IDS = new Set<string>([EMI_SUBCATEGORY_ID, EXPENSE_EMI_SUBCATEGORY_ID]);
 export const ADJUSTMENT_SUBCATEGORY_ID = "sub_adjustment_balance";
 export const INCOME_TYPE_ID = "type_income";
 export const SELF_TRANSFER_SUBCATEGORY_ID = "sub_transfer_self";
@@ -174,7 +184,13 @@ export const DEFAULT_CATEGORY_TYPES = [
       { id: "sub_bills_utilities", name: "Bills & Utilities", icon: "zap", color: "#d97706" },
       { id: "sub_insurance", name: "Insurance", icon: "shield", color: "#0284c7" },
       { id: "sub_education", name: "Education", icon: "graduation-cap", color: "#4f46e5" },
-      { id: "sub_personal_care", name: "Personal care", icon: "sparkles", color: "#db2777" }
+      { id: "sub_personal_care", name: "Personal care", icon: "sparkles", color: "#db2777" },
+      /*
+       * Paying an instalment, filed as an expense. The same SubType exists under Loan; this one
+       * is for people who think of an EMI leaving their account as money spent rather than as a
+       * loan being serviced. Choosing it offers the card EMIs still running.
+       */
+      { id: "sub_expense_emi", name: "EMI", icon: "calendar-clock", color: "#be123c" }
     ]
   },
   {
@@ -281,7 +297,8 @@ export const DEFAULTS_ADDED_AFTER_LEDGER = new Set<string>([
      treated as defaults their owner deleted. */
   "type_adjustment",
   "sub_adjustment_balance",
-  "sub_loan_emi"
+  "sub_loan_emi",
+  "sub_expense_emi"
 ]);
 
 /**

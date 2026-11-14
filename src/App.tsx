@@ -112,6 +112,7 @@ import {
   ADJUSTMENT_SUBCATEGORY_ID,
   ADJUSTMENT_TYPE_ID,
   EMI_SUBCATEGORY_ID,
+  EXPENSE_EMI_SUBCATEGORY_ID,
   SELF_TRANSFER_SUBCATEGORY_ID,
   DEFAULT_HOLDING_GROUPING,
   HOLDING_GROUPINGS,
@@ -1921,13 +1922,9 @@ function OverviewPage({
         </Panel>
       </OverviewBand>
 
-      {/* The owner asked for the "Activity & upcoming" band and the "Coming up in 7 days" panel
-          to go. Recent activity was not named, so it stays -- as a panel of its own now, which
-          is all the band was giving it. What is coming up is still on the AutoPay and Loans
-          pages, and anything due within the week is raised by the bell in the top bar. */}
-      <Panel title="Recent activity" action={<button onClick={() => onNavigate("transactions")}>View all</button>}>
-        <TransactionTable transactions={overview.recentTransactions} empty="No transactions yet." compact />
-      </Panel>
+      {/* The Overview is the month's shape, not its ledger. Activity & upcoming went first, then
+          Recent activity with it: five transactions were a sample of a page that is one click
+          away in the navigation and in the search at the top of every screen. */}
 
       <OverviewBand title="Wealth">
         <div className="two-column overview-band-pair">
@@ -2238,8 +2235,17 @@ function TransactionEntryForm({
    * is nothing left to pay.
    */
   const isEmiSelected = form.subcategoryId === EMI_SUBCATEGORY_ID;
-  const availableLoans = (isEmiSelected ? [...loans, ...cardEmis] : loans).filter((loan) =>
-    isEmiSelected
+  /*
+   * The same SubType under Expense, for an instalment the owner thinks of as money spent. It
+   * offers what the EMI page lists -- card EMIs -- rather than everything running, which is the
+   * choice the owner made between the two. Loan → EMI keeps the wider list: that is the loan
+   * page's own tool.
+   */
+  const isExpenseEmiSelected = form.subcategoryId === EXPENSE_EMI_SUBCATEGORY_ID;
+  const availableLoans = (
+    isExpenseEmiSelected ? cardEmis : isEmiSelected ? [...loans, ...cardEmis] : loans
+  ).filter((loan) =>
+    isEmiSelected || isExpenseEmiSelected
       ? !loan.isArchived && loan.outstandingPaise > 0
       : loan.subcategoryId === form.subcategoryId
   );
@@ -2268,7 +2274,9 @@ function TransactionEntryForm({
 
     try {
       const behavior = selectedType?.behavior ?? "expense";
-      const kind = kindForBehavior(behavior);
+      /* An instalment filed under Expense is still an instalment: it carries the EMI kind, which
+         is what lets the server link it to the EMI and take it off the outstanding. */
+      const kind = isExpenseEmiSelected ? "emi" : kindForBehavior(behavior);
       const payload: CreateTransactionPayload = {
         batchId: batchId || undefined,
         date: form.date,
@@ -2283,8 +2291,9 @@ function TransactionEntryForm({
         kind,
         transferAccountId:
           behavior === "card_payment" || isSelfTransferSelected ? form.transferAccountId : undefined,
-        loanId: behavior === "loan" ? form.loanId || undefined : undefined,
-        loanPaymentType: behavior === "loan" && form.loanId ? form.loanPaymentType : undefined,
+        loanId: behavior === "loan" || isExpenseEmiSelected ? form.loanId || undefined : undefined,
+        loanPaymentType:
+          (behavior === "loan" || isExpenseEmiSelected) && form.loanId ? form.loanPaymentType : undefined,
         subscriptionId:
           form.subcategoryId === AUTOPAY_SUBCATEGORY_ID ? form.subscriptionId || undefined : undefined,
         investmentId:
@@ -2514,10 +2523,10 @@ function TransactionEntryForm({
           </select>
         </label>
       )}
-      {selectedBehavior === "loan" && (
+      {(selectedBehavior === "loan" || isExpenseEmiSelected) && (
         <>
           <label>
-            {isEmiSelected ? "Linked EMI" : "Linked loan"}
+            {isEmiSelected || isExpenseEmiSelected ? "Linked EMI" : "Linked loan"}
             <select
               value={form.loanId}
               onChange={(event) => setForm({ ...form, loanId: event.target.value })}
