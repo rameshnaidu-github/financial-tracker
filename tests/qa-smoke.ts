@@ -2897,6 +2897,56 @@ test("deleted defaults stay deleted after a restart while new defaults arrive on
   assert(!await hasTaxonomyId("sub_personal_care"), "Once delivered and deleted, a new default stays deleted.");
 });
 
+test("a default shipped after a second account was created still reaches it", async () => {
+  // The test above only ever looked at the owner, and the owner is the one account that could
+  // not show the bug it was meant to catch: start-up re-seeded the owner and nobody else, so a
+  // default added in a later release never reached anyone who had signed up before it. Two real
+  // accounts were missing the EMI SubType and the whole Adjustment Type because of it.
+  const owner = await dbModule.ownerId();
+  const second = randomUUID();
+  // A day later, deliberately: created_at holds whole seconds, ownerId() is first-by-created_at
+  // with the id as tie-breaker, and an account inserted in the same second as the owner wins
+  // that tie at random -- which would make this test the owner and prove nothing.
+  const later = new Date(Date.now() + 86_400_000).toISOString().replace("T", " ").slice(0, 19);
+  (await dbModule.db
+    .prepare("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)")
+    .run(second, `late-joiner-${second.slice(0, 8)}@example.test`, "x", later));
+  assert((await dbModule.ownerId()) === owner, "The second account must not become the owner.");
+  await dbModule.seedPerson(second);
+
+  // Rewind it to the state every pre-existing account is in: seeded once, before this default
+  // shipped, with a ledger that records only what it got that day.
+  const late = "sub_loan_emi";
+  (await dbModule.db.prepare("DELETE FROM subcategories WHERE id = ? AND user_id = ?").run(late, second));
+  const ledger = (await dbModule.db
+    .prepare("SELECT value FROM user_settings WHERE user_id = ? AND key = 'seeded_default_taxonomy_ids'")
+    .get(second)) as { value: string } | undefined;
+  assert(ledger !== undefined, "A new account should record which defaults it was given.");
+  const given = JSON.parse(ledger.value) as string[];
+  assert(given.includes(late), "The rewind must remove something, or it proves nothing.");
+  (await dbModule.db
+    .prepare("UPDATE user_settings SET value = ? WHERE user_id = ? AND key = 'seeded_default_taxonomy_ids'")
+    .run(JSON.stringify(given.filter((id) => id !== late)), second));
+
+  await dbModule.runAsUserAsync(second, async () => {
+    assert(!(await hasTaxonomyId(late)), "The rewind should have taken the default away.");
+  });
+  await dbModule.initDatabase();
+  await dbModule.runAsUserAsync(second, async () => {
+    assert(await hasTaxonomyId(late), "A default shipped later must reach an account that already existed.");
+    await services.deleteSubcategory(late);
+  });
+  await dbModule.initDatabase();
+  await dbModule.runAsUserAsync(second, async () => {
+    assert(!(await hasTaxonomyId(late)), "A default the second account deleted must stay deleted.");
+  });
+
+  (await dbModule.db.prepare("DELETE FROM user_settings WHERE user_id = ?").run(second));
+  (await dbModule.db.prepare("DELETE FROM subcategories WHERE user_id = ?").run(second));
+  (await dbModule.db.prepare("DELETE FROM category_types WHERE user_id = ?").run(second));
+  (await dbModule.db.prepare("DELETE FROM users WHERE id = ?").run(second));
+});
+
 test("backups follow a custom database and keep daily history", async () => {
   const backupFiles = await import("../server/backup-files.ts");
   assert(

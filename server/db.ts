@@ -428,10 +428,23 @@ export async function initDatabase() {
   // database. They are inserts that do nothing on conflict, taking row locks rather than the
   // ACCESS EXCLUSIVE locks that deadlocked, so running them on every start is safe.
   await ensureOwner();
-  await asOwner(async () => {
-    await seedTaxonomy();
-    await seedSettings();
-  });
+
+  // Every account, not just the owner's.
+  //
+  // This used to be `asOwner(...)`, and it meant a default shipped in a later release reached
+  // exactly one person. Everyone else is seeded once, by `seedPerson` at signup, and nothing ran
+  // for them again -- so their ledger froze on the day they joined and the EMI SubType, the
+  // Adjustment Type and every later default simply never existed for them. The owner was the one
+  // account that could not show the bug, which is why it survived a test that only ever looked
+  // at the owner.
+  //
+  // Safe to run for everybody on every start: `seedPerson` consults each person's own ledger, so
+  // a default somebody deliberately deleted stays deleted, and the inserts underneath it do
+  // nothing on conflict. It is a handful of row-locked statements per account.
+  const people = (await db.prepare("SELECT id FROM users ORDER BY created_at, id").all()) as Array<{ id: string }>;
+  for (const person of people) {
+    await seedPerson(person.id);
+  }
 }
 
 
