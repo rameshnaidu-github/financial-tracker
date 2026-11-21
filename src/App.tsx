@@ -9903,6 +9903,49 @@ function Panel({
 /* Editing used to happen in a form parked at the top of the page, so changing a holding near the
    bottom of a long list meant scrolling up to the form and scrolling back down to see what it
    did. The form comes to the item instead. One dialog serves every section. */
+/*
+ * How far a dialog may travel from the control that opened it.
+ *
+ * Far enough to read as coming from somewhere, short enough that it is not a flight across the
+ * page. Applied as one scale factor over the whole vector so the direction survives -- see the
+ * comment at the use site for what happens when it is applied per axis instead.
+ */
+const MAX_DIALOG_TRAVEL_X = 160;
+const MAX_DIALOG_TRAVEL_Y = 200;
+
+/**
+ * Where the last press landed.
+ *
+ * The dialog used to ask `document.activeElement` which control opened it, which sounds right
+ * and is not: by the time the dialog has mounted, focus has often moved on, and on these pages
+ * the answer came back as the topbar search field. The dialog then grew out of the search box
+ * no matter which card was pressed -- the animation ran, looked plausible, and said something
+ * false.
+ *
+ * A pointer press is recorded here instead, at capture time so nothing can stop it first, with
+ * the box taken there and then. Keyboard activation is covered by falling back to the focused
+ * control, which for a keyboard user is the right answer and is still focused.
+ */
+let lastPressedBox: { rect: DOMRect; at: number } | null = null;
+if (typeof document !== "undefined") {
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      const control = (event.target as HTMLElement | null)?.closest?.("button, [role=button], a[href]");
+      if (control) lastPressedBox = { rect: control.getBoundingClientRect(), at: Date.now() };
+    },
+    true
+  );
+}
+
+/** The press that opened this dialog, if it was recent enough to be this one. */
+function openerRectForDialog(focused: HTMLElement | null): DOMRect | null {
+  if (lastPressedBox && Date.now() - lastPressedBox.at < 800) return lastPressedBox.rect;
+  // No recent press: a keyboard user, whose focus really is on the control they activated.
+  const viaKeyboard = focused?.closest?.("button, [role=button], a[href]");
+  return viaKeyboard ? viaKeyboard.getBoundingClientRect() : null;
+}
+
 function FormDialog({
   title,
   onClose,
@@ -9979,25 +10022,55 @@ function FormDialog({
      * No opener, or one with no box, falls through to the ordinary sheet.
      */
     const sheet = dialog.current;
-    const from = opener?.getBoundingClientRect?.();
+    const from = openerRectForDialog(opener);
+    let frame = 0;
     if (sheet && from && from.width > 0 && from.height > 0) {
       /* The attribute marks "this dialog knows where it came from" and is set either way: under
          reduced motion the stylesheet answers it with a plain fade instead of a journey. Setting
          it only when movement was allowed left that reduced-motion rule unreachable, which the
          first capture caught -- a reduced path nobody can get to is not a reduced path. */
-      sheet.dataset.grown = "true";
-      if (!prefersReducedMotion()) {
-        const to = sheet.getBoundingClientRect();
-        const clamp = (value: number, limit: number) => Math.max(-limit, Math.min(limit, value));
-        const dx = clamp(from.left + from.width / 2 - (to.left + to.width / 2), 160);
-        const dy = clamp(from.top + from.height / 2 - (to.top + to.height / 2), 200);
-        sheet.style.setProperty("--from-x", `${dx.toFixed(1)}px`);
-        sheet.style.setProperty("--from-y", `${dy.toFixed(1)}px`);
+      if (prefersReducedMotion()) {
+        sheet.dataset.grown = "true";
+      } else {
+        /*
+         * Measured a frame late, and held invisible until then.
+         *
+         * Read in the mounting tick, the panel reported a centre two hundred pixels below where
+         * it actually comes to rest -- the backdrop had not finished laying out -- so every
+         * dialog on a phone set off in the same wrong direction from a target that was not
+         * there. One frame of an invisible panel costs nothing anybody can see; a journey
+         * computed against the wrong destination costs the whole point of it.
+         */
+        sheet.style.opacity = "0";
+        frame = window.requestAnimationFrame(() => {
+          const to = sheet.getBoundingClientRect();
+          const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+          const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+          /*
+           * One factor for the whole vector, not a limit per axis.
+           *
+           * Clamping x and y separately shortened the journey and bent it: an opener past the
+           * limit on both axes landed on exactly (-160, -200) whatever its real direction, so
+           * on a page of near-identical cards every card above the dialog started from one
+           * point and every card below from another. The cue that says WHICH card was pressed
+           * collapsed into a cue that says above or below -- which is the one thing this
+           * animation exists to do, done wrong. Scaling the vector keeps its direction.
+           *
+           * Whole pixels, because the panel is full of figures and type rasterised off the grid
+           * is softer than type on it.
+           */
+          const reach = Math.min(1, MAX_DIALOG_TRAVEL_X / Math.abs(dx), MAX_DIALOG_TRAVEL_Y / Math.abs(dy));
+          sheet.style.setProperty("--from-x", `${Math.round(dx * reach)}px`);
+          sheet.style.setProperty("--from-y", `${Math.round(dy * reach)}px`);
+          sheet.dataset.grown = "true";
+          sheet.style.opacity = "";
+        });
       }
     }
 
     dialog.current?.focus({ preventScroll: true });
     return () => {
+      if (frame) window.cancelAnimationFrame(frame);
       body.style.position = before.position;
       body.style.top = before.top;
       body.style.width = before.width;

@@ -69,6 +69,12 @@
    * meant the page was still assembling a second after it arrived.
    */
   --dur-chart: 620ms;
+  /*
+   * What a confirmation is allowed to take when the reader has asked for less motion. Long
+   * enough to register -- eight frames at 60Hz rather than the one the blanket rule below would
+   * give -- and short enough that nobody is waiting on it.
+   */
+  --dur-reduced-feedback: 140ms;
 
   --z-sticky: 20;
   --z-nav: 30;
@@ -912,7 +918,7 @@ textarea:focus {
   .form-dialog,
   .form-dialog-backdrop,
   .confirm-modal {
-    animation-duration: 140ms !important;
+    animation-duration: var(--dur-reduced-feedback) !important;
   }
 }
 
