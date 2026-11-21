@@ -21,6 +21,16 @@ export type NewsEntry = {
 
 export const WHATS_NEW: NewsEntry[] = [
   {
+    date: "2026-11-21",
+    added: [
+      "A credit card's outstanding can be corrected the same way a bank balance can, from the card's edit popup, for when the app and your statement disagree.",
+      "This page opens on the newest release and keeps the rest folded away, instead of listing every change ever made."
+    ],
+    fixed: [
+      "Anything added to the app after your account was created now reaches it. The EMI SubType and Adjust balance were missing for everyone except the first account."
+    ]
+  },
+  {
     date: "2026-11-08",
     added: [
       "Budget planner: a month can take last month's plan in one press, whether it is empty or already part-planned. The offer says how many lines it will copy and what they come to.",

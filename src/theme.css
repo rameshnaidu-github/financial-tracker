@@ -4105,3 +4105,102 @@ button.budget-hint-chip:focus-visible {
     align-items: stretch;
   }
 }
+
+/* ---------- What's new: a headline, not a changelog ---------- */
+/*
+ * The page opened with every line of every release -- thirty-odd bullets, most of them months
+ * old. The newest release now shows its first lines and keeps the rest behind a toggle, and
+ * each older release is one row until it is asked for. These style the two toggles so they read
+ * as quiet controls rather than as more content.
+ */
+.news-more,
+.news-past {
+  margin-top: 8px;
+}
+
+.news-more > summary,
+.news-past > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.news-more > summary::-webkit-details-marker,
+.news-past > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The disclosure arrow, drawn rather than inherited, so it turns with the state. */
+.news-more > summary::before,
+.news-past > summary::before {
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 0;
+  margin-right: 8px;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid currentColor;
+  vertical-align: middle;
+  transition: transform 140ms ease;
+}
+
+.news-more[open] > summary::before,
+.news-past[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.news-more > summary {
+  margin-left: 18px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 560;
+}
+
+.news-more > summary:hover {
+  color: var(--accent-strong);
+}
+
+.news-more > ul {
+  margin-top: 7px;
+}
+
+.news-past > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 2px 0;
+}
+
+.news-past > summary:hover .news-past-date {
+  color: var(--accent-strong);
+}
+
+.news-past-date {
+  font-size: 0.88rem;
+  font-weight: 620;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+
+.news-past-counts {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+/* An opened past release gets the same breathing room the newest one has. */
+.news-past[open] > summary {
+  margin-bottom: 10px;
+}
+
+.news-past[open] .news-past-date {
+  color: var(--accent-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .news-more > summary::before,
+  .news-past > summary::before {
+    transition: none;
+  }
+}
