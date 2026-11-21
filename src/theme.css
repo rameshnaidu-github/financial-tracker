@@ -545,11 +545,25 @@ textarea:hover {
   border-color: var(--line-strong);
 }
 
+/*
+ * A field being typed into, in the same quiet language as a field wrapper.
+ *
+ * This put the accent on the border and a four-pixel accent-soft halo around every input -- the
+ * green-outlined box the owner photographed. That was fixed for the search and for anything
+ * inside a `.control-field`, and the fix stopped there: nearly every form field in the app is a
+ * bare input in a `.stack-form`, `.entry-form` or `.form-pair`, so clicking into Name, Amount or
+ * any other field in any dialog still turned it green.
+ *
+ * Green means something here: it is the accent, it marks the thing that matters on a page. A
+ * field being typed into is not that; it only needs to say where the caret is. Same border step
+ * a hover makes, plus a hairline ring in the neutral track colour -- identical to what
+ * `.control-field:focus-within` already does, so a field and a field wrapper now agree.
+ */
 input:focus,
 select:focus,
 textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 3px var(--track);
   outline: none;
 }
 
@@ -597,11 +611,18 @@ textarea:focus {
   box-shadow: 0 0 0 3px var(--track);
 }
 
-.control-field select:focus-visible,
-.search-box input:focus-visible,
-.topbar-search input:focus-visible {
-  /* The wrapper shows the focus, so the control inside must not draw a second ring around
-     itself -- two rings, one inside the other, is what a box in a box looks like. */
+/*
+ * The wrapper shows the focus, so the control inside must not draw a second ring around itself:
+ * two rings, one inside the other, is what a box in a box looks like.
+ *
+ * This listed `select` and the two search inputs by hand, and so missed every other control --
+ * most visibly the sign-in email field, where a focused input drew an accent pill inside the
+ * field that had already lit up around it. Named by role now rather than by instance, so a
+ * field type added later is covered by the rule instead of reopening the same defect.
+ */
+.control-field :is(input, select, textarea):focus-visible,
+.search-box :is(input, select, textarea):focus-visible,
+.topbar-search :is(input, select, textarea):focus-visible {
   outline: none;
 }
 
@@ -2640,37 +2661,6 @@ button.mix-bar-head:hover > span {
   gap: 10px;
 }
 
-/* ---------- Coming up: one block per kind of payment ---------- */
-.upcoming-group {
-  display: grid;
-  gap: 6px;
-}
-
-.upcoming-group + .upcoming-group {
-  margin-top: 14px;
-}
-
-.upcoming-group-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 2px 2px;
-  border-bottom: 1px solid var(--line);
-}
-
-.upcoming-group-head h3 {
-  margin: 0;
-  font-size: 0.82rem;
-  font-weight: 640;
-  color: var(--muted);
-}
-
-.upcoming-group-head strong {
-  font-size: 0.86rem;
-  font-weight: 620;
-}
-
 /* ---------- The intro that plays on a first launch ---------- */
 .intro-overlay {
   position: fixed;
@@ -2913,7 +2903,14 @@ button.budget-hint-chip:focus-visible {
 /* Nothing there to use: the same shape, without the invitation. */
 .budget-hint-chip.is-empty {
   cursor: default;
-  opacity: 0.7;
+  /*
+   * Quieter by colour, not by opacity.
+   *
+   * `opacity: 0.7` fades the text *and* its chip toward the dialog behind them, which left this
+   * at 3.1:1 at 10.9px -- and it is not a disabled control, it is last month's figures, which
+   * the reader is meant to read. The muted token says the same thing and stays legible.
+   */
+  color: var(--muted);
 }
 
 .budget-hint-chip.is-empty > strong {
@@ -3826,7 +3823,15 @@ button.budget-hint-chip:focus-visible {
 }
 
 .nav-item.active .sidebar-avatar {
-  background: color-mix(in srgb, var(--on-accent) 22%, transparent);
+  /*
+   * A darker disc, not a lighter one.
+   *
+   * The initials are white, so the original 22% white wash put white on a light disc: 3.6:1.
+   * Lightening it further made that worse, not better -- 34% measured 2.8:1. Recessing the disc
+   * into the pill instead gives the white something to sit on, and keeps the circle that the
+   * lighter wash was there to draw: 7.1:1, measured on the rendered pill.
+   */
+  background: color-mix(in srgb, var(--text) 22%, transparent);
   color: var(--on-accent);
 }
 
@@ -4203,4 +4208,62 @@ button.budget-hint-chip:focus-visible {
   .news-past > summary::before {
     transition: none;
   }
+}
+
+/* ---------- A floor under every control a thumb has to find ---------- */
+/*
+ * The product is used on a phone for capture and checking, and seven kinds of control had
+ * drifted to between 22 and 32 pixels tall: the multi-select checkbox on Transactions (22),
+ * the folded releases on What's new (22), the Pie/Bar switch (28), the Type rows on Categories
+ * (29), the switches in Profile (30), the period chips on Reports (31) and the Edit buttons on
+ * Accounts and Budget Planner (32). Each looked deliberate on its own; together they were a
+ * missing rule.
+ *
+ * So the floor lives in one place, and only where a finger is doing the pointing. On a mouse
+ * the existing density is the design and is left alone -- this is not a licence to make the
+ * desktop app roomier.
+ */
+@media (pointer: coarse), (max-width: 760px) {
+  .mix-switch button,
+  .taxonomy-toggle,
+  .switch-control,
+  .filter-chip,
+  .budget-card-edit,
+  .news-past > summary,
+  .news-more > summary {
+    min-height: 40px;
+  }
+
+  /* A summary is laid out by its own content, so the floor needs somewhere to put the slack. */
+  .news-past > summary,
+  .news-more > summary {
+    display: flex;
+    align-items: center;
+  }
+
+  .news-past > summary {
+    flex-wrap: wrap;
+  }
+}
+
+/*
+ * The 16px checkbox that selects a transaction.
+ *
+ * Its label is the target and the label was 23x22, which is a poor thing to ask of a thumb when
+ * selecting several rows to delete is the whole point of it. The box keeps its size -- a bigger
+ * checkbox would be a visible change to a dense list -- and the target is grown around it, which
+ * costs no layout because it is drawn outside the flow.
+ */
+.transaction-select {
+  position: relative;
+}
+
+.transaction-select::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
 }

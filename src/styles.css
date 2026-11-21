@@ -91,11 +91,8 @@ select {
   box-shadow: none;
 }
 
-input:focus,
-select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
-}
+/* Base focus lives in theme.css, with the rest of the focus language. Two sheets each naming
+   `input:focus` is how one of them ends up saying something the design no longer means. */
 
 label {
   display: grid;
@@ -717,12 +714,18 @@ a {
   font-size: 0.78rem;
   font-weight: 900;
   white-space: nowrap;
-  color: var(--cat-color);
+  /* Not the raw category colour. These are chosen to read as icons, and at 12px on a 9% tint of
+     themselves the lighter ones land at 2.8:1 -- Expense, Income, Investment, Refund and Credit
+     card payment were all under the floor. Darkened toward black keeps each category's hue
+     recognisable while the label stays readable; dark mode already does the mirror of this. */
+  color: color-mix(in srgb, var(--cat-color) 68%, black);
   background: color-mix(in srgb, var(--cat-color) 9%, transparent);
 }
 
 :root[data-theme="dark"] .category-badge {
-  color: color-mix(in srgb, var(--cat-color) 62%, white);
+  /* 62% left Loan at 4.36:1 on its own tint. Lighter by one step clears the floor for every hue
+     in the default set without the badge losing which colour it is. */
+  color: color-mix(in srgb, var(--cat-color) 52%, white);
   background: color-mix(in srgb, var(--cat-color) 22%, transparent);
 }
 
@@ -1213,6 +1216,13 @@ a {
   font-size: 0.95rem;
   font-weight: 900;
   min-width: 0;
+  /* Gold, Mutual funds and Fixed deposit were 2.9-3.7:1 as the raw type colour. Same treatment
+     as a category badge, through the same property, so the two cannot drift apart again. */
+  color: color-mix(in srgb, var(--cat-color) 68%, black);
+}
+
+:root[data-theme="dark"] .investment-group-name {
+  color: color-mix(in srgb, var(--cat-color) 62%, white);
 }
 
 .investment-group-count {
@@ -1981,18 +1991,6 @@ a {
   justify-self: end;
 }
 
-/* An AutoPay that fell due and was held back for want of money. Marked rather than coloured like
-   an urgent one: nothing has gone wrong, there was simply nothing to take. */
-.upcoming-row.held {
-  border-left: 2px solid var(--warning);
-  padding-left: 8px;
-}
-
-.upcoming-row.held small {
-  color: var(--warning);
-  font-weight: 850;
-}
-
 .add-button {
   align-self: end;
 }
@@ -2148,7 +2146,9 @@ a {
   border: 1px solid rgba(15, 118, 110, 0.22);
   border-radius: 999px;
   background: rgba(15, 118, 110, 0.1);
-  color: var(--accent);
+  /* --accent on its own tint measured 4.43:1 at 11.5px -- under the floor by a hair, which is
+     still under it. The stronger step is the same hue. */
+  color: var(--accent-strong);
   padding: 5px 9px;
   font-size: 0.72rem;
   font-weight: 950;
@@ -2596,14 +2596,32 @@ a {
 .transaction-tag.type,
 .transaction-tag.subtype {
   max-width: 150px;
-  color: var(--cat-color);
+  /* Darkened exactly as a category badge is, and for the same reason: these are the same hues at
+     the same small size on the same pale tint. Until the label stopped being overpainted grey,
+     this rule's colour never actually reached the text, so the fault was invisible rather than
+     absent. */
+  color: color-mix(in srgb, var(--cat-color) 68%, black);
   background: color-mix(in srgb, var(--cat-color) 8%, transparent);
   border-color: color-mix(in srgb, var(--cat-color) 19%, transparent);
 }
 
+/*
+ * The label inside a tag takes the tag's colour.
+ *
+ * `.ledger-row span` paints every span in a row with --muted, which includes the label inside
+ * these chips -- so each tag computed its category hue and then had it replaced with grey. On
+ * the pale light tint the grey happened to clear the contrast floor; on the 20% dark tint it did
+ * not, and Dining/Food and Health sat at 4.3:1. Grey on a coloured surface is the wrong answer
+ * either way: a tint wants text drawn from its own hue.
+ */
+.ledger-row .transaction-tag span {
+  color: inherit;
+  font-size: inherit;
+}
+
 :root[data-theme="dark"] .transaction-tag.type,
 :root[data-theme="dark"] .transaction-tag.subtype {
-  color: color-mix(in srgb, var(--cat-color) 62%, white);
+  color: color-mix(in srgb, var(--cat-color) 52%, white);
   background: color-mix(in srgb, var(--cat-color) 20%, transparent);
   border-color: color-mix(in srgb, var(--cat-color) 32%, transparent);
 }
@@ -3655,78 +3673,6 @@ a {
 
 .summary-change.bad {
   color: var(--danger);
-}
-
-.upcoming-list {
-  display: grid;
-  gap: 8px;
-}
-
-.upcoming-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px 12px;
-}
-
-.upcoming-row.soon {
-  border-color: rgba(234, 88, 12, 0.45);
-  background: rgba(234, 88, 12, 0.06);
-}
-
-.upcoming-icon {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  background: rgba(14, 165, 233, 0.12);
-  color: #0284c7;
-}
-
-.upcoming-main {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.upcoming-main strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.upcoming-main small {
-  color: var(--muted);
-  font-weight: 700;
-}
-
-.upcoming-total {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  padding: 6px 2px 0;
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-weight: 800;
-}
-
-.upcoming-total strong {
-  color: var(--text);
-  font-size: 1.05rem;
-}
-
-.upcoming-warning {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  color: var(--danger);
-  font-size: 0.82rem;
-  font-weight: 800;
 }
 
 /* --- Transactions: export + add again --- */
