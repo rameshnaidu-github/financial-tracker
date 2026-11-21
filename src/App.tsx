@@ -591,6 +591,8 @@ const PAGES_WITH_OWN_HEADER: Page[] = [
 ];
 const THEME_KEY = "finance-theme";
 const INTRO_ON_LAUNCH_KEY = "finance-intro-on-launch";
+/** Set once the film has been watched through or skipped on this device. */
+const INTRO_SEEN_KEY = "finance-intro-seen";
 
 function storedTheme(): Theme | null {
   try {
@@ -607,13 +609,33 @@ function systemTheme(): Theme {
 }
 
 /**
- * Whether opening the app should play the intro. On by default, so a browser that refuses
- * storage still gets the film rather than silently losing it; "0" is the only way off.
+ * Whether the film is wanted at launch at all. On by default, so a browser that refuses storage
+ * still gets it rather than silently losing it; "0" is the only way off. This is the switch in
+ * Profile, and it answers "do you want the film", not "are you getting it this time".
  */
-function shouldPlayIntroOnLaunch(): boolean {
+function introWantedOnLaunch(): boolean {
   if (typeof window === "undefined") return false;
   try {
     return window.localStorage.getItem(INTRO_ON_LAUNCH_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Whether to play it on *this* open.
+ *
+ * The film is twenty-two seconds and it used to run on every open of the app, for everybody, with
+ * a Skip button as the only way past. This is a thing people reach for on a phone to record a
+ * spend in the seconds after making it; a film in front of that is a toll gate, however good the
+ * film is. So it plays once on a device and then gets out of the way, and turning the switch back
+ * on in Profile makes it play again next launch -- which is what somebody wanting to show it to
+ * another person is actually asking for.
+ */
+function shouldPlayIntroNow(): boolean {
+  if (!introWantedOnLaunch()) return false;
+  try {
+    return window.localStorage.getItem(INTRO_SEEN_KEY) !== "1";
   } catch {
     return true;
   }
@@ -909,8 +931,8 @@ export default function App() {
   // The intro plays on every open of the app, whatever page was asked for. Decided here,
   // synchronously at mount, so it is the first thing painted rather than something that
   // waits for the app's data; the owner can turn it off in Profile.
-  const [introOnLaunch, setIntroOnLaunch] = useState(shouldPlayIntroOnLaunch);
-  const [introOpen, setIntroOpen] = useState(() => shouldPlayIntroOnLaunch());
+  const [introOnLaunch, setIntroOnLaunch] = useState(introWantedOnLaunch);
+  const [introOpen, setIntroOpen] = useState(() => shouldPlayIntroNow());
 
   // Follows the system light/dark setting until the person picks one on Profile.
   const [theme, setTheme] = useState<Theme>(() => (typeof window === "undefined" ? "light" : storedTheme() ?? systemTheme()));
@@ -1205,6 +1227,12 @@ export default function App() {
 
   const closeIntro = useCallback(() => {
     setIntroOpen(false);
+    try {
+      // Watched or skipped, it counts as seen: either way this person has had their chance at it.
+      window.localStorage.setItem(INTRO_SEEN_KEY, "1");
+    } catch {
+      // Nothing to remember it with; it will offer itself once more next time.
+    }
   }, []);
 
   const toggleIntroOnLaunch = useCallback(() => {
@@ -1212,6 +1240,9 @@ export default function App() {
       const next = !current;
       try {
         window.localStorage.setItem(INTRO_ON_LAUNCH_KEY, next ? "1" : "0");
+        // Switching it back on means "play it again", not "play it again only if I have not
+        // already seen it" -- which would be a switch that visibly does nothing.
+        if (next) window.localStorage.removeItem(INTRO_SEEN_KEY);
       } catch {
         // Nothing to remember it with; the preference lasts for this session only.
       }
@@ -9931,6 +9962,40 @@ function FormDialog({
     /* Whatever was focused when the dialog opened -- the Edit button, almost always -- gets the
        focus back when it closes, so the keyboard does not land back at the top of the page. */
     const opener = document.activeElement as HTMLElement | null;
+
+    /*
+     * The dialog grows out of whatever opened it.
+     *
+     * Every one of these dialogs is reached by pressing something that is already on screen and
+     * already shows the figures being corrected -- an account card, a loan, a holding, a row in
+     * the ledger. Sheeting up from the bottom of the window says nothing about which of them you
+     * pressed, and on a page of near-identical cards that is the one thing worth saying. So the
+     * panel starts at the opener's place and arrives at its own, and closing puts the focus back
+     * on that same control, which it already did.
+     *
+     * Measured before the body is pinned below, because pinning moves everything. Clamped,
+     * because an opener near the edge of a long page would otherwise fling the panel across the
+     * screen: the point is to show which thing was pressed, not to travel the true distance.
+     * No opener, or one with no box, falls through to the ordinary sheet.
+     */
+    const sheet = dialog.current;
+    const from = opener?.getBoundingClientRect?.();
+    if (sheet && from && from.width > 0 && from.height > 0) {
+      /* The attribute marks "this dialog knows where it came from" and is set either way: under
+         reduced motion the stylesheet answers it with a plain fade instead of a journey. Setting
+         it only when movement was allowed left that reduced-motion rule unreachable, which the
+         first capture caught -- a reduced path nobody can get to is not a reduced path. */
+      sheet.dataset.grown = "true";
+      if (!prefersReducedMotion()) {
+        const to = sheet.getBoundingClientRect();
+        const clamp = (value: number, limit: number) => Math.max(-limit, Math.min(limit, value));
+        const dx = clamp(from.left + from.width / 2 - (to.left + to.width / 2), 160);
+        const dy = clamp(from.top + from.height / 2 - (to.top + to.height / 2), 200);
+        sheet.style.setProperty("--from-x", `${dx.toFixed(1)}px`);
+        sheet.style.setProperty("--from-y", `${dy.toFixed(1)}px`);
+      }
+    }
+
     dialog.current?.focus({ preventScroll: true });
     return () => {
       body.style.position = before.position;

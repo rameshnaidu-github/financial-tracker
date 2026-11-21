@@ -53,6 +53,22 @@
   --dur-fast: 180ms;
   --dur: 320ms;
   --dur-slow: 720ms;
+  /*
+   * Arrival, as distinct from a moment worth watching.
+   *
+   * The page cascade and the row stagger both ran at --dur-slow, so a list arrived over 720ms a
+   * row and the last staggered one settled 1.1 seconds after the page did. That length is for a
+   * sequence somebody is meant to watch; this application is a tool people open to answer a
+   * question, and an entrance they wait through reads as the app being slow, not as care.
+   */
+  --dur-enter: 300ms;
+  /*
+   * A chart drawing itself: the one entrance in this app worth watching, because the bar growing
+   * or the ring closing is the proportion being stated rather than decoration around it. Still
+   * bounded -- 900ms put it past even the band for an authored entrance, and on the Overview it
+   * meant the page was still assembling a second after it arrived.
+   */
+  --dur-chart: 620ms;
 
   --z-sticky: 20;
   --z-nav: 30;
@@ -721,14 +737,14 @@ textarea:focus {
 
 /* Content cascades in when a page opens: header first, then sections in order. */
 .topbar {
-  animation: rise var(--dur-slow) var(--ease-out) both;
+  animation: rise var(--dur-enter) var(--ease-out) both;
 }
 
 .content-area > *,
 .content-area > .page-grid > *,
 .content-area > .two-column > *,
 .summary-grid > * {
-  animation: rise var(--dur-slow) var(--ease-out) both;
+  animation: rise var(--dur-enter) var(--ease-out) both;
 }
 
 .content-area > .page-grid > *:nth-child(2),
@@ -764,7 +780,7 @@ textarea:focus {
 .donut-legend-row,
 .budget-grid > *,
 .taxonomy-tree > * {
-  animation: rise-row var(--dur-slow) var(--ease-out) both;
+  animation: rise-row var(--dur-enter) var(--ease-out) both;
 }
 
 @keyframes rise-row {
@@ -878,6 +894,25 @@ textarea:focus {
     animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 1ms !important;
+  }
+
+  /*
+   * Except the three that are saying something.
+   *
+   * The blanket above is the right floor for decoration -- the page cascade, the row stagger,
+   * the donut drawing itself. It was also switching off the only signal that an action worked.
+   * A toast that appears and vanishes between two frames is a message nobody sees, and this is
+   * the application's way of saying "Balance adjusted by -₹500. Now ₹12,345." A dialog that
+   * materialises with no step at all can be missed as well.
+   *
+   * Reduced motion asks for less movement, not for no feedback. These keep a short opacity step
+   * and no travel: nothing slides, and the fact that something happened still registers.
+   */
+  .toast,
+  .form-dialog,
+  .form-dialog-backdrop,
+  .confirm-modal {
+    animation-duration: 140ms !important;
   }
 }
 
@@ -1564,7 +1599,7 @@ select:not([multiple]):not([size]) {
 .vacation-breakdown-bar > span,
 .vacation-budget-bar > span {
   transform-origin: left center;
-  animation: grow-x 900ms var(--ease-out) both;
+  animation: grow-x var(--dur-chart) var(--ease-out) both;
   animation-delay: 120ms;
 }
 
@@ -1574,7 +1609,7 @@ select:not([multiple]):not([size]) {
   transform-origin: center;
   /* Slices start at twelve o'clock; the resting angle lives here so the sweep can end on it. */
   transform: rotate(-90deg);
-  animation: donut-in 900ms var(--ease-out) backwards;
+  animation: donut-in var(--dur-chart) var(--ease-out) backwards;
 }
 
 /* Trend: columns rise from the baseline. */
@@ -1605,7 +1640,7 @@ select:not([multiple]):not([size]) {
 }
 
 .panel.revealed {
-  animation: rise 720ms var(--ease-out) both;
+  animation: rise var(--dur-enter) var(--ease-out) both;
 }
 
 .count-up {
@@ -2496,7 +2531,7 @@ button.mix-bar-head:hover > span {
   height: 100%;
   border-radius: 999px;
   transform-origin: left center;
-  animation: grow-x 900ms var(--ease-out) backwards;
+  animation: grow-x var(--dur-chart) var(--ease-out) backwards;
 }
 
 .mix-bar-note {
@@ -4266,4 +4301,41 @@ button.budget-hint-chip:focus-visible {
   width: 44px;
   height: 44px;
   transform: translate(-50%, -50%);
+}
+
+/* ---------- A dialog arrives from the thing that opened it ---------- */
+/*
+ * The offsets are measured and set by FormDialog; this is only the shape of the arrival. It
+ * overrides the plain sheet because a panel that both sheets up and travels sideways is two
+ * animations arguing.
+ *
+ * Scale from 0.96 rather than from the opener's real size: a true FLIP from a 65x32 Edit button
+ * to a 420px panel stretches the dialog's type for a third of a second, which looks like a
+ * rendering fault rather than like a connection. The small scale plus the travel is enough to
+ * carry the relationship.
+ */
+.form-dialog[data-grown="true"] {
+  animation: dialog-from-opener 320ms var(--ease-out) both;
+}
+
+@keyframes dialog-from-opener {
+  from {
+    opacity: 0;
+    transform: translate(var(--from-x, 0), var(--from-y, 0)) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /*
+   * No travel, but the dialog still has to announce itself: something appeared in front of the
+   * page and a reader who gets no transition at all can miss that. The opacity step is the
+   * meaning; the movement was the flourish.
+   */
+  .form-dialog[data-grown="true"] {
+    animation: fade-in var(--dur-fast) var(--ease-out) both;
+  }
 }
