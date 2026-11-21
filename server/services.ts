@@ -2695,8 +2695,20 @@ export async function getOverview(accountId?: string, month = currentMonth()) {
   );
   const spendingPaise = spendingCategories.reduce((sum, category) => sum + Math.max(category.amountPaise, 0), 0);
 
+  /*
+   * Spendable cash is the banks, and only the banks.
+   *
+   * A food card is money, but it is not money that can pay rent, a card bill or an EMI -- it
+   * buys lunch at merchants that accept it. Folding it in here overstated the one figure this
+   * page exists to be trusted on, with nothing on screen saying so, and the same number went on
+   * to stand in for liquid cash and to divide the emergency runway. It is reported beside the
+   * cash now rather than inside it, so the page states the restriction instead of hiding it.
+   */
   const availableCashPaise = scopedAccounts
-    .filter((account) => account.type === "bank" || account.type === "food_card")
+    .filter((account) => account.type === "bank")
+    .reduce((sum, account) => sum + account.balancePaise, 0);
+  const foodCardCashPaise = scopedAccounts
+    .filter((account) => account.type === "food_card")
     .reduce((sum, account) => sum + account.balancePaise, 0);
 
   return {
@@ -2704,6 +2716,7 @@ export async function getOverview(accountId?: string, month = currentMonth()) {
     accounts: scopedAccounts,
     summary: {
       availableCashPaise,
+      foodCardCashPaise,
       creditOutstandingPaise: scopedAccounts
         .filter((account) => account.type === "credit_card")
         .reduce((sum, account) => sum + account.outstandingPaise, 0),
@@ -2774,6 +2787,8 @@ export type WealthAllocationSegment = {
 export type WealthSummary = {
   netWorth: {
     liquidPaise: number;
+    /** A food card's balance: the household's money, but not money that can pay a bill. */
+    restrictedPaise: number;
     investmentsPaise: number;
     liabilitiesPaise: number;
     netWorthPaise: number;
@@ -2803,8 +2818,15 @@ async function computeNetWorthNow() {
    * archiving should mean, and that is the owner's to answer, not this function's.
    */
   const accounts = (await listAccounts(true)).filter((account) => !account.isArchived);
+  /* Liquid is the banks. A food card's balance is still the household's money and still counts
+     toward what they are worth -- it is carried as `restrictedPaise` and added to the total
+     below, so net worth does not move -- but it is not what "liquid" means, and it is not what
+     an emergency can be paid out of. */
   const liquidPaise = accounts
-    .filter((account) => account.type === "bank" || account.type === "food_card")
+    .filter((account) => account.type === "bank")
+    .reduce((sum, account) => sum + account.balancePaise, 0);
+  const restrictedPaise = accounts
+    .filter((account) => account.type === "food_card")
     .reduce((sum, account) => sum + account.balancePaise, 0);
   // A card carrying a credit balance owes nothing; it is not a negative debt.
   const creditPaise = accounts
@@ -2818,9 +2840,10 @@ async function computeNetWorthNow() {
   const liabilitiesPaise = creditPaise + loanPaise;
   return {
     liquidPaise,
+    restrictedPaise,
     investmentsPaise,
     liabilitiesPaise,
-    netWorthPaise: liquidPaise + investmentsPaise - liabilitiesPaise
+    netWorthPaise: liquidPaise + restrictedPaise + investmentsPaise - liabilitiesPaise
   };
 }
 
@@ -2841,7 +2864,13 @@ export async function getWealthSummary(): Promise<WealthSummary> {
        captured_at = CURRENT_TIMESTAMP`
   ).run(
     currentUserId(),
-    month,netWorth.liquidPaise,netWorth.investmentsPaise,netWorth.liabilitiesPaise,netWorth.netWorthPaise
+    month,
+    // Total cash, so the stored history stays comparable with the rows written before liquid
+    // and restricted were told apart.
+    netWorth.liquidPaise + netWorth.restrictedPaise,
+    netWorth.investmentsPaise,
+    netWorth.liabilitiesPaise,
+    netWorth.netWorthPaise
   ));
 
   const history = asRecords<{ month: string; net_worth_paise: number }>(
@@ -2858,7 +2887,7 @@ export async function getWealthSummary(): Promise<WealthSummary> {
   const byType = (types: string[]) =>
     investments.filter((item) => types.includes(item.type)).reduce((sum, item) => sum + item.netWorthValuePaise, 0);
   const allocation: WealthAllocationSegment[] = [
-    { key: "cash", label: "Cash", color: "#0284c7", valuePaise:netWorth.liquidPaise },
+    { key: "cash", label: "Cash", color: "#0284c7", valuePaise: netWorth.liquidPaise + netWorth.restrictedPaise },
     { key: "equity", label: "Equity (stocks + MF)", color: "#4f46e5", valuePaise: byType(["stocks", "mutual_funds"]) },
     { key: "gold", label: "Gold", color: "#d97706", valuePaise: byType(["gold"]) },
     { key: "realestate", label: "Real estate", color: "#0f766e", valuePaise: byType(["land", "property"]) },
@@ -2884,6 +2913,9 @@ export async function getWealthSummary(): Promise<WealthSummary> {
     )
   );
   const avgExpense = trailingExpenses.reduce((sum, value) => sum + value, 0) / trailingExpenses.length;
+  /* Banks only, which is what liquidPaise now means. An emergency is rent, a card bill or a
+     medical bill, and a food card pays none of them -- counting it here made the runway longer
+     than the household actually has. */
   const runwayMonths = avgExpense > 0 ? Math.round((netWorth.liquidPaise / avgExpense) * 10) / 10 : null;
 
   return {

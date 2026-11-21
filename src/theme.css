@@ -4345,3 +4345,87 @@ button.budget-hint-chip:focus-visible {
     animation: fade-in var(--dur-fast) var(--ease-out) both;
   }
 }
+
+/* ---------- A bar measured against a limit says how close it is ---------- */
+/*
+ * Three steps, not a gradient: a card is comfortable, getting close, or about to be declined,
+ * and the reader needs to tell those apart at a glance rather than judge a hue. The palette
+ * colour still belongs to bars with no limit, where nearness means nothing and the colour is
+ * only there to tie the bar to its legend.
+ */
+.mix-bar-fill.is-easy {
+  background: var(--accent);
+}
+
+.mix-bar-fill.is-high {
+  background: var(--warning, #d97706);
+}
+
+.mix-bar-fill.is-critical {
+  background: var(--danger);
+}
+
+/* ---------- The Overview, ordered for the hand it is held in ---------- */
+/*
+ * On a wide screen the page reads top to bottom as written: this month, then wealth, then the
+ * cards. On a phone that order is the inverse of what the person is there for -- PRODUCT.md
+ * puts capture and the can-I-afford-this check on the phone and the analysis at a desk, and the
+ * card facts were arriving four screens down, after two panels of sit-down work.
+ *
+ * So the phone promotes the cards above the wealth, and the wealth band folds itself shut. Both
+ * are still there, in the same markup, in the same order for a screen reader until the flex
+ * order applies -- nothing is hidden, and nothing is duplicated.
+ */
+@media (max-width: 1120px) {
+  .overview-page {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .overview-page > .overview-band:has(#overview-band-cards) {
+    order: -1;
+  }
+
+  /* The folded band's own header becomes the control that opens it. */
+  .overview-band-fold > summary {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-height: 44px;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .overview-band-fold > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .overview-band-fold > summary::after {
+    content: "";
+    width: 0;
+    height: 0;
+    margin-left: auto;
+    border-top: 5px solid currentColor;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    transition: transform 140ms ease;
+  }
+
+  .overview-band-fold[open] > summary::after {
+    transform: rotate(180deg);
+  }
+
+  .overview-band-fold > summary h2 {
+    margin: 0;
+  }
+
+  .overview-band-fold[open] > .overview-band-body {
+    margin-top: 12px;
+  }
+}
+
+@media (max-width: 1120px) and (prefers-reduced-motion: reduce) {
+  .overview-band-fold > summary::after {
+    transition: none;
+  }
+}

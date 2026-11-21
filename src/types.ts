@@ -232,6 +232,8 @@ export type Overview = {
   accounts: Account[];
   summary: {
     availableCashPaise: number;
+    /** A food card's balance: money, but not money that can pay a bill. Shown beside the cash. */
+    foodCardCashPaise: number;
     creditOutstandingPaise: number;
     /** What was spent on credit cards this month, EMI installments excluded. */
     cardSpendingPaise: number;
@@ -319,6 +321,7 @@ export type MonthlyReport = {
 export type WealthSummary = {
   netWorth: {
     liquidPaise: number;
+    restrictedPaise: number;
     investmentsPaise: number;
     liabilitiesPaise: number;
     netWorthPaise: number;

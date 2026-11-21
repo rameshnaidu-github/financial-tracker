@@ -1837,6 +1837,13 @@ function OverviewPage({
   const allocationTotal = wealth ? wealth.allocation.reduce((sum, segment) => sum + segment.valuePaise, 0) : 0;
   const cardSegments = cardUtilisationSegments(overview.accounts);
   const cardOutstandingPaise = cardSegments.reduce((sum, segment) => sum + segment.amountPaise, 0);
+  /* The card closest to its own limit, which is the fact someone about to pay actually needs --
+     and which lived only in the attention popover and behind a chart toggle. */
+  const worstCard = overview.accounts
+    .filter((account) => account.type === "credit_card" && (account.creditLimitPaise ?? 0) > 0)
+    .map((account) => ({ ...account, used: (account.outstandingPaise / (account.creditLimitPaise ?? 1)) * 100 }))
+    .sort((a, b) => b.used - a.used)[0];
+  const worstCardUtilisation = worstCard ? Math.round(worstCard.used) : null;
   return (
     <div className="page-grid overview-page">
       {overview.summary.uncategorizedCount > 0 && (
@@ -1871,13 +1878,33 @@ function OverviewPage({
                 : overview.summary.availableCashPaise
             }
             icon={<WalletCards />}
+            /* A food card is money and it is not spendable on a bill, so it is named here
+               rather than folded into the figure above it. Silence would have been the page
+               quietly overstating what the household can actually spend. */
+            note={
+              selectedAccount?.type !== "credit_card" && overview.summary.foodCardCashPaise > 0 ? (
+                <span className="summary-change">
+                  {`plus ${formatINRWhole(overview.summary.foodCardCashPaise)} on food cards, which only buy food`}
+                </span>
+              ) : undefined
+            }
           />
           <SummaryCard
             label="Credit card outstanding"
             value={formatINRWhole(overview.summary.creditOutstandingPaise)}
             countPaise={overview.summary.creditOutstandingPaise}
             icon={<CreditCard />}
-            tone="warning"
+            /* Hardcoded to "warning", this tile warned at ₹100 and at ₹100,000 alike -- a
+               signal that is always on carries nothing. It follows the worst card's share of
+               its own limit now, which is the thing actually worth warning about. */
+            tone={worstCardUtilisation !== null && worstCardUtilisation >= 80 ? "warning" : "neutral"}
+            note={
+              worstCard && worstCardUtilisation !== null && worstCardUtilisation >= 80 ? (
+                <span className="summary-change bad">
+                  {`${worstCard.name} is at ${worstCardUtilisation}% of its limit`}
+                </span>
+              ) : undefined
+            }
           />
           {/* What the cards were actually used for this month, which the outstanding beside it
               cannot say: that figure carries EMIs and whatever was left unpaid from before. */}
@@ -1959,7 +1986,7 @@ function OverviewPage({
           Recent activity with it: five transactions were a sample of a page that is one click
           away in the navigation and in the search at the top of every screen. */}
 
-      <OverviewBand title="Wealth">
+      <OverviewBand title="Wealth" deskWork>
         <div className="two-column overview-band-pair">
           <Panel title="Net worth">
             {wealth ? <NetWorthPanel wealth={wealth} /> : <EmptyState text="Net worth is loading." />}
@@ -1985,12 +2012,21 @@ function OverviewPage({
             )}
           </Panel>
         </div>
+      </OverviewBand>
+      {/*
+        * A band of its own, because what a card is owing right now is a daily question and the
+        * two panels above are a monthly one. Separating them is what lets the phone put this
+        * first; on a wide screen it sits exactly where it did, immediately after Wealth.
+        */}
+      <OverviewBand title="Cards" detail="Right now">
         <Panel title="Card utilisation" action={<button onClick={() => onNavigate("accounts")}>Manage</button>}>
           <MixChart
             segments={cardSegments}
             totalPaise={cardOutstandingPaise}
             ariaLabel="Credit card utilisation"
-            centerLabel="Card debt"
+            /* "Outstanding" for a card, everywhere. This said "Card debt" while the tile at the
+               top of the same page said "Credit card outstanding", for the same money. */
+            centerLabel="Outstanding"
             centerValue={formatINRWhole(cardOutstandingPaise)}
             centerCountPaise={cardOutstandingPaise}
             className="overview-donut-chart"
@@ -2003,8 +2039,65 @@ function OverviewPage({
 }
 
 /** A labelled band of the Overview: a quiet heading over the panels that answer one question. */
-function OverviewBand({ title, detail, children }: { title: string; detail?: string; children: React.ReactNode }) {
+/**
+ * Whether this is a hand-held screen, as the stylesheets define one.
+ *
+ * Read once and then watched, because a band that decides how to render itself has to re-decide
+ * when the window changes, and a tablet turned on its side is the ordinary case rather than the
+ * exotic one.
+ */
+function usePhoneWidth(): boolean {
+  const query = "(max-width: 1120px)";
+  const [isPhone, setIsPhone] = useState(
+    () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(query);
+    const update = () => setIsPhone(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  return isPhone;
+}
+
+function OverviewBand({
+  title,
+  detail,
+  children,
+  deskWork = false
+}: {
+  title: string;
+  detail?: string;
+  children: React.ReactNode;
+  /**
+   * Content this product calls a sit-down job rather than a daily one.
+   *
+   * On a phone such a band folds shut. Net worth and asset allocation rendered in full at 375px
+   * pushed the card facts -- a ten-second question asked at a till -- past four screens of
+   * scrolling, which is the phone layout being the desktop layout stacked. Desktop is unchanged:
+   * there is room for both there, and no reason to hide anything.
+   */
+  deskWork?: boolean;
+}) {
   const headingId = `overview-band-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+  const folds = deskWork && usePhoneWidth();
+
+  if (folds) {
+    return (
+      <section className="overview-band is-folded" aria-labelledby={headingId}>
+        <details className="overview-band-fold">
+          <summary>
+            <h2 id={headingId}>{title}</h2>
+            {detail && <span>{detail}</span>}
+          </summary>
+          <div className="overview-band-body">{children}</div>
+        </details>
+      </section>
+    );
+  }
+
   return (
     <section className="overview-band" aria-labelledby={headingId}>
       <header className="overview-band-head">
@@ -2032,6 +2125,14 @@ function NetWorthPanel({ wealth }: { wealth: WealthSummary }) {
           <span>Liquid cash</span>
           <strong>{formatINRWhole(netWorth.liquidPaise)}</strong>
         </div>
+        {netWorth.restrictedPaise > 0 && (
+          <div>
+            {/* Counted in the total above -- it is the household's money -- but kept out of
+                "liquid", which is what an emergency can actually be paid from. */}
+            <span>On food cards</span>
+            <strong>{formatINRWhole(netWorth.restrictedPaise)}</strong>
+          </div>
+        )}
         <div>
           <span>Investments</span>
           <strong>{formatINRWhole(netWorth.investmentsPaise)}</strong>
@@ -6023,7 +6124,7 @@ function AccountsPage({
               segments={cardSegments}
               totalPaise={cardOutstandingPaise}
               ariaLabel="Credit card utilisation"
-              centerLabel="Card debt"
+              centerLabel="Outstanding"
               centerValue={formatINRWhole(cardOutstandingPaise)}
               className="overview-donut-chart"
               emptyText="No credit card owes anything right now."
@@ -8757,7 +8858,17 @@ function MixChart({
   emptyText: string;
   onSegmentClick?: (segment: DonutSegment) => void;
 }) {
-  const [mode, setMode] = useState<"pie" | "bar">("pie");
+  /*
+   * A chart whose segments carry a limit opens on the bar.
+   *
+   * The pie answers "how is this total divided", which for cards is share of total debt: two
+   * cards at 64% and 36% of what is owed. Under a panel titled "Card utilisation" that reads as
+   * utilisation and is not -- the card showing 64% was at 91% of its limit, and the number that
+   * would have said so was behind a toggle nobody presses. Where a limit exists, the bar view
+   * is the one the title promises.
+   */
+  const hasLimits = segments.some((segment) => segment.maxPaise !== undefined && segment.maxPaise > 0);
+  const [mode, setMode] = useState<"pie" | "bar">(hasLimits ? "bar" : "pie");
 
   if (segments.length === 0 || totalPaise <= 0) {
     return <EmptyState text={emptyText} />;
@@ -8816,7 +8927,17 @@ function MixChart({
                   <div className="mix-bar-head">{head}</div>
                 )}
                 <div className="mix-bar-track">
-                  <span className="mix-bar-fill" style={{ width: `${share}%`, background: segment.color }} />
+                  {/* A bar measured against a real limit is coloured by how close it is to that
+                      limit, not by its index in a palette. A card at 91% and one at 39% rendered
+                      in the same flat blue, so the one fact worth noticing looked like the one
+                      beside it. Without a limit the bar is a share of the largest, where
+                      nearness means nothing and the segment's own colour is right. */}
+                  <span
+                    className={`mix-bar-fill${
+                      segment.maxPaise ? ` is-${share >= 90 ? "critical" : share >= 80 ? "high" : "easy"}` : ""
+                    }`}
+                    style={{ width: `${share}%`, ...(segment.maxPaise ? {} : { background: segment.color }) }}
+                  />
                 </div>
                 <small className="mix-bar-note">
                   {segment.maxPaise
@@ -8981,7 +9102,7 @@ const FAQ_ITEMS: Array<{ question: string; answer: string }> = [
   {
     question: "How is 'Available cash' calculated?",
     answer:
-      "It's the money across your bank and food-card accounts: each account's starting balance, plus every income you recorded into it, minus every expense, transfer and card payment made from it."
+      "It's the money across your bank accounts only: each account's starting balance, plus every income you recorded into it, minus every expense, transfer and card payment made from it. A food card's balance is not in this figure, because it cannot pay rent, a card bill or an EMI; it is shown beside the figure instead, and it still counts toward your net worth."
   },
   {
     question: "How is a credit card's 'Outstanding' and 'Available limit' calculated?",
