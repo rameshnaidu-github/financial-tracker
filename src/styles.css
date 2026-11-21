@@ -1981,18 +1981,6 @@ a {
   justify-self: end;
 }
 
-/* An AutoPay that fell due and was held back for want of money. Marked rather than coloured like
-   an urgent one: nothing has gone wrong, there was simply nothing to take. */
-.upcoming-row.held {
-  border-left: 2px solid var(--warning);
-  padding-left: 8px;
-}
-
-.upcoming-row.held small {
-  color: var(--warning);
-  font-weight: 850;
-}
-
 .add-button {
   align-self: end;
 }
@@ -3655,78 +3643,6 @@ a {
 
 .summary-change.bad {
   color: var(--danger);
-}
-
-.upcoming-list {
-  display: grid;
-  gap: 8px;
-}
-
-.upcoming-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px 12px;
-}
-
-.upcoming-row.soon {
-  border-color: rgba(234, 88, 12, 0.45);
-  background: rgba(234, 88, 12, 0.06);
-}
-
-.upcoming-icon {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  background: rgba(14, 165, 233, 0.12);
-  color: #0284c7;
-}
-
-.upcoming-main {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.upcoming-main strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.upcoming-main small {
-  color: var(--muted);
-  font-weight: 700;
-}
-
-.upcoming-total {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  padding: 6px 2px 0;
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-weight: 800;
-}
-
-.upcoming-total strong {
-  color: var(--text);
-  font-size: 1.05rem;
-}
-
-.upcoming-warning {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  color: var(--danger);
-  font-size: 0.82rem;
-  font-weight: 800;
 }
 
 /* --- Transactions: export + add again --- */
