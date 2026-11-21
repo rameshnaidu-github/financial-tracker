@@ -3006,6 +3006,92 @@ test("a correction typed on a card moves what is owed, and the sign is not inver
   }
 });
 
+test("a request declares who it is for, and its transaction commits, rolls back and lets go", async () => {
+  /*
+   * The plumbing row-level security sits on.
+   *
+   * Policies filter by app.user_id, which only exists for the life of a transaction, so a
+   * request that does not open one reads nothing once the application stops connecting as a
+   * role that bypasses row security. These assertions are about the mechanism rather than the
+   * policies: the in-process engine is real Postgres and answers current_setting the same way,
+   * but it has no roles, so isolation itself is proved against the hosted database instead.
+   */
+  process.env.FINANCE_REQUEST_TX = "1";
+  try {
+    const owner = await dbModule.ownerId();
+    const asked = async () =>
+      ((await dbModule.db.prepare("SELECT current_setting('app.user_id', true) AS who").get()) as { who: string | null })
+        .who;
+
+    // Outside a request nobody is declared, which is the sign-in handshake's state.
+    assert((await asked()) === null || (await asked()) === "", "No request should declare no identity.");
+
+    let inside: string | null = null;
+    let committedId = "";
+    await dbModule.runAsUserAsync(owner, async () => {
+      await dbModule.beginRequestTransaction();
+      inside = await asked();
+      committedId = `rls-commit-${randomUUID().slice(0, 8)}`;
+      await dbModule.db
+        .prepare("INSERT INTO app_settings (key, value) VALUES (?, ?)")
+        .run(committedId, "kept");
+      await dbModule.endRequestTransaction(true);
+    });
+    assert(inside === owner, `The transaction should declare the person: got ${String(inside)}.`);
+    const kept = await dbModule.db.prepare("SELECT value FROM app_settings WHERE key = ?").get(committedId);
+    assert(kept !== undefined, "A committed request must leave its row behind.");
+
+    // And the other way: a request that ends badly leaves nothing.
+    let rolledId = "";
+    await dbModule.runAsUserAsync(owner, async () => {
+      await dbModule.beginRequestTransaction();
+      rolledId = `rls-rollback-${randomUUID().slice(0, 8)}`;
+      await dbModule.db.prepare("INSERT INTO app_settings (key, value) VALUES (?, ?)").run(rolledId, "discarded");
+      await dbModule.endRequestTransaction(false);
+    });
+    const gone = await dbModule.db.prepare("SELECT value FROM app_settings WHERE key = ?").get(rolledId);
+    assert(gone === undefined, "A request that failed must not leave its writes behind.");
+
+    // The declaration dies with the transaction rather than riding the connection to whoever
+    // borrows it next -- the failure that would hand one person another person's rows.
+    const after = await asked();
+    assert(after === null || after === "", `The identity must not outlive the request: got ${String(after)}.`);
+
+    /*
+     * Thirty cycles, which prove the path survives repetition -- not that the connection is
+     * released. Deleting the release() and running this suite changes nothing, because the
+     * in-process driver hands back the same single instance and its release is a no-op. On the
+     * hosted pool a leak would exhaust three connections and the application would stop
+     * answering; that one is unproven here and has to be watched after the switch.
+     */
+    for (let i = 0; i < 30; i += 1) {
+      await dbModule.runAsUserAsync(owner, async () => {
+        await dbModule.beginRequestTransaction();
+        await dbModule.db.prepare("SELECT 1 AS ok").get();
+        await dbModule.endRequestTransaction(true);
+      });
+    }
+
+    // An explicit transaction inside a request joins it rather than opening a second one that
+    // would commit the request's work early.
+    await dbModule.runAsUserAsync(owner, async () => {
+      await dbModule.beginRequestTransaction();
+      const nestedId = `rls-nested-${randomUUID().slice(0, 8)}`;
+      await dbModule.transaction(async () => {
+        await dbModule.db.prepare("INSERT INTO app_settings (key, value) VALUES (?, ?)").run(nestedId, "inner");
+      });
+      // Still inside the request: rolling the request back must take the inner write with it.
+      await dbModule.endRequestTransaction(false);
+      const innerGone = await dbModule.db.prepare("SELECT value FROM app_settings WHERE key = ?").get(nestedId);
+      assert(innerGone === undefined, "An inner transaction must not commit the request's work early.");
+    });
+
+    await dbModule.db.prepare("DELETE FROM app_settings WHERE key = ?").run(committedId);
+  } finally {
+    delete process.env.FINANCE_REQUEST_TX;
+  }
+});
+
 test("backups follow a custom database and keep daily history", async () => {
   const backupFiles = await import("../server/backup-files.ts");
   assert(

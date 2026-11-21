@@ -8,7 +8,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZodError } from "zod";
 import { currentBatchQuerySchema } from "../shared/finance.ts";
-import { beginRequestScope, currentUserIsOwner, db, forUser, initDatabase } from "./db.ts";
+import {
+  beginRequestScope,
+  beginRequestTransaction,
+  currentUserIsOwner,
+  db,
+  endRequestTransaction,
+  forUser,
+  initDatabase,
+} from "./db.ts";
 import { buildExport, exportFilename } from "./export.ts";
 import { isTrustedRequestOrigin, securityHeaders } from "./security.ts";
 import {
@@ -167,6 +175,11 @@ app.addHook("onRequest", async (request, reply) => {
     // requests for five different people, each awaiting several times, with no bleed between
     // them.
     forUser(person.id);
+    /* From here the request runs inside one transaction on one connection, which has been told
+       who it is for. That is what lets row-level security answer "whose row is this" -- the
+       application's own WHERE clauses are no longer the only thing keeping three people's money
+       apart. Closed in the hooks below, whatever happens in between. */
+    await beginRequestTransaction();
     (request as FastifyRequest & { person?: { id: string; email: string } }).person = person;
     if (isOwnerOnlyPath(url) && !(await currentUserIsOwner())) {
       return reply.status(403).send({ error: "Only the owner of this installation can do that." });
@@ -250,6 +263,34 @@ const signInLimit = {
     rateLimit: { max: 10, timeWindow: "5 minutes" }
   }
 };
+
+/*
+ * Closing the request's transaction.
+ *
+ * onResponse rather than onSend, so the work is finished and the bytes are gone before the
+ * COMMIT; and a pair with onError, because a handler that threw must not have its partial
+ * writes committed. Fastify runs onResponse for an errored request too, so the second call
+ * finds nothing left to do and returns.
+ */
+app.addHook("onError", async (_request, _reply, error) => {
+  void error;
+  await endRequestTransaction(false);
+});
+
+app.addHook("onResponse", async (_request, reply) => {
+  /*
+   * A 5xx means the handler gave up partway; anything it wrote should go back with it.
+   *
+   * This commits after the response has gone, which means a COMMIT that fails cannot change
+   * what the caller was told -- they would see a 200 for a write that did not land, and only
+   * the log would know. The alternative, committing in onSend, can turn that into a 500, and
+   * would also commit before a streamed payload has finished reading. Exports take the
+   * streaming path, so the risk was moved to the rarer failure rather than removed: a COMMIT
+   * on an open connection fails when the connection has dropped, which the next request
+   * discovers anyway.
+   */
+  await endRequestTransaction(reply.statusCode < 500);
+});
 
 app.post("/api/auth/sign-in", signInLimit, async (request, reply) => {
   const body = request.body as { email?: string; password?: string } | undefined;

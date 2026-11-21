@@ -19,6 +19,16 @@ import {
 const connectionString = process.env.DATABASE_URL?.trim();
 export const isHostedDatabase = Boolean(connectionString);
 
+/**
+ * A second credential, used only to change the schema.
+ *
+ * Optional. Set it when DATABASE_URL names a role that row-level security applies to, because
+ * such a role is deliberately not allowed to alter the tables whose policies protect it. Unset,
+ * schema work goes through the ordinary connection, which is correct when that connection is
+ * already an owner.
+ */
+const adminConnectionString = process.env.DATABASE_ADMIN_URL?.trim();
+
 /** Where an in-process database keeps its files. Unset means memory, which is what tests want. */
 const localDataDir = process.env.FINANCE_DATA_DIR?.trim();
 
@@ -36,6 +46,16 @@ export type Adapter = {
   readonly hosted: boolean;
   prepare: (sql: string) => Statement;
   exec: (sql: string) => Promise<void>;
+  /**
+   * Runs `fn` with every statement on a connection that is allowed to change the schema.
+   *
+   * The role the application serves requests as cannot create or alter a table, on purpose: it
+   * is the role row-level security applies to, and a role that can rewrite the tables can
+   * rewrite the policies on them. Schema work therefore needs a different credential, named by
+   * DATABASE_ADMIN_URL. Without one this is a pass-through, which is what a single-credential
+   * installation and every in-process database want.
+   */
+  asAdmin: <T>(fn: () => T | Promise<T>) => Promise<T>;
   /**
    * Runs `fn` with every statement inside one transaction.
    *
@@ -151,13 +171,47 @@ const driver: Driver = connectionString
   ? await postgresDriver(connectionString)
   : await pgliteDriver();
 
+/**
+ * Tells the database who this transaction is for.
+ *
+ * Row-level security has no other way to know. The value is read back by every policy as
+ * `current_setting('app.user_id', true)`, and it is set LOCAL so it dies with the transaction --
+ * which matters because these connections are pooled and the next request to borrow this one
+ * must not inherit the last one's identity.
+ *
+ * Sent as a parameter rather than interpolated. A user id is a uuid the application generated,
+ * so there is nothing to escape today, but a SET built by string concatenation is the shape of
+ * the problem regardless of today's data.
+ *
+ * No person in scope means none is declared, and the policies then match nothing. That is the
+ * correct answer for the sign-in handshake, which runs before anybody is known and reaches only
+ * the two tables whose policies allow it.
+ */
+async function declareIdentity(client: ReservedConnection): Promise<void> {
+  const person = requestUser.getStore()?.id;
+  if (!person) return;
+  await client.query("SELECT set_config('app.user_id', $1, true)", [person]);
+}
+
+/** The admin connection, built on demand and closed again: it is used once, at boot. */
+async function adminDriver(): Promise<Driver> {
+  if (!adminConnectionString) throw new Error("No DATABASE_ADMIN_URL to connect with.");
+  return postgresDriver(adminConnectionString);
+}
+
 function postgresAdapter(): Adapter {
   // While a transaction is open every statement goes through its reserved connection. Anything
   // still using the pool would run outside the transaction and commit on its own.
-  let reserved: Awaited<ReturnType<Driver["reserve"]>> | undefined;
+  let reserved: ReservedConnection | undefined;
+  /* The request's own connection first, then one reserved by an explicit transaction, then the
+     pool. Under row-level security the first of those is the only one that knows who is asking,
+     so a statement that fell through to the pool by accident would see nothing rather than see
+     too much -- which is the right way round for this to fail. */
+  const connection = () => requestUser.getStore()?.conn ?? reserved;
   const run = async (sql: string, params: unknown[]) => {
     try {
-      return await (reserved ? reserved.query(sql, params) : driver.query(sql, params));
+      const open = connection();
+      return await (open ? open.query(sql, params) : driver.query(sql, params));
     } catch (error) {
       // The driver reports the parameter number and nothing about the statement, which is of no
       // use at all when 126 of them are in play. Naming it is how every dialect difference in this
@@ -181,21 +235,40 @@ function postgresAdapter(): Adapter {
       };
     },
     exec: async (sql) => {
-      if (reserved) {
-        for (const statement of splitStatements(sql)) await reserved.query(statement, []);
+      const open = connection();
+      if (open) {
+        for (const statement of splitStatements(sql)) await open.query(statement, []);
         return;
       }
       await driver.exec(sql);
     },
+    asAdmin: async (fn) => {
+      /* Parks an admin connection where every statement in `fn` will find it, the same slot a
+         transaction uses, then puts the ordinary one back. Nothing nests: schema work happens
+         once at boot, before any request exists. */
+      if (!adminConnectionString || connection()) return fn();
+      const admin = await adminDriver();
+      const client = await admin.reserve();
+      const previous = reserved;
+      reserved = client;
+      try {
+        return await fn();
+      } finally {
+        reserved = previous;
+        client.release();
+        await admin.close();
+      }
+    },
     transaction: async (fn) => {
       // Postgres has no nested transactions worth the name here, so an inner call joins the one
       // already open rather than starting a second that would commit the outer one's work early.
-      if (reserved) return fn();
+      if (connection()) return fn();
       const mine = queue.then(async () => {
         const client = await driver.reserve();
         reserved = client;
         try {
           await client.query("BEGIN", []);
+          await declareIdentity(client);
           const result = await fn();
           await client.query("COMMIT", []);
           return result;
@@ -405,6 +478,10 @@ async function widenValueConstraints() {
 
 export async function initDatabase() {
   if (!(await schemaIsCurrent())) {
+    /* Schema work on the admin credential when there is one: the role that serves requests is
+       the role the policies apply to, and it is deliberately not allowed to alter the tables
+       those policies sit on. */
+    await db.asAdmin(async () => {
     await db.transaction(async () => {
       await db.prepare(`SELECT pg_advisory_xact_lock(${SCHEMA_LOCK_ID})`).get();
       // Another instance may have finished while this one waited for the lock.
@@ -419,6 +496,7 @@ export async function initDatabase() {
            ON CONFLICT (id) DO UPDATE SET fingerprint = EXCLUDED.fingerprint, applied_at = EXCLUDED.applied_at`,
         )
         .run(SCHEMA_FINGERPRINT, new Date().toISOString().replace("T", " ").slice(0, 19));
+    });
     });
   }
 
@@ -519,7 +597,17 @@ async function ensureOwner() {
  * start-up and the account command -- say so by calling `asOwner`, which is a named act somebody
  * can grep for rather than a silence.
  */
-const requestUser = new AsyncLocalStorage<{ id?: string }>();
+type ReservedConnection = Awaited<ReturnType<Driver["reserve"]>>;
+
+/**
+ * What one request carries: who it is for, and the connection its statements are running on.
+ *
+ * The connection lives here rather than in a module variable because row-level security needs
+ * every statement of a request to reach the same backend -- that is the only place the identity
+ * it filters by has been declared. A module variable would be shared by whatever requests happen
+ * to overlap, which is the one way this could go wrong without looking wrong.
+ */
+const requestUser = new AsyncLocalStorage<{ id?: string; conn?: ReservedConnection }>();
 
 export function currentUserId(): string {
   const person = requestUser.getStore();
@@ -561,6 +649,67 @@ export function forUser(userId: string): void {
     return;
   }
   requestUser.enterWith({ id: userId });
+}
+
+/**
+ * Opens the transaction a signed-in request runs inside, and declares who it is for.
+ *
+ * Row-level security filters by a setting that only exists for the life of a transaction, so
+ * without one the database cannot tell these three people apart and the policies match nothing.
+ * Every statement after this reaches the same backend, through the connection parked in the
+ * request's scope.
+ *
+ * In-process Postgres has no pooling to defeat and no role that is subject to policies, so this
+ * does nothing there: a reservation per request would serialise the test suite for no benefit.
+ *
+ * Failing to open one is not fatal. The request proceeds on the pool, where -- once the
+ * application connects as a role that does not bypass row security -- it will read nothing and
+ * the person sees an empty page rather than somebody else's money. Loud in the log, harmless in
+ * the data.
+ */
+export async function beginRequestTransaction(): Promise<void> {
+  /* In process, a reservation is the same single connection, so two overlapping requests would
+     interleave their BEGIN and COMMIT on it. Hosted, each reservation is its own backend. The
+     switch lets the suite exercise this path against the in-process engine, which is real
+     Postgres and so proves everything except the pooling. */
+  if (!isHostedDatabase && process.env.FINANCE_REQUEST_TX !== "1") return;
+  const store = requestUser.getStore();
+  if (!store?.id || store.conn) return;
+  try {
+    const client = await driver.reserve();
+    try {
+      await client.query("BEGIN", []);
+      await client.query("SELECT set_config('app.user_id', $1, true)", [store.id]);
+      store.conn = client;
+    } catch (error) {
+      client.release();
+      throw error;
+    }
+  } catch (error) {
+    console.error("Could not open a request transaction; this request will see no rows.", error);
+  }
+}
+
+/**
+ * Closes it, and puts the connection back.
+ *
+ * Called from a response hook, so it runs whether the handler returned, threw, or the client
+ * hung up. A connection that is not released is the one failure here that compounds: the pool
+ * is three wide, and three leaked connections is an application that has stopped answering. So
+ * the release is in a finally and happens even if the COMMIT itself fails.
+ */
+export async function endRequestTransaction(commit: boolean): Promise<void> {
+  const store = requestUser.getStore();
+  const client = store?.conn;
+  if (!client) return;
+  store.conn = undefined;
+  try {
+    await client.query(commit ? "COMMIT" : "ROLLBACK", []);
+  } catch (error) {
+    console.error(`Could not ${commit ? "commit" : "roll back"} a request transaction.`, error);
+  } finally {
+    client.release();
+  }
 }
 
 /** The callback form, for a caller that owns its own stack. */
