@@ -843,7 +843,7 @@ function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
               {error}
             </p>
           )}
-          <button type="submit" className="sign-in-submit" disabled={busy || !email || !password}>
+          <button type="submit" className="primary-action sign-in-submit" disabled={busy || !email || !password}>
             {busy ? "Signing in…" : "Sign in"}
           </button>
         </form>
@@ -6902,7 +6902,7 @@ function InvestmentGroup({
         aria-expanded={expanded}
         onClick={() => setExpanded((value) => !value)}
       >
-        <span className="investment-group-name" style={{ color: type.color }}>
+        <span className="investment-group-name" style={{ "--cat-color": type.color } as React.CSSProperties}>
           <IconGlyph name={type.icon} size={16} />
           {type.label}
           <span className="investment-group-count">{items.length}</span>
