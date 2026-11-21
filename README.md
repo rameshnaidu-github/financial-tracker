@@ -85,10 +85,15 @@ Every row in every table carries whose it is, and three things keep one person's
   statement the services hand to the database and fails if one touches a table carrying `user_id` without
   naming it, so a forgotten clause is caught before it ships rather than after.
 - **Composite foreign keys**, so a row cannot point at another person's row even by accident.
-- **Row-level security is enabled on every table**, which denies anything that reaches the database by
-  another route. It does *not* constrain the application: the role it connects as carries `rolbypassrls`, so
-  for its own queries the scoping above is the protection. An earlier version of this README said the
-  database enforced the separation; that was wrong, and this says what is true.
+- **Row-level security**, with a policy on every table. Each policy compares the row's owner with
+  `app.user_id`, a setting the application declares at the start of each request's transaction, so the
+  database can answer "whose row is this" without being told again in every query.
+
+  Whether it is *enforcing* depends on which role `DATABASE_URL` names. A role carrying `rolbypassrls`,
+  such as Supabase's `postgres`, is exempt and the query scoping above is then the only protection. The
+  `finance_app` role exists for this and carries no such exemption; switching to it is what turns the
+  policies on. `DATABASE_ADMIN_URL` then names a role that may change the schema, because the role the
+  policies apply to deliberately cannot alter the tables they sit on.
 
 Every account starts with the same shipped Types and SubTypes, and keeps receiving them: a default added in
 a later release reaches an account created before it existed. Which defaults an account has been given is
