@@ -1,3 +1,18 @@
 {
-  "buildPath": "code"
+  "buildPath": "code",
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "dark-glow",
+        "value": "*",
+        "files": [
+          "brag-output/work/*.html"
+        ],
+        "createdAt": "2026-11-21T09:51:01.963Z",
+        "reason": "Video render intermediates, not product UI. These scene files link the app's own stylesheets to film the real interface, so every app-level finding re-surfaces through them. The shadows behind this one are the project's documented depth language under accent-coloured surfaces, already tuned down for dark at theme.css:3294, and the detector resolves var(--accent) statically to the light token so it reports #10794e on a page that renders mint. Claude's call on a polish pass scoped to 'fix real defects, keep the look'. Not user confirmed; the app files are NOT covered by this ignore."
+      }
+    ]
+  }
 }

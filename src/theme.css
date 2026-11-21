@@ -545,11 +545,25 @@ textarea:hover {
   border-color: var(--line-strong);
 }
 
+/*
+ * A field being typed into, in the same quiet language as a field wrapper.
+ *
+ * This put the accent on the border and a four-pixel accent-soft halo around every input -- the
+ * green-outlined box the owner photographed. That was fixed for the search and for anything
+ * inside a `.control-field`, and the fix stopped there: nearly every form field in the app is a
+ * bare input in a `.stack-form`, `.entry-form` or `.form-pair`, so clicking into Name, Amount or
+ * any other field in any dialog still turned it green.
+ *
+ * Green means something here: it is the accent, it marks the thing that matters on a page. A
+ * field being typed into is not that; it only needs to say where the caret is. Same border step
+ * a hover makes, plus a hairline ring in the neutral track colour -- identical to what
+ * `.control-field:focus-within` already does, so a field and a field wrapper now agree.
+ */
 input:focus,
 select:focus,
 textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 3px var(--track);
   outline: none;
 }
 

@@ -91,11 +91,8 @@ select {
   box-shadow: none;
 }
 
-input:focus,
-select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
-}
+/* Base focus lives in theme.css, with the rest of the focus language. Two sheets each naming
+   `input:focus` is how one of them ends up saying something the design no longer means. */
 
 label {
   display: grid;
