@@ -1,8 +1,7 @@
 # Financial Tracker
 
-A personal finance tracker for one household's real money: accounts and cards, weekly entry, budgets, loans
-and EMIs, investments that pay you back, subscriptions that pay themselves, and reports that agree with each
-other.
+A personal finance tracker for one household's real money: accounts and cards, budgets, loans and EMIs,
+investments that pay you back, subscriptions that pay themselves, and reports that agree with each other.
 
 It runs two ways from the same code. **Hosted**, so it opens on a phone like any other site: the app is
 deployed to Vercel and keeps its data in a hosted Postgres database, behind a sign-in. **On your own machine**,
@@ -15,9 +14,10 @@ is decided by a single environment variable, `DATABASE_URL`.
 
 ## Features
 
-- Overview dashboard with financial highlights, recent activity, spending mix, net worth, asset allocation,
-  this month's cashflow, emergency-fund runway, and budget guardrails
-- Weekly transaction entry across bank accounts, credit cards, and food cards
+- Overview dashboard with financial highlights, spending mix, net worth, asset allocation, this month's
+  cashflow, card utilisation, emergency-fund runway, and budget guardrails, plus a bell that lists only what
+  wants attention — a card near its limit, an EMI or a subscription due soon, uncategorized transactions
+- Add a transaction from a popup on the Transactions page, against a bank account, credit card or food card
 - Full transaction ledger grouped by day, each heading carrying that day's count and net, with search
   (merchant, SubType or amount), type/subtype/date filters, an "uncategorized only" view, CSV export of the
   current filters, undo after delete, one-tap "add again", and multi-select delete
@@ -46,7 +46,18 @@ is decided by a single environment variable, `DATABASE_URL`.
   and stay listed under Upcoming payments when it doesn't
 - Account, credit-card and food-card tracking with per-account minimum balances; an account's name, opening
   balance and card limit can be corrected later to match your bank statement
+- **Adjust balance**, on a bank account and on a credit card alike, for when the app and the statement
+  disagree. You type the size of the correction: `+500` raises a bank balance by ₹500, and on a card `+500`
+  means ₹500 more owed. It is written as its own transaction, so deleting it undoes the correction, and it
+  counts as neither spending nor income. On a card it corrects what was spent; an EMI sitting on that card
+  keeps its own balance and is untouched
+- An **EMI** SubType under both Loan and Expense: choosing it offers the instalments still running and ties
+  the payment to the one you pick, the way AutoPay does. Under Loan it offers your loans; under Expense it
+  offers the EMIs sitting on your cards
+- An AutoPay can be deleted without losing the transactions it already made
 - Custom Types and SubTypes
+- **What's new**, which opens on the newest release and keeps older ones folded away, with a dot in the
+  sidebar until you have read the latest
 - Built-in FAQ explaining how each figure is calculated
 - Import transactions from a spreadsheet; new users can type new accounts, Types, and SubTypes directly in the
   template
@@ -78,6 +89,10 @@ Every row in every table carries whose it is, and three things keep one person's
   another route. It does *not* constrain the application: the role it connects as carries `rolbypassrls`, so
   for its own queries the scoping above is the protection. An earlier version of this README said the
   database enforced the separation; that was wrong, and this says what is true.
+
+Every account starts with the same shipped Types and SubTypes, and keeps receiving them: a default added in
+a later release reaches an account created before it existed. Which defaults an account has been given is
+recorded against that account, so one deleted on purpose stays deleted.
 
 The local database files and the `backups/` folder are excluded from git, so only source code is
 version-controlled.

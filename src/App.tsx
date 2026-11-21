@@ -69,6 +69,8 @@ import {
 } from "./format";
 import { IconGlyph } from "./icons";
 import { WHATS_NEW, hasUnreadNews, newestNewsDate, type NewsEntry } from "./whats-new";
+import { NewsList } from "./whats-new-view";
+import { adjustmentDirection, adjustmentShiftPaise } from "./adjustment";
 import { flushSync } from "react-dom";
 import { prefersReducedMotion, useCountUp, useScrollReveal } from "./motion";
 import { cashflowPartsFromTypes, INFLOW_BEHAVIORS, type CashflowPart } from "./report-cashflow";
@@ -9034,11 +9036,6 @@ function storedNewsSeen(): string | null {
 }
 
 /* Two groups and no others: what you can now do, and what is no longer wrong. */
-const NEWS_GROUPS = [
-  { key: "added", heading: "New", tone: "is-new" },
-  { key: "fixed", heading: "Fixed", tone: "is-fixed" }
-] as const;
-
 function WhatsNewPage({ entries, onRead }: { entries: NewsEntry[]; onRead: () => void }) {
   useEffect(() => {
     onRead();
@@ -9050,33 +9047,7 @@ function WhatsNewPage({ entries, onRead }: { entries: NewsEntry[]; onRead: () =>
         <p className="helper-text faq-intro">
           New features and fixes, newest first.
         </p>
-        {entries.length === 0 ? (
-          <EmptyState text="Nothing new yet." />
-        ) : (
-          <ol className="news-list">
-            {entries.map((entry) => (
-              <li className="news-entry" key={entry.date}>
-                <h3>{formatDayHeading(entry.date)}</h3>
-                {NEWS_GROUPS.map(({ key, heading, tone }) => {
-                  const lines = entry[key] ?? [];
-                  if (lines.length === 0) {
-                    return null;
-                  }
-                  return (
-                    <div className="news-group" key={key}>
-                      <h4 className={`news-group-heading ${tone}`}>{heading}</h4>
-                      <ul>
-                        {lines.map((line) => (
-                          <li key={line}>{line}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  );
-                })}
-              </li>
-            ))}
-          </ol>
-        )}
+        {entries.length === 0 ? <EmptyState text="Nothing new yet." /> : <NewsList entries={entries} />}
       </Panel>
     </div>
   );
@@ -9677,31 +9648,41 @@ export function AccountEditDialog({
   async function applyAdjustment() {
     const parsed = parseSignedAmount(adjustment);
     if (!parsed) {
-      onError("Type how much to adjust by, as +500 or -500.");
+      onError(`Type how much to adjust by, as +500 or -500.`);
       return;
     }
     setAdjusting(true);
     try {
+      /* The sign means "make the figure on screen move this way", and the figure on screen is
+         not the same thing on the two kinds of account. A bank shows what you have, so +500 is
+         money arriving. A card shows what you owe, so +500 is 500 more owed -- which in the
+         ledger is an outflow on the card, the same shape a purchase has. Writing it the other
+         way round would make the hint under the field a lie. */
+      const direction = adjustmentDirection(isCard, parsed.direction);
       await Api.createTransaction({
         date: todayISO(),
         accountId: account.id,
-        method: account.type === "credit_card" ? "credit_card" : "bank_transfer",
-        merchant: "Balance adjustment",
+        method: isCard ? "credit_card" : "bank_transfer",
+        merchant: isCard ? "Outstanding adjustment" : "Balance adjustment",
         typeId: ADJUSTMENT_TYPE_ID,
         subcategoryId: ADJUSTMENT_SUBCATEGORY_ID,
         amountPaise: parsed.paise,
-        direction: parsed.direction,
+        direction,
         kind: "adjustment"
       });
-      const moved = parsed.direction === "inflow" ? parsed.paise : -parsed.paise;
+      const moved = adjustmentShiftPaise(parsed.paise, parsed.direction);
       setAdjustment("");
       await onSaved(
-        `Balance adjusted by ${signedAmount(parsed.paise, parsed.direction)}. Now ${formatINRWhole(
-          account.balancePaise + moved
-        )}.`
+        isCard
+          ? `Outstanding adjusted by ${signedAmount(parsed.paise, parsed.direction)}. Now ${formatINRWhole(
+              Math.max(account.outstandingPaise + moved, 0)
+            )} owed.`
+          : `Balance adjusted by ${signedAmount(parsed.paise, parsed.direction)}. Now ${formatINRWhole(
+              account.balancePaise + moved
+            )}.`
       );
     } catch (err) {
-      onError(err instanceof Error ? err.message : "Could not adjust the balance.");
+      onError(err instanceof Error ? err.message : `Could not adjust the ${isCard ? "outstanding" : "balance"}.`);
     } finally {
       setAdjusting(false);
     }
@@ -9842,31 +9823,28 @@ export function AccountEditDialog({
         * applies the adjustment, and Enter anywhere in the account's fields still saves the
         * account.
         */}
-      {!isCard && (
-        <form className="account-adjust" onSubmit={(event) => { event.preventDefault(); void applyAdjustment(); }}>
-          <label>
-            Adjust balance
-            <div className="account-adjust-row">
-              <input
-                inputMode="text"
-                value={adjustment}
-                onChange={(event) => setAdjustment(event.target.value)}
-                placeholder="+500 or -500"
-                aria-describedby={adjustHintId}
-              />
-              <button type="submit" className="secondary-action" disabled={adjusting || !adjustment.trim()}>
-                {adjusting ? "Adjusting..." : "Apply"}
-              </button>
-            </div>
-            <small className="field-hint" id={adjustHintId}>
-              For when the app and your bank disagree. The amount is the size of the correction, so
-              +500 raises the balance by ₹500 and -500 lowers it. It is written as its own
-              transaction, which you can delete to undo it, and it counts as neither spending nor
-              income.
-            </small>
-          </label>
-        </form>
-      )}
+      <form className="account-adjust" onSubmit={(event) => { event.preventDefault(); void applyAdjustment(); }}>
+        <label>
+          {isCard ? "Adjust outstanding" : "Adjust balance"}
+          <div className="account-adjust-row">
+            <input
+              inputMode="text"
+              value={adjustment}
+              onChange={(event) => setAdjustment(event.target.value)}
+              placeholder="+500 or -500"
+              aria-describedby={adjustHintId}
+            />
+            <button type="submit" className="secondary-action" disabled={adjusting || !adjustment.trim()}>
+              {adjusting ? "Adjusting..." : "Apply"}
+            </button>
+          </div>
+          <small className="field-hint" id={adjustHintId}>
+            {isCard
+              ? "For when the app and your card statement disagree. The amount is the size of the correction, so +500 means ₹500 more owed and -500 means ₹500 less. It corrects what you have spent on the card; an EMI sitting on the card keeps its own balance and is not touched. It is written as its own transaction, which you can delete to undo it, and it counts as neither spending nor income."
+              : "For when the app and your bank disagree. The amount is the size of the correction, so +500 raises the balance by ₹500 and -500 lowers it. It is written as its own transaction, which you can delete to undo it, and it counts as neither spending nor income."}
+          </small>
+        </label>
+      </form>
     </FormDialog>
   );
 }

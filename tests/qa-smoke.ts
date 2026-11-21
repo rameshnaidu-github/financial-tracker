@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
 import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
-import { formatINR, formatINRWhole } from "../src/format.ts";
+import { formatINR, formatINRWhole, todayISO } from "../src/format.ts";
 import { INFLOW_BEHAVIORS, SELF_TRANSFER_SUBCATEGORY_ID } from "../shared/finance.ts";
 import type { ReportType } from "../src/types.ts";
 
@@ -2945,6 +2945,65 @@ test("a default shipped after a second account was created still reaches it", as
   (await dbModule.db.prepare("DELETE FROM subcategories WHERE user_id = ?").run(second));
   (await dbModule.db.prepare("DELETE FROM category_types WHERE user_id = ?").run(second));
   (await dbModule.db.prepare("DELETE FROM users WHERE id = ?").run(second));
+});
+
+test("a correction typed on a card moves what is owed, and the sign is not inverted", async () => {
+  // The sign is the part of this feature that can be wrong silently: the transaction is written
+  // either way and only the direction of the figure betrays it. A bank shows what you have, a
+  // card shows what you owe, so "+" has to mean opposite ledger directions on the two.
+  const { adjustmentDirection, adjustmentShiftPaise } = await import("../src/adjustment.ts");
+
+  assert(adjustmentDirection(false, "inflow") === "inflow", "+ on a bank is money arriving.");
+  assert(adjustmentDirection(false, "outflow") === "outflow", "- on a bank is money leaving.");
+  assert(adjustmentDirection(true, "inflow") === "outflow", "+ on a card is more owed, which is an outflow on the card.");
+  assert(adjustmentDirection(true, "outflow") === "inflow", "- on a card is less owed.");
+  assert(adjustmentShiftPaise(500_00, "inflow") === 500_00, "+500 moves the figure up by 500.");
+  assert(adjustmentShiftPaise(500_00, "outflow") === -500_00, "-500 moves the figure down by 500.");
+
+  const card = await services.createAccount({
+    name: `Adjust card ${randomUUID().slice(0, 6)}`,
+    type: "credit_card",
+    startingBalancePaise: 10_000_00,
+    creditLimitPaise: 100_000_00
+  });
+  const owed = async () => (await services.listAccounts()).find((a) => a.id === card.id)!.outstandingPaise;
+  assert(await owed() === 10_000_00, "The card should start at its opening outstanding.");
+
+  const post = async (typed: "inflow" | "outflow", paise: number) =>
+    services.createTransaction({
+      date: todayISO(),
+      accountId: card.id,
+      method: "credit_card",
+      merchant: "Outstanding adjustment",
+      typeId: "type_adjustment",
+      subcategoryId: "sub_adjustment_balance",
+      amountPaise: paise,
+      direction: adjustmentDirection(true, typed),
+      kind: "adjustment"
+    });
+
+  // Measured around the corrections, not asserted from the behaviour table: "adjustment is in
+  // NEUTRAL_BEHAVIORS" would be a tautology, true whether or not the figures actually move.
+  const month = todayISO().slice(0, 7);
+  const watched = ["totalInflowPaise", "totalOutflowPaise", "totalSpendingPaise", "incomePaise"] as const;
+  const totals = async () => {
+    const summary = (await services.getOverview(undefined, month)).summary;
+    return Object.fromEntries(watched.map((key) => [key, summary[key]])) as Record<string, number>;
+  };
+  const before = await totals();
+  for (const key of watched) {
+    assert(typeof before[key] === "number", `The overview should report ${key}, or this measures nothing.`);
+  }
+
+  await post("inflow", 1_500_00);
+  assert(await owed() === 11_500_00, `+1500 should raise what is owed to 11500, not ${(await owed()) / 100}.`);
+  await post("outflow", 2_000_00);
+  assert(await owed() === 9_500_00, `-2000 should lower what is owed to 9500, not ${(await owed()) / 100}.`);
+
+  const after = await totals();
+  for (const key of watched) {
+    assert(before[key] === after[key], `A card adjustment must not change ${key}: ${before[key]} became ${after[key]}.`);
+  }
 });
 
 test("backups follow a custom database and keep daily history", async () => {
