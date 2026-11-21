@@ -591,6 +591,8 @@ const PAGES_WITH_OWN_HEADER: Page[] = [
 ];
 const THEME_KEY = "finance-theme";
 const INTRO_ON_LAUNCH_KEY = "finance-intro-on-launch";
+/** Set once the film has been watched through or skipped on this device. */
+const INTRO_SEEN_KEY = "finance-intro-seen";
 
 function storedTheme(): Theme | null {
   try {
@@ -607,13 +609,33 @@ function systemTheme(): Theme {
 }
 
 /**
- * Whether opening the app should play the intro. On by default, so a browser that refuses
- * storage still gets the film rather than silently losing it; "0" is the only way off.
+ * Whether the film is wanted at launch at all. On by default, so a browser that refuses storage
+ * still gets it rather than silently losing it; "0" is the only way off. This is the switch in
+ * Profile, and it answers "do you want the film", not "are you getting it this time".
  */
-function shouldPlayIntroOnLaunch(): boolean {
+function introWantedOnLaunch(): boolean {
   if (typeof window === "undefined") return false;
   try {
     return window.localStorage.getItem(INTRO_ON_LAUNCH_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Whether to play it on *this* open.
+ *
+ * The film is twenty-two seconds and it used to run on every open of the app, for everybody, with
+ * a Skip button as the only way past. This is a thing people reach for on a phone to record a
+ * spend in the seconds after making it; a film in front of that is a toll gate, however good the
+ * film is. So it plays once on a device and then gets out of the way, and turning the switch back
+ * on in Profile makes it play again next launch -- which is what somebody wanting to show it to
+ * another person is actually asking for.
+ */
+function shouldPlayIntroNow(): boolean {
+  if (!introWantedOnLaunch()) return false;
+  try {
+    return window.localStorage.getItem(INTRO_SEEN_KEY) !== "1";
   } catch {
     return true;
   }
@@ -909,8 +931,8 @@ export default function App() {
   // The intro plays on every open of the app, whatever page was asked for. Decided here,
   // synchronously at mount, so it is the first thing painted rather than something that
   // waits for the app's data; the owner can turn it off in Profile.
-  const [introOnLaunch, setIntroOnLaunch] = useState(shouldPlayIntroOnLaunch);
-  const [introOpen, setIntroOpen] = useState(() => shouldPlayIntroOnLaunch());
+  const [introOnLaunch, setIntroOnLaunch] = useState(introWantedOnLaunch);
+  const [introOpen, setIntroOpen] = useState(() => shouldPlayIntroNow());
 
   // Follows the system light/dark setting until the person picks one on Profile.
   const [theme, setTheme] = useState<Theme>(() => (typeof window === "undefined" ? "light" : storedTheme() ?? systemTheme()));
@@ -1205,6 +1227,12 @@ export default function App() {
 
   const closeIntro = useCallback(() => {
     setIntroOpen(false);
+    try {
+      // Watched or skipped, it counts as seen: either way this person has had their chance at it.
+      window.localStorage.setItem(INTRO_SEEN_KEY, "1");
+    } catch {
+      // Nothing to remember it with; it will offer itself once more next time.
+    }
   }, []);
 
   const toggleIntroOnLaunch = useCallback(() => {
@@ -1212,6 +1240,9 @@ export default function App() {
       const next = !current;
       try {
         window.localStorage.setItem(INTRO_ON_LAUNCH_KEY, next ? "1" : "0");
+        // Switching it back on means "play it again", not "play it again only if I have not
+        // already seen it" -- which would be a switch that visibly does nothing.
+        if (next) window.localStorage.removeItem(INTRO_SEEN_KEY);
       } catch {
         // Nothing to remember it with; the preference lasts for this session only.
       }
@@ -9872,6 +9903,49 @@ function Panel({
 /* Editing used to happen in a form parked at the top of the page, so changing a holding near the
    bottom of a long list meant scrolling up to the form and scrolling back down to see what it
    did. The form comes to the item instead. One dialog serves every section. */
+/*
+ * How far a dialog may travel from the control that opened it.
+ *
+ * Far enough to read as coming from somewhere, short enough that it is not a flight across the
+ * page. Applied as one scale factor over the whole vector so the direction survives -- see the
+ * comment at the use site for what happens when it is applied per axis instead.
+ */
+const MAX_DIALOG_TRAVEL_X = 160;
+const MAX_DIALOG_TRAVEL_Y = 200;
+
+/**
+ * Where the last press landed.
+ *
+ * The dialog used to ask `document.activeElement` which control opened it, which sounds right
+ * and is not: by the time the dialog has mounted, focus has often moved on, and on these pages
+ * the answer came back as the topbar search field. The dialog then grew out of the search box
+ * no matter which card was pressed -- the animation ran, looked plausible, and said something
+ * false.
+ *
+ * A pointer press is recorded here instead, at capture time so nothing can stop it first, with
+ * the box taken there and then. Keyboard activation is covered by falling back to the focused
+ * control, which for a keyboard user is the right answer and is still focused.
+ */
+let lastPressedBox: { rect: DOMRect; at: number } | null = null;
+if (typeof document !== "undefined") {
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      const control = (event.target as HTMLElement | null)?.closest?.("button, [role=button], a[href]");
+      if (control) lastPressedBox = { rect: control.getBoundingClientRect(), at: Date.now() };
+    },
+    true
+  );
+}
+
+/** The press that opened this dialog, if it was recent enough to be this one. */
+function openerRectForDialog(focused: HTMLElement | null): DOMRect | null {
+  if (lastPressedBox && Date.now() - lastPressedBox.at < 800) return lastPressedBox.rect;
+  // No recent press: a keyboard user, whose focus really is on the control they activated.
+  const viaKeyboard = focused?.closest?.("button, [role=button], a[href]");
+  return viaKeyboard ? viaKeyboard.getBoundingClientRect() : null;
+}
+
 function FormDialog({
   title,
   onClose,
@@ -9931,8 +10005,72 @@ function FormDialog({
     /* Whatever was focused when the dialog opened -- the Edit button, almost always -- gets the
        focus back when it closes, so the keyboard does not land back at the top of the page. */
     const opener = document.activeElement as HTMLElement | null;
+
+    /*
+     * The dialog grows out of whatever opened it.
+     *
+     * Every one of these dialogs is reached by pressing something that is already on screen and
+     * already shows the figures being corrected -- an account card, a loan, a holding, a row in
+     * the ledger. Sheeting up from the bottom of the window says nothing about which of them you
+     * pressed, and on a page of near-identical cards that is the one thing worth saying. So the
+     * panel starts at the opener's place and arrives at its own, and closing puts the focus back
+     * on that same control, which it already did.
+     *
+     * Measured before the body is pinned below, because pinning moves everything. Clamped,
+     * because an opener near the edge of a long page would otherwise fling the panel across the
+     * screen: the point is to show which thing was pressed, not to travel the true distance.
+     * No opener, or one with no box, falls through to the ordinary sheet.
+     */
+    const sheet = dialog.current;
+    const from = openerRectForDialog(opener);
+    let frame = 0;
+    if (sheet && from && from.width > 0 && from.height > 0) {
+      /* The attribute marks "this dialog knows where it came from" and is set either way: under
+         reduced motion the stylesheet answers it with a plain fade instead of a journey. Setting
+         it only when movement was allowed left that reduced-motion rule unreachable, which the
+         first capture caught -- a reduced path nobody can get to is not a reduced path. */
+      if (prefersReducedMotion()) {
+        sheet.dataset.grown = "true";
+      } else {
+        /*
+         * Measured a frame late, and held invisible until then.
+         *
+         * Read in the mounting tick, the panel reported a centre two hundred pixels below where
+         * it actually comes to rest -- the backdrop had not finished laying out -- so every
+         * dialog on a phone set off in the same wrong direction from a target that was not
+         * there. One frame of an invisible panel costs nothing anybody can see; a journey
+         * computed against the wrong destination costs the whole point of it.
+         */
+        sheet.style.opacity = "0";
+        frame = window.requestAnimationFrame(() => {
+          const to = sheet.getBoundingClientRect();
+          const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+          const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+          /*
+           * One factor for the whole vector, not a limit per axis.
+           *
+           * Clamping x and y separately shortened the journey and bent it: an opener past the
+           * limit on both axes landed on exactly (-160, -200) whatever its real direction, so
+           * on a page of near-identical cards every card above the dialog started from one
+           * point and every card below from another. The cue that says WHICH card was pressed
+           * collapsed into a cue that says above or below -- which is the one thing this
+           * animation exists to do, done wrong. Scaling the vector keeps its direction.
+           *
+           * Whole pixels, because the panel is full of figures and type rasterised off the grid
+           * is softer than type on it.
+           */
+          const reach = Math.min(1, MAX_DIALOG_TRAVEL_X / Math.abs(dx), MAX_DIALOG_TRAVEL_Y / Math.abs(dy));
+          sheet.style.setProperty("--from-x", `${Math.round(dx * reach)}px`);
+          sheet.style.setProperty("--from-y", `${Math.round(dy * reach)}px`);
+          sheet.dataset.grown = "true";
+          sheet.style.opacity = "";
+        });
+      }
+    }
+
     dialog.current?.focus({ preventScroll: true });
     return () => {
+      if (frame) window.cancelAnimationFrame(frame);
       body.style.position = before.position;
       body.style.top = before.top;
       body.style.width = before.width;
