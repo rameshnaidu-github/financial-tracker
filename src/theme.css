@@ -2803,6 +2803,46 @@ button.mix-bar-head:hover > span {
   }
 }
 
+/* The two wrappers that let a phone lay a ledger row out as two flex lines. Everywhere else
+   they are not boxes at all, so the row's grid sees its five children exactly as before. */
+.transaction-row-head,
+.transaction-row-foot {
+  display: contents;
+}
+
+/*
+ * The order the five parts sit in, stated rather than inherited from the markup.
+ *
+ * The amount moved up next to the merchant in LedgerRow so a phone could put the two on one
+ * line. Because the wrappers are `display: contents`, the laptop's grid auto-places by DOM
+ * order -- so that edit silently moved the amount from the fourth column to the third, and
+ * the ledger on a laptop went from 1732px to 1828px as the columns redistributed. Caught by
+ * the laptop check, which exists for exactly this.
+ *
+ * Saying the order here fixes both layouts at once: the laptop gets its original sequence
+ * back, and on a phone the head holds 1, 2 and 4 while the foot holds 3 and 5, each sorting
+ * correctly inside its own line.
+ */
+.transaction-select {
+  order: 1;
+}
+
+.transaction-primary-cell {
+  order: 2;
+}
+
+.transaction-tag-strip {
+  order: 3;
+}
+
+.transaction-amount-cell {
+  order: 4;
+}
+
+.row-actions {
+  order: 5;
+}
+
 /* ---------- Transaction rows on a phone ---------- */
 
 /* A row stacked merchant, tags, amount, actions runs to 200px, so twelve of them are 2,400px of
@@ -2837,27 +2877,173 @@ button.mix-bar-head:hover > span {
   }
 
   /*
-   * Tags on their own line, then the actions on theirs.
+   * Two lines, and no grid.
    *
-   * Two attempts at folding the third line away, both measured, both reverted:
+   *   what it was, and what it cost      Jio postpaid / Bank transfer        -399
+   *   how it is filed, and what you can do with it    [ICICI salary] [AutoPay]  ...  pencil
    *
-   * 1. Actions as a grid item in the tags' row. They are a flex row, they claimed 197px of a
-   *    309px row, and because that column is sized by content and shared with the amount
-   *    above, the merchant was left 43px -- "Jio postpaid" rendered "Jio ...".
-   * 2. Actions taken out of the flow and floated over the row's bottom-right, with the tags
-   *    reserving 152px to keep clear. The tags still collided with them, "Balance adjustment"
-   *    clipped, and thirteen controls dropped back under the 44px floor.
+   * Three earlier attempts kept the grid and moved pieces around inside it. Each failed the
+   * same way, because a grid column is shared down the whole row:
    *
-   * Both bought 25px a row, 300px on the page, and neither reached the bar this page is held
-   * to anyway. A ledger you can read beats a ledger that is 10% shorter, so the third line
-   * stays until someone restructures the row's markup rather than its grid.
+   * 1. Actions placed in the tags' row, column 3. They are a flex row, asked for 197px of a
+   *    309px row, and column 3 is content-sized and shared with the amount -- so the merchant
+   *    was left 43px and every name clipped.
+   * 2. Actions taken out of the flow and floated over the corner. The tags collided with them
+   *    anyway and thirteen controls fell back under the 44px floor.
+   * 3. Wrapping only the foot. The amount was then the lone occupant of column 3, the spanning
+   *    foot distributed its width into the flexible column instead, and column 3 computed to
+   *    0px -- the amount overflowed it and sat on top of the tags.
+   *
+   * So the grid goes. At this width the row is a column of two flex lines, each sizing its own
+   * contents against nothing but itself, and neither can reach across to starve the other.
    */
+  .ledger-row.transaction-row-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    /* A grid item took the width its track gave it. A flex column takes the width of its
+       widest child's content instead, which here was the tags plus the three buttons -- 451px
+       of a 309px list. Every row overflowed and the Edit pencil was clipped off the right
+       edge, unreachable, while the page reported no sideways scroll because the list hid it.
+       The width is stated now, and the lines inside shrink to fit it. */
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    /* The grid rule above sets `align-items: start`, which was right for grid items and is
+       wrong for a flex column: it stops the two lines being stretched to the row's width, so
+       each shrink-wrapped its content and ran 68-129px past the card, carrying the Edit
+       pencil off the edge where it could not be pressed. */
+    align-items: stretch;
+  }
+
+  .ledger-row.transaction-row-card .transaction-row-head,
+  .ledger-row.transaction-row-card .transaction-row-foot {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .ledger-row.transaction-row-card {
+    padding: 10px 12px;
+  }
+
+  .ledger-row.transaction-row-card .transaction-primary-cell,
   .ledger-row.transaction-row-card .transaction-tag-strip {
-    grid-area: 2 / 1 / 3 / -1;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* One line of tags, trimmed at the end rather than wrapped onto a second. Sharing the line
+     with the actions leaves them narrow, and wrapping cost 11px on every row of the page for a
+     second chip that the first already half-tells you. */
+  .ledger-row.transaction-row-card .transaction-tag-strip {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    padding-bottom: 0;
+    /* A tag is a rounded pill, and a pill cut square at the strip's edge reads as a rendering
+       fault rather than as "there is more here". The last 24px fades instead. */
+    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  }
+
+  .ledger-row.transaction-row-card .transaction-select,
+  .ledger-row.transaction-row-card .transaction-amount-cell,
+  .ledger-row.transaction-row-card .row-actions {
+    flex: 0 0 auto;
+  }
+
+  .ledger-row.transaction-row-card .transaction-amount-cell {
+    text-align: right;
+    white-space: nowrap;
   }
 
   .ledger-row.transaction-row-card .row-actions {
-    grid-area: 3 / 1 / 4 / -1;
+    justify-content: flex-end;
+  }
+
+  /*
+   * Edit loses its word and keeps its 44px.
+   *
+   * With the label it was 93px, and beside a refund button that is 145px of a 283px line --
+   * which left the tags 70px. It is one of twelve identical buttons down a page sitting next
+   * to a pencil; the word earns nothing there, and the accessible name still says "Edit". The
+   * budget cards already do this, so the two lists agree.
+   */
+  .ledger-row.transaction-row-card .row-edit-action {
+    width: 44px;
+    padding-inline: 0;
+    justify-content: center;
+  }
+
+  .ledger-row.transaction-row-card .row-edit-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* ---------- The space between sections, on a phone ---------- */
+/*
+ * 32px between the bands of a page is a laptop's rhythm: at 1440px it is a comfortable beat
+ * between things that already sit side by side. At 375px everything is stacked, so the same
+ * gap is 96px of empty screen on the Overview alone -- more than a sixth of a phone screen
+ * spent on air between four blocks that are each clearly bounded already.
+ */
+@media (max-width: 720px) {
+  .page-grid,
+  /* The Overview sets its own, wider gap further up, at a specificity a bare class cannot
+     reach -- so it is named here too rather than left as the one page that ignored this. */
+  .content-area > .overview-page {
+    gap: 20px;
+  }
+}
+
+/* ---------- The ledger's chrome, on a phone ---------- */
+/*
+ * The page spent 781px before its first transaction: a page header, a panel header with the
+ * search and the filter button stacked, a result line, a totals block with every figure on a
+ * row of its own, and a pagination note. Each is reasonable alone; together they are a screen
+ * of furniture in front of the thing you came to read.
+ */
+@media (max-width: 720px) {
+  /* Search and Filters are one row. They are both "narrow this list" and they were a slab each. */
+  .transactions-page .toolbar.filter-toolbar {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .transactions-page .toolbar.filter-toolbar .search-box {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .transactions-page .toolbar.filter-toolbar .filters-toggle {
+    flex: 0 0 auto;
+  }
+
+  /* The three figures read across, the way they are spoken: out, in, net. */
+  .ledger-totals {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+  }
+
+  .ledger-totals-label {
+    flex: 1 0 100%;
+  }
+
+  .ledger-totals .ledger-total {
+    flex: 0 0 auto;
+  }
+
+  .ledger-totals .ledger-export {
+    margin-inline-start: auto;
   }
 }
 
@@ -2872,7 +3058,9 @@ button.mix-bar-head:hover > span {
  */
 @media (max-width: 720px) {
   .transactions-page > .page-header .primary-action.add-button,
-  .transactions-page > .page-header button.primary-action {
+  .transactions-page > .page-header button.primary-action,
+  /* Importing a spreadsheet is desk work. It stays on a laptop, where the file is. */
+  .transactions-page > .page-header .secondary-action {
     display: none;
   }
 
@@ -3665,11 +3853,21 @@ button.budget-hint-chip:focus-visible {
     gap: 8px;
   }
 
-  .summary-grid.budget-tiles .summary-card {
+  /*
+   * The icon disc goes, on the Overview's lead as well as these tiles.
+   *
+   * It is 42px at the top of every card, above a label that already says the word -- "Cash",
+   * "Card debt", "Available cash". Five cards on the Overview came to 459px with it and 301px
+   * without, which is the difference between the month's figures fitting the first screen and
+   * not.
+   */
+  .summary-grid.budget-tiles .summary-card,
+  .summary-grid.overview-summary .summary-card {
     padding: 10px;
   }
 
-  .summary-grid.budget-tiles .summary-card > span:first-child {
+  .summary-grid.budget-tiles .summary-card > span:first-child,
+  .summary-grid.overview-summary .summary-card > span:first-child {
     display: none;
   }
 

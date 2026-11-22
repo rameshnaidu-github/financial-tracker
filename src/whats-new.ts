@@ -21,6 +21,14 @@ export type NewsEntry = {
 
 export const WHATS_NEW: NewsEntry[] = [
   {
+    date: "2026-11-24",
+    fixed: [
+      "Overview fits a phone. It opens on the month's figures, and Spending mix and Cashflow are folded until you ask for them \u2014 Cashflow was repeating the money in and money out already shown at the top of the same page.",
+      "A transaction in the ledger takes two lines on a phone instead of three. Edit, refund and add-again sit beside the tags rather than on a row of their own.",
+      "The Transactions page no longer stacks Add transaction and Import above the ledger on a phone. Record is in the bar at the bottom, and importing a spreadsheet is something you do at a desk."
+    ]
+  },
+  {
     date: "2026-11-23",
     added: [
       "Record sits in the middle of the bar at the bottom of a phone, so logging a spend is one press from wherever you are instead of a trip to Transactions.",
