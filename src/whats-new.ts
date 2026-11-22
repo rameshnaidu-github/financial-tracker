@@ -21,6 +21,14 @@ export type NewsEntry = {
 
 export const WHATS_NEW: NewsEntry[] = [
   {
+    date: "2026-11-22",
+    fixed: [
+      "Paying a credit card bill that covers an EMI is one entry in the ledger again, not two. The bill still settles the instalment and the card's outstanding still comes down by the whole payment \u2014 the instalment is named on the bill itself rather than listed beside it as a second payment you never made.",
+      "A card bill no longer asks how much of it goes to each EMI. It settles that month's instalment, or whatever is left of it if the EMI is nearly paid off, and shows you the figure.",
+      "The search box is on Transactions, where the transactions are. It used to sit at the top of every screen, where it could not search what was in front of you."
+    ]
+  },
+  {
     date: "2026-11-21",
     added: [
       "A credit card's outstanding can be corrected the same way a bank balance can, from the card's edit popup, for when the app and your statement disagree.",

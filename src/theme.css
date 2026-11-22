@@ -627,8 +627,7 @@ textarea:focus {
  * makes, plus a hairline ring in the same colour. No hue, no halo.
  */
 .control-field:focus-within,
-.search-box:focus-within,
-.topbar-search:focus-within {
+.search-box:focus-within {
   border-color: var(--line-strong);
   box-shadow: 0 0 0 3px var(--track);
 }
@@ -643,8 +642,7 @@ textarea:focus {
  * field type added later is covered by the rule instead of reopening the same defect.
  */
 .control-field :is(input, select, textarea):focus-visible,
-.search-box :is(input, select, textarea):focus-visible,
-.topbar-search :is(input, select, textarea):focus-visible {
+.search-box :is(input, select, textarea):focus-visible {
   outline: none;
 }
 
@@ -3923,43 +3921,6 @@ button.budget-hint-chip:focus-visible {
   background-color: var(--panel-soft);
 }
 
-/* Search, which goes to the ledger with what was typed. */
-.topbar-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  min-height: 46px;
-  width: min(260px, 32vw);
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--panel-soft);
-  color: var(--muted);
-}
-
-.topbar-search:focus-within {
-  /* The border and ring are set once with the other fields, further up. What is left here is
-     the one thing particular to this field: its magnifier and placeholder are muted until you
-     are typing in it. Setting the accent on the border here is what kept the green outline
-     after the shared rule stopped drawing one. */
-  color: var(--text);
-}
-
-.topbar-search input {
-  width: 100%;
-  min-width: 0;
-  padding: 8px 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-}
-
-.topbar-search input:focus {
-  outline: none;
-}
-
 /* The three round controls agree with each other as well: the bell and the theme were rounded
    squares beside a circular avatar, which is a difference that means nothing. */
 .topbar-actions .icon-button {
@@ -4089,19 +4050,7 @@ button.budget-hint-chip:focus-visible {
   line-height: 1.35;
 }
 
-@media (max-width: 1120px) {
-  /* No sidebar at this width, so the shell's own controls carry it; the search gives up its room
-     first because the ledger has a search box of its own. */
-  .topbar-search {
-    width: min(200px, 40vw);
-  }
-}
-
 @media (max-width: 640px) {
-  .topbar-search {
-    display: none;
-  }
-
   /*
    * The bar is a single-column grid at this width, which puts every control on a line of its own
    * and stretches it. The account filter wants that width; the shell's three controls want to

@@ -130,7 +130,7 @@ can now do, and what was wrong and is not any more.
 - `docs/financial-tracker-import-template.xlsx` — the spreadsheet users import from.
 - `docs/PHONE_ACCESS_AND_OPERATIONS.md` — remote access over Tailscale.
 - `src/whats-new.ts` — the shipped release history, in the product's own voice.
-- `tests/qa-smoke.ts` — 110 automated tests covering the business logic.
+- `tests/qa-smoke.ts` — 118 automated tests covering the business logic.
 
 There are **no** customers, testimonials, case studies, press, benchmarks, pricing or usage
 figures, and none may be invented. Any screenshot used anywhere must either be labelled as demo
