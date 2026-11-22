@@ -2847,7 +2847,17 @@ async function computeNetWorthNow() {
   };
 }
 
-export async function getWealthSummary(): Promise<WealthSummary> {
+/**
+ * @param accountId Narrows the figures that can honestly be narrowed.
+ *
+ * Cashflow and the runway are a month's movement, so one account has its own answer and the
+ * Overview's own tiles already show it -- leaving them unscoped put "Outflow ₹74,705" in a tile
+ * and "Outflow ₹2,34,747" in the panel below it, on one screen, for one filter. Net worth and
+ * the allocation ring are a household's position: filtering those to a single bank would not
+ * narrow a figure, it would answer a different question. They stay whole, and the page says so
+ * in their headers rather than letting the reader assume the filter reached them.
+ */
+export async function getWealthSummary(accountId?: string): Promise<WealthSummary> {
   const month = currentMonth();
   const netWorth = await computeNetWorthNow();
 
@@ -2911,8 +2921,8 @@ export async function getWealthSummary(): Promise<WealthSummary> {
     { key: "other", label: "Other", color: "#64748b", valuePaise: byType(["other"]) }
   ].filter((segment) => segment.valuePaise > 0);
 
-  // Cashflow this month.
-  const monthReport = await getMonthlyReport(undefined, month);
+  // Cashflow this month, for whichever account the page is filtered to.
+  const monthReport = await getMonthlyReport(accountId, month);
   const incomePaise =monthReport.totalInflowPaise;
   const expensePaise =monthReport.totalOutflowPaise;
   const savedPaise = incomePaise - expensePaise;
@@ -2922,14 +2932,28 @@ export async function getWealthSummary(): Promise<WealthSummary> {
   // Promise.all, not `map` with an await inside: three months read at once rather than in a chain.
   const trailingExpenses = await Promise.all(
     [0, 1, 2].map(async (back) =>
-      (await getMonthlyReport(undefined, addMonths(month, -back))).totalOutflowPaise
+      (await getMonthlyReport(accountId, addMonths(month, -back))).totalOutflowPaise
     )
   );
   const avgExpense = trailingExpenses.reduce((sum, value) => sum + value, 0) / trailingExpenses.length;
   /* Banks only, which is what liquidPaise now means. An emergency is rent, a card bill or a
      medical bill, and a food card pays none of them -- counting it here made the runway longer
      than the household actually has. */
-  const runwayMonths = avgExpense > 0 ? Math.round((netWorth.liquidPaise / avgExpense) * 10) / 10 : null;
+  /*
+   * Both halves of the ratio describe the same thing or neither does.
+   *
+   * The denominator above narrows with the filter, so the numerator has to as well: household
+   * cash divided by one account's spending is not a number about anything. Filtered to a card,
+   * there is no cash to run down and the runway is withheld rather than invented.
+   */
+  const runwayCashPaise = accountId
+    ? (await listAccounts(true))
+        .filter((account) => account.id === accountId && (account.type === "bank" || account.type === "food_card"))
+        .reduce((sum, account) => sum + account.balancePaise, 0)
+    : netWorth.liquidPaise;
+  const runwayApplies = !accountId || runwayCashPaise > 0;
+  const runwayMonths =
+    avgExpense > 0 && runwayApplies ? Math.round((runwayCashPaise / avgExpense) * 10) / 10 : null;
 
   return {
     netWorth,

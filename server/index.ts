@@ -541,7 +541,10 @@ app.get("/api/reports/monthly", async (request) => {
   );
 });
 
-app.get("/api/wealth", async () => getWealthSummary());
+app.get("/api/wealth", async (request) => {
+  const accountId = (request.query as { accountId?: string } | undefined)?.accountId?.trim();
+  return getWealthSummary(accountId || undefined);
+});
 
 app.get("/api/upcoming", async (request) => {
   // The Overview asks for a week; anything else falls back to the fortnight this used to serve.

@@ -122,7 +122,8 @@ export const Api = {
     simpleMode?: boolean;
   }) =>
     api<Record<string, string>>("/api/settings", { method: "PATCH", body }),
-  wealth: () => api<WealthSummary>("/api/wealth"),
+  wealth: (accountId?: string) =>
+    api<WealthSummary>(`/api/wealth${accountId ? `?${new URLSearchParams({ accountId })}` : ""}`),
   upcoming: (windowDays = 7) =>
     api<UpcomingPayments>(`/api/upcoming?${new URLSearchParams({ windowDays: String(windowDays) })}`),
   overview: (accountId?: string, month?: string) => {
