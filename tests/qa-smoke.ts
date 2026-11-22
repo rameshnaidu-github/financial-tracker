@@ -1930,10 +1930,21 @@ test("computes net worth, asset allocation, cashflow and runway", async () => {
   });
 
   const before = await services.getWealthSummary();
-  // Net worth = liquid + investments − liabilities (no loans/cards here).
+  /*
+   * Net worth = liquid + restricted + investments − liabilities (no loans/cards here).
+   *
+   * This asserted `liquid + investments − liabilities` until a food card's balance stopped
+   * being counted as liquid. It is still the household's money and still part of what they are
+   * worth, so it moved into its own term rather than out of the total -- and this identity has
+   * to name it, or it would pass only while nobody owns a food card.
+   */
   assert(
-    before.netWorth.netWorthPaise === before.netWorth.liquidPaise + before.netWorth.investmentsPaise - before.netWorth.liabilitiesPaise,
-    "Net worth must equal liquid + investments − liabilities."
+    before.netWorth.netWorthPaise ===
+      before.netWorth.liquidPaise +
+        before.netWorth.restrictedPaise +
+        before.netWorth.investmentsPaise -
+        before.netWorth.liabilitiesPaise,
+    "Net worth must equal liquid + restricted + investments − liabilities."
   );
   assert(before.netWorth.investmentsPaise >= 2_10_000_00, "Investments should include both holdings' current value.");
   const equity = before.allocation.find((segment) => segment.key === "equity");
@@ -3090,6 +3101,82 @@ test("a request declares who it is for, and its transaction commits, rolls back 
   } finally {
     delete process.env.FINANCE_REQUEST_TX;
   }
+});
+
+test("a food card is money you have, not money you can spend on a bill", async () => {
+  /*
+   * The figure this page exists to be trusted on.
+   *
+   * Available cash, Liquid cash and the emergency runway all read one number, and that number
+   * used to include a food card -- which buys lunch and cannot pay rent, a card bill or an EMI.
+   * The household still owns it, so it stays in net worth; it just stops being counted as cash
+   * they could spend on anything, and stops dividing the runway.
+   */
+  const bank = await services.createAccount({
+    name: `Cash split bank ${randomUUID().slice(0, 6)}`,
+    type: "bank",
+    startingBalancePaise: 1_00_000_00
+  });
+  const food = await services.createAccount({
+    name: `Cash split meal card ${randomUUID().slice(0, 6)}`,
+    type: "food_card",
+    startingBalancePaise: 5_000_00
+  });
+
+  const month = todayISO().slice(0, 7);
+  const before = (await services.getOverview(undefined, month)).summary;
+  const wealthBefore = await services.getWealthSummary();
+
+  // The two figures are reported apart, and the food card is in neither the cash nor the liquid.
+  assert(
+    before.availableCashPaise >= 1_00_000_00,
+    "Available cash should carry the bank balance."
+  );
+  assert(
+    before.foodCardCashPaise >= 5_000_00,
+    "The food card should be reported, not discarded."
+  );
+  const cashOnly = (await services.listAccounts())
+    .filter((a) => !a.isArchived && a.type === "food_card")
+    .reduce((sum, a) => sum + a.balancePaise, 0);
+  assert(
+    before.availableCashPaise + cashOnly !== before.availableCashPaise || cashOnly === 0,
+    "Sanity: there is a food-card balance to exclude, or this proves nothing."
+  );
+  assert(cashOnly > 0, "This test needs a food-card balance to be meaningful.");
+  assert(
+    !String(before.availableCashPaise).includes("NaN") && before.availableCashPaise % 1 === 0,
+    "Available cash must stay an integer number of paise."
+  );
+  // The decisive one: spendable cash must not contain the food card.
+  const banksOnly = (await services.listAccounts())
+    .filter((a) => !a.isArchived && a.type === "bank")
+    .reduce((sum, a) => sum + a.balancePaise, 0);
+  assert(
+    before.availableCashPaise === banksOnly,
+    `Available cash must be the banks alone: ${before.availableCashPaise} against ${banksOnly}.`
+  );
+  assert(
+    wealthBefore.netWorth.liquidPaise === banksOnly,
+    "Liquid cash must be the banks alone too."
+  );
+  assert(
+    wealthBefore.netWorth.restrictedPaise >= 5_000_00,
+    "The food card must be carried as restricted rather than dropped."
+  );
+
+  // Still counted in what the household is worth: adding to the food card moves net worth by
+  // exactly that much, so nothing was lost by taking it out of "liquid".
+  const worthBefore = wealthBefore.netWorth.netWorthPaise;
+  await services.updateAccount(food.id, { startingBalancePaise: 7_000_00 });
+  const worthAfter = (await services.getWealthSummary()).netWorth.netWorthPaise;
+  assert(
+    worthAfter - worthBefore === 2_000_00,
+    `Food-card money must still count toward net worth: moved ${worthAfter - worthBefore}.`
+  );
+
+  await services.deleteAccount(food.id);
+  await services.deleteAccount(bank.id);
 });
 
 test("backups follow a custom database and keep daily history", async () => {

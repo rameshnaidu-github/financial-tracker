@@ -4345,3 +4345,177 @@ button.budget-hint-chip:focus-visible {
     animation: fade-in var(--dur-fast) var(--ease-out) both;
   }
 }
+
+/* ---------- A bar measured against a limit says how close it is ---------- */
+/*
+ * Three steps, not a gradient: a card is comfortable, getting close, or about to be declined,
+ * and the reader needs to tell those apart at a glance rather than judge a hue. The palette
+ * colour still belongs to bars with no limit, where nearness means nothing and the colour is
+ * only there to tie the bar to its legend.
+ */
+.mix-bar-fill.is-easy {
+  background: var(--accent);
+}
+
+.mix-bar-fill.is-high {
+  background: var(--warning, #d97706);
+}
+
+.mix-bar-fill.is-critical {
+  background: var(--danger);
+}
+
+/* ---------- The Overview, ordered for the hand it is held in ---------- */
+/*
+ * On a wide screen the page reads top to bottom as written: this month, then wealth, then the
+ * cards. On a phone that order is the inverse of what the person is there for -- PRODUCT.md
+ * puts capture and the can-I-afford-this check on the phone and the analysis at a desk, and the
+ * card facts were arriving four screens down, after two panels of sit-down work.
+ *
+ * So the phone promotes the cards above the wealth, and the wealth band folds itself shut. Both
+ * are still there, in the same markup, in the same order for a screen reader until the flex
+ * order applies -- nothing is hidden, and nothing is duplicated.
+ */
+@media (max-width: 1120px) {
+  .overview-page {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* The headline figures stay first. Promoting the cards with order:-1 put them ahead of every
+     sibling, the lead row included, so the phone opened on a chart and the cash figure arrived
+     below it -- and this product's own account of the job puts available cash before card
+     utilisation. The cards move ahead of the wealth, not ahead of the answer. */
+  .overview-page > .overview-lead {
+    order: -2;
+  }
+
+  .overview-page > .overview-band:has(#overview-band-cards) {
+    order: -1;
+  }
+
+  /* The folded band's own header becomes the control that opens it. */
+  .overview-band-fold > summary {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-height: 44px;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .overview-band-fold > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .overview-band-fold > summary::after {
+    content: "";
+    width: 0;
+    height: 0;
+    margin-left: auto;
+    border-top: 5px solid currentColor;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    transition: transform 140ms ease;
+  }
+
+  .overview-band-fold[open] > summary::after {
+    transform: rotate(180deg);
+  }
+
+  .overview-band-fold > summary h2 {
+    margin: 0;
+  }
+
+  .overview-band-fold[open] > .overview-band-body {
+    margin-top: 12px;
+  }
+}
+
+@media (max-width: 1120px) and (prefers-reduced-motion: reduce) {
+  .overview-band-fold > summary::after {
+    transition: none;
+  }
+}
+
+/* ---------- Money figures need the room money figures need ---------- */
+/*
+ * Four columns of a 309px panel is 68px a column, and "+₹1,35,253" is 94px wide with
+ * white-space: nowrap and overflow visible. The boxes did not overlap, so a layout check that
+ * measured boxes said this was fine; the glyphs overlapped, because each figure spilled up to
+ * 26px into a 12px gap. On a page of money, two amounts touching is both unreadable and a
+ * straight loss of confidence in the numbers.
+ *
+ * Two columns rather than a smaller type size: the figures are the content, and shrinking them
+ * to fit a column count chosen for a desktop is the wrong thing to give up.
+ *
+ * net-worth-breakdown has the same construction -- a fixed column count plus nowrap -- and
+ * currently reflows only because it has one fewer column and shorter labels. It gets the same
+ * floor so it does not become this bug the first time a household's net worth reaches a crore.
+ */
+@media (max-width: 720px) {
+  .cashflow-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 12px;
+  }
+
+  .net-worth-breakdown {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 12px;
+  }
+}
+
+/* ---------- A panel that could not load says so ---------- */
+/*
+ * Deliberately unlike an empty state. An empty state is grey and quiet because it describes a
+ * situation the reader created; this describes a failure they did not, and carries the one
+ * control that can clear it.
+ */
+.panel-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  padding: 14px;
+}
+
+.panel-error > svg {
+  flex: none;
+  color: var(--danger);
+}
+
+.panel-error > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.panel-error strong {
+  font-size: 0.92rem;
+  font-weight: 650;
+}
+
+.panel-error small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.panel-error button {
+  flex: none;
+}
+
+@media (max-width: 720px) {
+  /* The reason can be a sentence; at this width it needs the row to itself. */
+  .panel-error {
+    flex-wrap: wrap;
+  }
+
+  .panel-error button {
+    width: 100%;
+    min-height: 44px;
+  }
+}
