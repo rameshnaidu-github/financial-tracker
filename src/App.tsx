@@ -130,7 +130,28 @@ import {
 // System Type that ties a refund to the purchase it came from (see shared/finance.ts).
 const REFUND_TYPE_ID = "type_refund";
 
-type Page = "overview" | "transactions" | "reports" | "budgets" | "accounts" | "loans" | "investments" | "cardEmis" | "vacations" | "subscriptions" | "categories" | "whatsNew" | "faq" | "profile";
+/*
+ * Which sections exist, which simple mode keeps and what the phone bar carries all live in
+ * src/navigation.ts, which imports no React so the suite can read those answers instead of a
+ * person reading them off a screen. Re-exported here because callers already import them from
+ * this module.
+ */
+export {
+  SIMPLE_MODE_PAGES,
+  MOBILE_PRIMARY_PAGES,
+  simpleModeFromSettings,
+  pageAllowedIn,
+  mobileLabelFor
+} from "./navigation";
+import {
+  SIMPLE_MODE_PAGES,
+  navigationPagesFor,
+  pageAllowedIn,
+  simpleModeFromSettings,
+  mobileLabelFor,
+  type Page
+} from "./navigation";
+export type { Page };
 type Theme = "light" | "dark";
 type DonutSegment = {
   id: string;
@@ -452,65 +473,63 @@ export function MoreSheet({
 /**
  * The phone bar.
  *
- * `more` holding exactly one section is shown as that section rather than as a More button: in
- * simple mode the only thing not on the bar is Profile, and hiding one row behind a sheet asks
- * for two presses where one would do.
+ * Four sections and, in the middle, the one thing this application exists to let you do in a
+ * hurry: record what you just spent. The product's own account of itself puts that first --
+ * "quick capture, usually on a phone, soon after the transaction" -- and until now it took two
+ * presses and a hunt: go to Transactions, find Add transaction up in the page header.
+ *
+ * The middle is not decoration. Holding a phone one-handed, the centre of the bar is where the
+ * thumb already rests; the corners are the reach. The action you do most often gets the place
+ * you have to move least to touch.
+ *
+ * What is *not* here: Profile, which the avatar in the header opens, and More, which moved to
+ * the header too. Both were competing for the slot that the record button now has, and both
+ * are things you press occasionally rather than daily. The bar is therefore the same five
+ * buttons whether simple mode is on or off, which is one less thing to re-learn.
  */
 export function MobileNav({
   primary,
-  more,
   activePage,
   moreOpen,
-  onToggleMore,
-  onNavigate
+  onNavigate,
+  onRecord
 }: {
   primary: Page[];
-  more: Page[];
   activePage: Page;
   moreOpen: boolean;
-  onToggleMore: () => void;
   onNavigate: (page: Page) => void;
+  onRecord: () => void;
 }) {
-  const soleExtra = more.length === 1 ? more[0] : null;
-  const SoleIcon = soleExtra ? navItems.find((item) => item.page === soleExtra)?.icon : null;
+  const half = Math.ceil(primary.length / 2);
+  const renderPage = (page: Page) => {
+    const item = navItems.find((candidate) => candidate.page === page);
+    if (!item) return null;
+    const Icon = item.icon;
+    return (
+      <button
+        key={page}
+        className={activePage === page && !moreOpen ? "active" : ""}
+        onClick={() => onNavigate(page)}
+      >
+        <Icon size={19} />
+        <span>{mobileLabelFor(page)}</span>
+      </button>
+    );
+  };
+
   return (
     <nav className="mobile-nav" aria-label="Main">
-      {primary.map((page) => {
-        const item = navItems.find((candidate) => candidate.page === page);
-        if (!item) return null;
-        const Icon = item.icon;
-        return (
-          <button
-            key={page}
-            className={activePage === page && !moreOpen ? "active" : ""}
-            onClick={() => onNavigate(page)}
-          >
-            <Icon size={19} />
-            <span>{mobileLabels[page]}</span>
-          </button>
-        );
-      })}
-      {soleExtra && SoleIcon ? (
-        <button
-          key={soleExtra}
-          className={activePage === soleExtra ? "active" : ""}
-          onClick={() => onNavigate(soleExtra)}
-        >
-          <SoleIcon size={19} />
-          <span>{mobileLabels[soleExtra]}</span>
-        </button>
-      ) : (
-        <button
-          type="button"
-          className={moreOpen || !primary.includes(activePage) ? "active" : ""}
-          aria-expanded={moreOpen}
-          aria-controls="mobile-more-sheet"
-          onClick={onToggleMore}
-        >
-          <LayoutGrid size={19} />
-          <span>{primary.includes(activePage) ? "More" : mobileLabels[activePage]}</span>
-        </button>
-      )}
+      {primary.slice(0, half).map(renderPage)}
+      <button
+        type="button"
+        className="mobile-nav-record"
+        onClick={onRecord}
+        aria-label="Record a transaction"
+      >
+        <Plus size={22} weight="bold" />
+        <span>Record</span>
+      </button>
+      {primary.slice(half).map(renderPage)}
     </nav>
   );
 }
@@ -642,40 +661,12 @@ function shouldPlayIntroNow(): boolean {
   }
 }
 
-// The phone bar keeps the four daily destinations; everything else lives under "More".
-const MOBILE_PRIMARY_PAGES: Page[] = ["overview", "transactions", "reports"];
-
-/**
- * Simple mode: the five sections the application is cut down to when the switch in Profile is on.
- *
- * Profile is not listed here and is added by `navigationFor` regardless, because the switch lives
- * on it: a mode that hid Profile could not be turned off.
- */
-export const SIMPLE_MODE_PAGES: Page[] = ["overview", "transactions", "accounts", "reports", "investments"];
-
 /*
  * Simple mode needs no exception any more. Recording used to live on a Weekly Entry page that was
  * not one of the five sections, so the mode had to keep it reachable through a Record button.
  * The form is now a dialog on Transactions, which is one of the five, so the mode is exactly its
  * list and nothing beside it.
  */
-/**
- * Is simple mode on, according to what the server stored?
- *
- * "1" and nothing else. A value the application did not write -- an old row, a hand-edited
- * setting, a missing one -- means off, which is the state that hides nothing from anybody.
- */
-export function simpleModeFromSettings(settings: Record<string, string> | undefined): boolean {
-  return settings?.simple_mode === "1";
-}
-
-export function pageAllowedIn(page: Page, simpleMode: boolean): boolean {
-  if (!simpleMode) {
-    return true;
-  }
-  return SIMPLE_MODE_PAGES.includes(page) || page === "profile";
-}
-
 /**
  * What each navigation offers in this mode.
  *
@@ -685,38 +676,16 @@ export function pageAllowedIn(page: Page, simpleMode: boolean): boolean {
  * shows it directly instead -- a sheet that opens on one row is a door to a cupboard.
  */
 export function navigationFor(simpleMode: boolean) {
-  const items = simpleMode
-    ? navItems.filter((item) => SIMPLE_MODE_PAGES.includes(item.page) || item.page === "profile")
-    : navItems;
-  const primary = simpleMode ? SIMPLE_MODE_PAGES : MOBILE_PRIMARY_PAGES;
+  const pages = navigationPagesFor(simpleMode);
   return {
-    items,
-    primary,
-    more: items.filter((item) => !primary.includes(item.page)).map((item) => item.page)
+    items: pages.items
+      .map((page) => navItems.find((item) => item.page === page))
+      .filter((item): item is (typeof navItems)[number] => Boolean(item)),
+    primary: pages.primary,
+    more: pages.more
   };
 }
 
-const mobileLabels: Record<Page, string> = {
-  overview: "Home",
-  transactions: "Txns",
-  reports: "Reports",
-  budgets: "Bdgt",
-  accounts: "Accts",
-  loans: "Loan",
-  investments: "Invest",
-  cardEmis: "EMI",
-  vacations: "Trips",
-  subscriptions: "Auto",
-  categories: "Cats",
-  whatsNew: "New",
-  faq: "FAQ",
-  profile: "Me"
-};
-
-/** The short name the phone bar gives a section. */
-export function mobileLabelFor(page: Page): string {
-  return mobileLabels[page];
-}
 
 const pagePaths: Record<Page, string> = {
   overview: "/overview",
@@ -917,6 +886,15 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<{ message: string; action?: NoticeAction } | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
+  /*
+   * Recording from the bar.
+   *
+   * A counter rather than a boolean, and a counter rather than a URL flag. The form belongs to
+   * the Transactions page and is opened by its own state; pressing Record while already on
+   * Transactions has to open it again, which a boolean that is already true cannot say and a
+   * `?add=1` URL cannot either -- that page reads its filters once, when it mounts.
+   */
+  const [recordNonce, setRecordNonce] = useState(0);
   const contentRef = useRef<HTMLElement>(null);
   useScrollReveal(contentRef, activePage);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -1001,6 +979,12 @@ export default function App() {
     activePageRef.current = page;
     withPageTransition(() => setActivePage(page), direction);
   }, []);
+
+  const requestRecord = useCallback(() => {
+    setMoreOpen(false);
+    navigate("transactions");
+    setRecordNonce((n) => n + 1);
+  }, [navigate]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1388,6 +1372,7 @@ export default function App() {
                       showNotice={showNotice}
                       requestConfirm={requestConfirm}
                       onAccountSelect={setSelectedAccountId}
+                      recordNonce={recordNonce}
                     />
         );
       case "reports":
@@ -1575,6 +1560,24 @@ export default function App() {
                 answer it, so the field lives on that page beside the filters it works with.
                 A copy of it in the shell was a second way in to the same box -- and on every
                 other page it was a field that could not search what was in front of you. */}
+            {/* The rest of the sections, on a phone. This used to be the bar's fifth button,
+                and the bar's fifth button is now Record -- the thing you press daily, not the
+                one you press when you go looking for Vacations. In simple mode there is no
+                "rest", so nothing renders. Hidden above phone width by the stylesheet: a
+                laptop has the sidebar. */}
+            {navigationModel.more.length > 1 && (
+              <button
+                type="button"
+                className="icon-button topbar-more"
+                aria-expanded={moreOpen}
+                aria-controls="mobile-more-sheet"
+                aria-label={moreOpen ? "Close the list of other sections" : "Other sections"}
+                onClick={() => setMoreOpen((open) => !open)}
+              >
+                <LayoutGrid size={17} />
+              </button>
+            )}
+
             <AttentionMenu items={attention} onGo={(page) => navigate(page)} />
 
             <button
@@ -1637,10 +1640,9 @@ export default function App() {
 
       <MobileNav
         primary={navigationModel.primary}
-        more={navigationModel.more}
         activePage={activePage}
         moreOpen={moreOpen}
-        onToggleMore={() => setMoreOpen((open) => !open)}
+        onRecord={requestRecord}
         onNavigate={(page) => {
           setMoreOpen(false);
           navigate(page);
@@ -1959,7 +1961,14 @@ function OverviewPage({
 
       <OverviewBand title="This month" detail={formatMonth(overview.month)}>
         <div className="two-column overview-band-pair">
-          <Panel title="Spending mix" action={<button onClick={() => onNavigate("reports")}>Open reports</button>}>
+          {/* Folded on a phone: "where did it go" is a sit-down question, and open it was a
+              third of the page standing between the month's figures and the card balances you
+              check at a till. */}
+          <Panel
+            title="Spending mix"
+            foldOnPhone
+            action={<button onClick={() => onNavigate("reports")}>Open reports</button>}
+          >
             {spendingSegments.length === 0 || overview.summary.spendingPaise <= 0 ? (
               <EmptyState text="No category spending yet this month." />
             ) : (
@@ -2915,7 +2924,8 @@ function TransactionsPage({
   refreshKey,
   showNotice,
   requestConfirm,
-  onAccountSelect
+  onAccountSelect,
+  recordNonce
 }: {
   selectedAccountId: string;
   accounts: Account[];
@@ -2930,6 +2940,8 @@ function TransactionsPage({
   showNotice: (message: string, options?: NoticeOptions) => void;
   requestConfirm: (request: ConfirmRequest) => void;
   onAccountSelect: (accountId: string) => void;
+  /** Bumped by the Record button in the phone bar; each bump opens the form. */
+  recordNonce: number;
 }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   // Recording and importing both happen from here now, each in its own dialog.
@@ -2955,6 +2967,11 @@ function TransactionsPage({
   }, [week.weekEnd, week.weekStart]);
   // A drill-down (e.g. clicking "Groceries" in Reports) opens this page pre-filtered via the URL.
   const [initialFilters] = useState(() => new URLSearchParams(window.location.search));
+  /* Record, pressed in the phone bar. The first render carries nonce 0 and opens nothing; every
+     bump after that is a press, including one made while already on this page. */
+  useEffect(() => {
+    if (recordNonce > 0) setAdding(true);
+  }, [recordNonce]);
   const [search, setSearch] = useState(() => initialFilters.get("search") ?? "");
   const [typeId, setTypeId] = useState(() => initialFilters.get("typeId") ?? "");
   const [subcategoryId, setSubcategoryId] = useState(() => initialFilters.get("subcategoryId") ?? "");
@@ -5624,9 +5641,12 @@ export function BudgetLineCard({
         <span>{budgetCardRate(line, daysLeft)}</span>
       </div>
 
-      <button type="button" className="budget-card-edit" onClick={onStartEdit}>
+      {/* The word is wrapped so a phone can hide it and keep the button square -- eight
+          identical pencils down a page do not each need telling what they are. It stays in the
+          accessible name either way. */}
+      <button type="button" className="budget-card-edit" onClick={onStartEdit} aria-label="Edit">
         <Pencil size={15} />
-        Edit
+        <span className="budget-card-edit-text">Edit</span>
       </button>
     </article>
   );
@@ -5835,9 +5855,12 @@ export function AccountCard({
         </>
       )}
 
-      <button type="button" className="budget-card-edit" onClick={onStartEdit}>
+      {/* The word is wrapped so a phone can hide it and keep the button square -- eight
+          identical pencils down a page do not each need telling what they are. It stays in the
+          accessible name either way. */}
+      <button type="button" className="budget-card-edit" onClick={onStartEdit} aria-label="Edit">
         <Pencil size={15} />
-        Edit
+        <span className="budget-card-edit-text">Edit</span>
       </button>
     </article>
   );
@@ -10125,6 +10148,7 @@ function Panel({
   title,
   action,
   scopeNote,
+  foldOnPhone = false,
   children
 }: {
   title: string;
@@ -10139,15 +10163,43 @@ function Panel({
    * admits it in its own header.
    */
   scopeNote?: string;
+  /**
+   * Shut on a phone until you ask for it.
+   *
+   * For a panel that answers "where did it all go" rather than "can I afford this". Measured
+   * at 375px, Spending mix alone was 743px of a 2439px Overview -- a third of the page, and
+   * three screens of scrolling before Cards, which is the thing you actually check at a till.
+   * Folded it costs 44px and still says what it is, and one press opens it.
+   *
+   * Desktop is untouched: there is room for everything at once there, and the whole point of
+   * a dashboard on a laptop is seeing it at once.
+   */
+  foldOnPhone?: boolean;
   children: React.ReactNode;
 }) {
+  const phone = usePhoneWidth();
+  const header = (
+    <>
+      <h2>{title}</h2>
+      {scopeNote && <span className="panel-scope">{scopeNote}</span>}
+      {action && <div className="panel-action">{action}</div>}
+    </>
+  );
+
+  if (foldOnPhone && phone) {
+    return (
+      <section className="panel is-foldable">
+        <details className="panel-fold">
+          <summary className="panel-header">{header}</summary>
+          <div className="panel-fold-body">{children}</div>
+        </details>
+      </section>
+    );
+  }
+
   return (
     <section className="panel">
-      <div className="panel-header">
-        <h2>{title}</h2>
-        {scopeNote && <span className="panel-scope">{scopeNote}</span>}
-        {action && <div className="panel-action">{action}</div>}
-      </div>
+      <div className="panel-header">{header}</div>
       {children}
     </section>
   );

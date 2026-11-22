@@ -2836,12 +2836,52 @@ button.mix-bar-head:hover > span {
     white-space: nowrap;
   }
 
+  /*
+   * Tags on their own line, then the actions on theirs.
+   *
+   * Two attempts at folding the third line away, both measured, both reverted:
+   *
+   * 1. Actions as a grid item in the tags' row. They are a flex row, they claimed 197px of a
+   *    309px row, and because that column is sized by content and shared with the amount
+   *    above, the merchant was left 43px -- "Jio postpaid" rendered "Jio ...".
+   * 2. Actions taken out of the flow and floated over the row's bottom-right, with the tags
+   *    reserving 152px to keep clear. The tags still collided with them, "Balance adjustment"
+   *    clipped, and thirteen controls dropped back under the 44px floor.
+   *
+   * Both bought 25px a row, 300px on the page, and neither reached the bar this page is held
+   * to anyway. A ledger you can read beats a ledger that is 10% shorter, so the third line
+   * stays until someone restructures the row's markup rather than its grid.
+   */
   .ledger-row.transaction-row-card .transaction-tag-strip {
     grid-area: 2 / 1 / 3 / -1;
   }
 
   .ledger-row.transaction-row-card .row-actions {
     grid-area: 3 / 1 / 4 / -1;
+  }
+}
+
+/* ---------- The ledger's own header, on a phone ---------- */
+/*
+ * Add transaction goes. The bar at the bottom has Record in the middle of it, which opens this
+ * same form from anywhere, and two full-width buttons stacked above the ledger were 148px of
+ * the 679px this page spent before its first row.
+ *
+ * Import stays but stops being a slab: importing a spreadsheet is desk work that happens to be
+ * reachable here, not something to offer at thumb height above every ledger.
+ */
+@media (max-width: 720px) {
+  .transactions-page > .page-header .primary-action.add-button,
+  .transactions-page > .page-header button.primary-action {
+    display: none;
+  }
+
+  .transactions-page > .page-header {
+    gap: 8px;
+  }
+
+  .transactions-page > .page-header .secondary-action {
+    width: max-content;
   }
 }
 
@@ -3610,9 +3650,147 @@ button.budget-hint-chip:focus-visible {
 }
 
 @media (max-width: 720px) {
-  .summary-grid.budget-tiles,
+  /*
+   * The four tiles go two-up.
+   *
+   * They were one per row, which is defensible on its own and expensive together: measured at
+   * 375px each tile is 141px, so the set came to 594px -- three quarters of a screen of summary
+   * before a single budget line on Budget Planner, and before a single account on Accounts,
+   * which share this grid. Two-up they cost about half that. The figures are already written in
+   * lakh shorthand, so they fit a half-width tile; it is the icon disc that has to give way,
+   * and it is decoration beside a tile that already says "Cash" in words.
+   */
+  .summary-grid.budget-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .summary-grid.budget-tiles .summary-card {
+    padding: 10px;
+  }
+
+  .summary-grid.budget-tiles .summary-card > span:first-child {
+    display: none;
+  }
+
+  /* A budget line needs the whole width: it carries a bar, a figure and what is left of it. */
   .budget-grid {
     grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  /*
+   * A budget line, folded into three rows instead of five.
+   *
+   * Measured at 208px a card, and there are eight of them: 1,664px, well over two screens of
+   * budget. Two rows of that were spent badly -- Edit sat alone on a row of its own, 44px plus
+   * a 10px gap, and the two small footnotes sat alone on another. Neither needs a line to
+   * itself.
+   *
+   *   row 1   name and what it costs a month        status        Edit
+   *   row 2   what is left, big                     spent, a day
+   *   row 3   the bar
+   *
+   * Edit keeps its 44px and loses its word: it is one of eight identical buttons down a page,
+   * and the pencil says it. The label stays for a screen reader.
+   */
+  .budget-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 12px 12px 10px;
+  }
+
+  .budget-card-head {
+    grid-area: 1 / 1 / 2 / 2;
+    min-width: 0;
+  }
+
+  .budget-card-edit {
+    grid-area: 1 / 2 / 2 / 3;
+    align-self: center;
+    width: 44px;
+    padding-inline: 0;
+    justify-content: center;
+  }
+
+  .budget-card-edit .budget-card-edit-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .budget-card-figure {
+    grid-area: 2 / 1 / 3 / 2;
+    align-self: end;
+    margin: 0;
+  }
+
+  .budget-card-foot {
+    grid-area: 2 / 2 / 3 / 3;
+    align-self: end;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .budget-bar {
+    grid-area: 3 / 1 / 4 / 3;
+  }
+
+  /*
+   * The month picker is a picker, not a stack.
+   *
+   * Two fields, each with its word set above its value: "Month" over November, "Year" over
+   * 2026. On a phone the words are the one part nobody needs -- a list of months is a month
+   * and a list of years is a year -- and dropping them takes each field from 58px to 44. The
+   * two selects then share the row evenly, which also fixes the year: narrowed to fit beside
+   * the month it had come out 40px wide, under the floor everything else on this page clears.
+   */
+  .budget-month-picker {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+  }
+
+  /*
+   * Each field takes the room its own words need, rather than half the row each.
+   *
+   * Splitting the row evenly gave both 63px and truncated "November" to "Nove..."; weighting
+   * the month instead then truncated "2026" to "20...". Both were me dividing a row that was
+   * never the full width to begin with. A native select already sizes to its widest option,
+   * so the honest fix is to stop dividing and let them be as wide as their content.
+   */
+  .budget-month-picker .control-field {
+    display: flex;
+    flex: 0 1 auto;
+    align-items: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding-block: 0;
+    margin: 0;
+  }
+
+  .budget-month-picker select {
+    /* `auto`, not 0: a select shrunk below its content truncates its own text silently, and
+       its scrollWidth does not grow when it does, so no clipping check catches it. */
+    min-width: auto;
+  }
+
+
+  .budget-month-picker .control-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .page-header-actions {
@@ -3623,6 +3801,7 @@ button.budget-hint-chip:focus-visible {
     flex: 1 1 auto;
     justify-content: center;
   }
+
 }
 
 /* The reference tints each tile by what it means -- green on what is planned and left, amber on
@@ -3927,6 +4106,11 @@ button.budget-hint-chip:focus-visible {
   border-radius: 999px;
 }
 
+/* The door to the other sections, which exists only where there is no sidebar to hold them. */
+.topbar-more {
+  display: none;
+}
+
 .topbar-person {
   display: grid;
   place-items: center;
@@ -4050,22 +4234,91 @@ button.budget-hint-chip:focus-visible {
   line-height: 1.35;
 }
 
-@media (max-width: 640px) {
-  /*
-   * The bar is a single-column grid at this width, which puts every control on a line of its own
-   * and stretches it. The account filter wants that width; the shell's three controls want to
-   * sit together in a row under it, each its own size.
-   */
+/* ---------- The header, on a phone ---------- */
+/*
+ * One row, and a short one.
+ *
+ * It used to be three: the page's name set at display size, the account filter stretched across
+ * its own line beneath it, then three 36px circles pushed to the right. Measured on the built
+ * app at 375px that came to 156px on Overview and 128px on Transactions -- a fifth of the
+ * screen spent on furniture before a single figure, on the device where the whole point is to
+ * see a figure fast.
+ *
+ * What goes:
+ *
+ * - **The page's name.** The bar at the bottom says where you are, and three of the four
+ *   sections print their own heading anyway. A phone does not need to be told twice.
+ * - **The theme switch.** The same switch is in Profile under Dark theme, and turning the
+ *   lights on and off is not something you do often enough to spend a permanent slot on.
+ *
+ * What stays is the scope you are looking at, whether anything needs attention, and the way to
+ * your profile -- and all three grow to 44px, which is the smallest thing a thumb hits
+ * reliably.
+ */
+@media (max-width: 720px) {
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 56px;
+    margin-bottom: 4px;
+  }
+
+  /* The slot that held the page's name. It keeps no space of its own. */
+  .topbar > div:first-child {
+    display: none;
+  }
+
   .topbar-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
     align-items: center;
     justify-content: flex-end;
     gap: 8px;
+    min-width: 0;
   }
 
+  /* The scope takes the room the name gave up, and reads as the one piece of state in the row. */
   .topbar-actions > .account-filter {
-    flex: 1 0 100%;
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    min-height: 44px;
+    margin-right: auto;
+  }
+
+  .topbar-actions .account-filter .control-label {
+    /* "Filter account/card" above the value is a second line of type to pay for. The chevron
+       and the value say what it is. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .topbar-actions .account-filter select {
+    font-size: 0.86rem;
+    font-weight: 620;
+  }
+
+  .topbar-theme {
+    display: none;
+  }
+
+  /* Only a phone has it: a laptop reaches every section from the sidebar. */
+  .topbar-more {
+    display: grid;
+    place-items: center;
+  }
+
+  .topbar-actions .icon-button,
+  .topbar-person {
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
   }
 }
 
@@ -4212,6 +4465,14 @@ button.budget-hint-chip:focus-visible {
  * So the floor lives in one place, and only where a finger is doing the pointing. On a mouse
  * the existing density is the design and is left alone -- this is not a licence to make the
  * desktop app roomier.
+ *
+ * The floor was 40px and is now 44. 40 was a judgement; 44 is the figure both platform
+ * guidelines settle on, and the reason is a measurement rather than a preference -- the pad of
+ * a thumb covers roughly that much, so anything smaller is aimed at rather than pressed. The
+ * phone pass measured the four daily sections at 375px and found 35 controls under it; the
+ * tally is kept in .unlazy/mobile-7/report-baseline.json. Two more kinds of control join the
+ * list here rather than getting a second rule of their own somewhere else: the action in a
+ * panel's header (Open reports, Plan, Manage) and the rows of the spending-mix legend.
  */
 @media (pointer: coarse), (max-width: 760px) {
   .mix-switch button,
@@ -4219,9 +4480,18 @@ button.budget-hint-chip:focus-visible {
   .switch-control,
   .filter-chip,
   .budget-card-edit,
+  .panel-action button,
+  .donut-legend-item,
   .news-past > summary,
   .news-more > summary {
-    min-height: 40px;
+    min-height: 44px;
+  }
+
+  /* Room for the taller box to breathe, so a raised floor does not read as a cramped one. */
+  .mix-switch button,
+  .budget-card-edit,
+  .panel-action button {
+    padding-inline: 14px;
   }
 
   /* A summary is laid out by its own content, so the floor needs somewhere to put the slack. */

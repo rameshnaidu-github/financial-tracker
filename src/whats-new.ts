@@ -21,6 +21,18 @@ export type NewsEntry = {
 
 export const WHATS_NEW: NewsEntry[] = [
   {
+    date: "2026-11-23",
+    added: [
+      "Record sits in the middle of the bar at the bottom of a phone, so logging a spend is one press from wherever you are instead of a trip to Transactions.",
+      "Simple mode is the four sections you actually use day to day \u2014 Overview, Transactions, Budget Planner and Accounts. Reports and Investments are no longer part of it; turn the mode off in Profile to get everything back."
+    ],
+    fixed: [
+      "The top of every screen on a phone was three rows deep \u2014 the page's name, the account filter, then a row of small circles \u2014 and took up a fifth of the screen before a single figure. It is one row now.",
+      "Nothing you tap on a phone is smaller than your thumb any more. The tick that selects a transaction, the Edit buttons, the spending-mix rows and the chart switches were all below the size a thumb reliably hits.",
+      "Budget Planner and Accounts open on what you came for. Both spent three quarters of a screen on four summary tiles stacked one per row; the tiles sit two across now, and a budget line is a third shorter."
+    ]
+  },
+  {
     date: "2026-11-22",
     fixed: [
       "Paying a credit card bill that covers an EMI is one entry in the ledger again, not two. The bill still settles the instalment and the card's outstanding still comes down by the whole payment \u2014 the instalment is named on the bill itself rather than listed beside it as a second payment you never made.",
