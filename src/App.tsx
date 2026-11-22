@@ -1510,7 +1510,11 @@ export default function App() {
   };
 
   return (
-    <div className="app-shell">
+    /* Simple mode reaches the stylesheet, not just the navigation. The owner's words were
+       that a phone in this mode should not bombard you, and that is a question about how much
+       a page says as well as which pages exist -- so the mode is on the shell where CSS can
+       see it. Read only at phone width; a laptop in simple mode is unchanged. */
+    <div className="app-shell" data-simple-mode={simpleMode ? "on" : undefined}>
       {introOpen && <IntroVideo onClose={closeIntro} />}
       <aside className="sidebar">
         <div className="brand">
@@ -2000,7 +2004,10 @@ function OverviewPage({
           </Panel>
           )}
         </div>
-        <Panel title="Cashflow">
+        {/* Folded on a phone: the two figures it leads with, money in and money out for the
+            month, are already two of the five cards at the top of this page. Open, it repeated
+            them 1,500px further down. */}
+        <Panel title="Cashflow" foldOnPhone>
           {wealth ? (
             <CashflowPanel
               wealth={wealth}
@@ -3726,6 +3733,16 @@ function LedgerRow({
 }) {
   return (
     <div className={`ledger-row transaction-row-card${selected ? " selected" : ""}`}>
+      {/*
+        * Two wrappers, head and foot, so a phone can lay this out as two plain flex lines and
+        * leave the grid behind entirely. Both are `display: contents` at every other width, so
+        * the laptop still sees the same five children and its grid is untouched.
+        *
+        * The amount moved up here beside the merchant, which it was always shown next to --
+        * it simply used to sit after the tags in the markup. Reading order improves with it:
+        * what was bought, then how much, then how it is filed.
+        */}
+      <div className="transaction-row-head">
       <label className="transaction-select">
         <input
           type="checkbox"
@@ -3740,6 +3757,18 @@ function LedgerRow({
             thing a dozen times down a page. What is left is how the money moved. */}
         <span>{methodLabel(transaction.method)}</span>
       </div>
+      <strong className={`transaction-amount-cell ${transaction.direction === "inflow" ? "amount-in" : "amount-out"}`}>
+        {signedAmount(transaction.amountPaise, transaction.direction)}
+        {transaction.refundedPaise > 0 && (
+          <small className="refunded-note">
+            {transaction.refundedPaise >= transaction.amountPaise
+              ? "Fully refunded"
+              : `${formatINR(transaction.refundedPaise)} refunded`}
+          </small>
+        )}
+      </strong>
+      </div>
+      <div className="transaction-row-foot">
       <div className="transaction-tag-strip" aria-label="Transaction tags">
         <TransactionTag
           tone="account"
@@ -3763,16 +3792,6 @@ function LedgerRow({
           />
         )}
       </div>
-      <strong className={`transaction-amount-cell ${transaction.direction === "inflow" ? "amount-in" : "amount-out"}`}>
-        {signedAmount(transaction.amountPaise, transaction.direction)}
-        {transaction.refundedPaise > 0 && (
-          <small className="refunded-note">
-            {transaction.refundedPaise >= transaction.amountPaise
-              ? "Fully refunded"
-              : `${formatINR(transaction.refundedPaise)} refunded`}
-          </small>
-        )}
-      </strong>
       <div className="row-actions">
         {onRefund && (
           <button
@@ -3796,10 +3815,11 @@ function LedgerRow({
             <Plus size={16} />
           </button>
         )}
-        <button className="secondary-action row-edit-action" onClick={onEdit}>
+        <button className="secondary-action row-edit-action" onClick={onEdit} aria-label="Edit">
           <Pencil size={16} />
-          Edit
+          <span className="row-edit-text">Edit</span>
         </button>
+      </div>
       </div>
     </div>
   );
