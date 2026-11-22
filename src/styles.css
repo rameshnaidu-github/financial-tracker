@@ -3483,6 +3483,43 @@ a {
     color: var(--accent);
   }
 
+  /*
+   * Record, in the middle of the bar.
+   *
+   * It reads as the accent rather than as a fifth tab because it is not a place you go, it is
+   * a thing you do -- and it is the thing this application is for on a phone. Sized past the
+   * row it sits in and lifted a little, so a thumb landing roughly in the centre of the bar
+   * hits it rather than one of the sections either side.
+   *
+   * Written as `.mobile-nav button.mobile-nav-record`, not as the class alone: `.mobile-nav
+   * button` above is (0,1,1) and a bare class is (0,1,0), so the first version of this lost
+   * every declaration it shared with it and the button painted transparent on transparent.
+   */
+  .mobile-nav button.mobile-nav-record {
+    position: relative;
+    align-self: center;
+    min-height: 52px;
+    border-radius: 14px;
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 6px 16px -6px rgba(0, 0, 0, 0.45);
+  }
+
+  .mobile-nav button.mobile-nav-record span {
+    font-size: 0.68rem;
+    font-weight: 850;
+  }
+
+  .mobile-nav button.mobile-nav-record:active {
+    /* The push, so the press is felt as well as seen. */
+    transform: translateY(1px);
+  }
+
+  .mobile-nav button.mobile-nav-record.active,
+  .mobile-nav button.mobile-nav-record:hover {
+    background: var(--accent);
+    color: #fff;
+  }
 }
 
 @media (max-width: 720px) {
@@ -4381,4 +4418,53 @@ a {
 .news-entry + .news-entry {
   border-top: 1px solid var(--line);
   padding-top: 18px;
+}
+
+/* ---------- A panel that folds on a phone ---------- */
+/*
+ * The summary is the panel's own header, so a folded panel looks like the panels around it
+ * rather than like a different kind of thing with a disclosure triangle bolted on. Only the
+ * marker is added, and it turns when the panel opens.
+ */
+.panel.is-foldable {
+  padding-block: 0;
+}
+
+.panel-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.panel-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel-fold > summary::after {
+  content: "";
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-inline-start: auto;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.panel-fold[open] > summary::after {
+  transform: rotate(-135deg) translate(-2px, -2px);
+}
+
+.panel-fold-body {
+  padding-bottom: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-fold > summary::after {
+    transition: none;
+  }
 }

@@ -8,6 +8,14 @@ import ExcelJS from "exceljs";
 import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
 import { formatINR, formatINRWhole, todayISO } from "../src/format.ts";
 import { INFLOW_BEHAVIORS, SELF_TRANSFER_SUBCATEGORY_ID, cardEmiSettlementPaise } from "../shared/finance.ts";
+import {
+  NAV_ORDER,
+  SIMPLE_MODE_PAGES,
+  navigationPagesFor,
+  pageAllowedIn,
+  simpleModeFromSettings,
+  mobileLabelFor
+} from "../src/navigation.ts";
 import type { ReportType } from "../src/types.ts";
 
 const testDbPath = path.join(tmpdir(), `finance-tracker-qa-${Date.now()}.db`);
@@ -5194,6 +5202,88 @@ test("every query against a table that carries a person is scoped to that person
     plantedTables.includes("transactions") && !/user_id/.test(planted),
     "The detector should see an unscoped read of a person's table."
   );
+});
+
+/*
+ * Simple mode is the owner's answer to "I only want the four things I use". What it keeps is a
+ * decision, not an implementation detail, so the suite reads it rather than a person reading it
+ * off a screen -- which is why navigationPagesFor lives in a module with no React in it.
+ */
+test("simple mode keeps exactly the four sections the owner named", async () => {
+  const wanted = ["overview", "transactions", "budgets", "accounts"];
+  assert(
+    JSON.stringify(SIMPLE_MODE_PAGES) === JSON.stringify(wanted),
+    `Simple mode should keep ${wanted.join(", ")}; it keeps ${SIMPLE_MODE_PAGES.join(", ")}.`
+  );
+
+  const simple = navigationPagesFor(true);
+  // Profile is kept on top of the four, because the switch that turns the mode off lives there.
+  assert(
+    JSON.stringify(simple.items) === JSON.stringify([...wanted, "profile"]),
+    `Simple mode should offer the four and Profile; it offers ${simple.items.join(", ")}.`
+  );
+  for (const gone of ["reports", "investments", "loans", "cardEmis", "vacations", "subscriptions", "categories", "faq", "whatsNew"]) {
+    assert(!simple.items.includes(gone as never), `${gone} should not be reachable in simple mode.`);
+    assert(!pageAllowedIn(gone as never, true), `${gone} should not be allowed in simple mode.`);
+  }
+
+  // And the mode is a filter, not a rewrite: off, nothing is hidden.
+  const full = navigationPagesFor(false);
+  assert(
+    JSON.stringify(full.items) === JSON.stringify(NAV_ORDER),
+    "With the mode off every section should be reachable."
+  );
+  for (const page of NAV_ORDER) {
+    assert(pageAllowedIn(page, false), `${page} should be allowed with the mode off.`);
+  }
+});
+
+test("simple mode keeps Profile reachable and refuses to strand a hidden section", async () => {
+  // The switch lives on Profile. A mode that hid it could not be turned off, which is the one
+  // way this feature could trap somebody.
+  assert(pageAllowedIn("profile", true), "Profile must stay reachable in simple mode.");
+  assert(navigationPagesFor(true).items.includes("profile"), "Profile must stay in the navigation.");
+
+  // Everything the mode hides must be something the application can refuse and redirect, so a
+  // bookmark to it is a redirect rather than a blank screen.
+  const hidden = NAV_ORDER.filter((page) => !pageAllowedIn(page, true));
+  assert(hidden.length === NAV_ORDER.length - SIMPLE_MODE_PAGES.length - 1,
+    `Expected ${NAV_ORDER.length - SIMPLE_MODE_PAGES.length - 1} hidden sections, got ${hidden.length}.`);
+  for (const page of hidden) {
+    assert(mobileLabelFor(page), `${page} has no name to tell somebody what was hidden.`);
+  }
+
+  // The setting is read strictly: only the value the application writes turns it on.
+  assert(simpleModeFromSettings({ simple_mode: "1" }), '"1" should turn simple mode on.');
+  for (const odd of [{}, undefined, { simple_mode: "0" }, { simple_mode: "true" }, { simple_mode: "" }]) {
+    assert(!simpleModeFromSettings(odd as never), `${JSON.stringify(odd)} should leave simple mode off.`);
+  }
+});
+
+test("both navigations read one answer, so they cannot drift apart", async () => {
+  for (const mode of [true, false]) {
+    const nav = navigationPagesFor(mode);
+    // primary and more partition items: nothing offered twice, nothing lost between them.
+    const rejoined = [...nav.primary, ...nav.more].sort();
+    assert(
+      JSON.stringify(rejoined) === JSON.stringify([...nav.items].sort()),
+      `mode=${mode}: the bar and the sheet together should be the whole list; got ${rejoined.join(", ")}.`
+    );
+    assert(
+      new Set(rejoined).size === rejoined.length,
+      `mode=${mode}: a section is offered in both the bar and the sheet.`
+    );
+    for (const page of nav.primary) {
+      assert(nav.items.includes(page), `mode=${mode}: the bar offers ${page}, which is not reachable.`);
+    }
+    // A thumb has to span the bar, and Profile is reached from the header instead.
+    assert(nav.primary.length === 4, `mode=${mode}: the bar carries ${nav.primary.length} sections, not 4.`);
+    assert(!nav.primary.includes("profile"), `mode=${mode}: Profile should not be on the bar.`);
+    for (const page of nav.primary) {
+      const label = mobileLabelFor(page);
+      assert(label && label.length <= 9, `${page}'s bar label ${JSON.stringify(label)} is too long for the bar.`);
+    }
+  }
 });
 
 let failed = 0;
