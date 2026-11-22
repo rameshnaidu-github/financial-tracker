@@ -2985,6 +2985,120 @@ button.mix-bar-head:hover > span {
   }
 }
 
+/* ---------- Simple mode, on a phone ---------- */
+/*
+ * The owner's words: on a phone with simple mode on, "it should be user friendly, don't have
+ * to be bombarded with all the information".
+ *
+ * Until now the mode filtered the navigation and left every page saying exactly as much as
+ * before. On the Overview that meant five figures, four sub-notes, a budget panel reading
+ * 293% and a chart with its own Pie/Bar switch -- all at once, on a 375px screen, to someone
+ * who has just asked for less.
+ *
+ * What a person opens this on a phone to learn is two things: what have I got, and what do I
+ * owe. Those two keep their size. The month's three figures are still there and still true,
+ * but they stop competing: they become a quiet row underneath rather than three more cards
+ * the same size as the answer.
+ *
+ * Nothing is removed that cannot be reached. The month in full is one tap away on Budget
+ * Planner and Transactions, both of which are in this mode.
+ */
+@media (max-width: 720px) {
+  /*
+   * Two answers, then the month.
+   *
+   * Six columns rather than two, so one grid can hold a 2-up row of answers and a 3-up row of
+   * context underneath without a second container around either.
+   */
+  /*
+   * The lead's own tint goes with the cards it used to sit behind.
+   *
+   * It is a filled, rounded container that five white cards covered completely. With three of
+   * them flat it showed through as a grey band glued to the bottom of the other two, which
+   * reads as a leak rather than as a grouping. The two answers are cards in their own right
+   * and need no box around them.
+   */
+  [data-simple-mode="on"] .overview-lead {
+    border: 0;
+    background: none;
+    /* It also clipped its children to a 20px radius. With only the top half still filled, the
+       white area kept rounded top corners and a straight bottom and read as a card someone
+       had cut off. The two answers carry their own shape instead. */
+    overflow: visible;
+    border-radius: 0;
+  }
+
+  [data-simple-mode="on"] .summary-grid.overview-summary > .summary-card:nth-child(-n + 2) {
+    border-radius: var(--radius-shell);
+  }
+
+  [data-simple-mode="on"] .summary-grid.overview-summary {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 8px;
+    /* The month's row gets its own air rather than a rule to separate it. */
+    row-gap: 14px;
+  }
+
+  [data-simple-mode="on"] .summary-grid.overview-summary > .summary-card:nth-child(-n + 2) {
+    grid-column: span 3;
+  }
+
+  [data-simple-mode="on"] .summary-grid.overview-summary > .summary-card:nth-child(n + 3) {
+    grid-column: span 2;
+    /* Flat: these are context, and a card around each one made them look like three more
+       answers. The tint that marks a warning goes with the box -- nothing here is a warning. */
+    padding: 2px 0 0;
+    border: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  [data-simple-mode="on"] .summary-grid.overview-summary > .summary-card:nth-child(n + 3) p {
+    font-size: 0.68rem;
+  }
+
+  [data-simple-mode="on"] .summary-grid.overview-summary > .summary-card:nth-child(n + 3) strong {
+    font-size: 1rem;
+  }
+
+  /*
+   * The period comparisons go; the standing caveats stay.
+   *
+   * Those are two different things wearing one class, and the markup already tells them
+   * apart. A <span> says something that is true of the figure whatever month it is -- "plus
+   * 2,200 on food cards, which only buy food", "AXIS NEO is at 93% of its limit" -- and
+   * without it the number means something other than what it says. A <small> compares this
+   * period with the last one, which is analysis: "2816% vs 1-22 Oct" is arithmetic on a small
+   * base, it is shouting, and it answers a question nobody asked while holding a phone.
+   */
+  [data-simple-mode="on"] small.summary-change {
+    display: none;
+  }
+
+  /*
+   * One way of drawing the cards, not a choice of two. Picking a chart type is an analyst's
+   * control; the bars are already the right answer for utilisation, which is a part of a
+   * whole with a limit.
+   */
+  [data-simple-mode="on"] .mix-switch {
+    display: none;
+  }
+
+  /*
+   * Budget guardrails keeps its answer and loses its footnotes.
+   *
+   * The panel carried seven figures: how much of the budget is used and how far ahead of the
+   * day that is, then how many categories are on track, watched and over, then unplanned
+   * spend and a count of uncategorised items. The first two groups answer "am I all right
+   * this month". The last pair is reconciliation -- work you do sitting down, on Transactions
+   * or Budget Planner, both of which are in this mode -- and one of them was reading
+   * "Uncategorized: 0 items", which is a line of type spent on the absence of a problem.
+   */
+  [data-simple-mode="on"] .budget-signal-list {
+    display: none;
+  }
+}
+
 /* ---------- The space between sections, on a phone ---------- */
 /*
  * 32px between the bands of a page is a laptop's rhythm: at 1440px it is a comfortable beat

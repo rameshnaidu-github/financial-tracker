@@ -1510,7 +1510,11 @@ export default function App() {
   };
 
   return (
-    <div className="app-shell">
+    /* Simple mode reaches the stylesheet, not just the navigation. The owner's words were
+       that a phone in this mode should not bombard you, and that is a question about how much
+       a page says as well as which pages exist -- so the mode is on the shell where CSS can
+       see it. Read only at phone width; a laptop in simple mode is unchanged. */
+    <div className="app-shell" data-simple-mode={simpleMode ? "on" : undefined}>
       {introOpen && <IntroVideo onClose={closeIntro} />}
       <aside className="sidebar">
         <div className="brand">

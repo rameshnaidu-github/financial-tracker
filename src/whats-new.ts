@@ -21,6 +21,14 @@ export type NewsEntry = {
 
 export const WHATS_NEW: NewsEntry[] = [
   {
+    date: "2026-11-25",
+    fixed: [
+      "Simple mode on a phone now actually shows less, instead of only hiding sections. Overview leads with the two figures you open it for \u2014 available cash and card outstanding \u2014 and the month's spends, outflow and inflow sit quietly underneath them.",
+      "The \u201cvs last month\u201d percentages are gone from Overview in simple mode on a phone. They were comparisons on a part-month, so a quiet month could read \u201c\u2191 2816%\u201d. The notes that explain a figure \u2014 money on food cards, a card near its limit \u2014 are still there, because without them the number means something else.",
+      "Budget guardrails shows how much of the budget is used and how many categories are on track, watched or over. Unplanned spend and the uncategorised count moved off the phone's Overview in simple mode; they are reconciliation, and Budget Planner and Transactions have them."
+    ]
+  },
+  {
     date: "2026-11-24",
     fixed: [
       "Overview fits a phone. It opens on the month's figures, and Spending mix and Cashflow are folded until you ask for them \u2014 Cashflow was repeating the money in and money out already shown at the top of the same page.",
