@@ -4519,3 +4519,24 @@ button.budget-hint-chip:focus-visible {
     min-height: 44px;
   }
 }
+
+/* ---------- A panel saying which figures a filter did not reach ---------- */
+.panel-scope {
+  margin-left: 10px;
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  padding: 3px 9px;
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  /* The header already stacks at this width; the note sits with the title, not on a line of
+     its own, so it reads as a qualifier rather than as content. */
+  .panel-scope {
+    margin-left: 8px;
+  }
+}

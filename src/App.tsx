@@ -1806,7 +1806,7 @@ function OverviewPage({
   useEffect(() => {
     let active = true;
     setWealthError("");
-    Api.wealth()
+    Api.wealth(selectedAccountId || undefined)
       .then((next) => {
         if (active) setWealth(next);
       })
@@ -1818,7 +1818,7 @@ function OverviewPage({
     return () => {
       active = false;
     };
-  }, [refreshKey, wealthRetry]);
+  }, [refreshKey, wealthRetry, selectedAccountId]);
 
   if (loading) {
     return <PanelLoader label="Loading overview" />;
@@ -1865,6 +1865,8 @@ function OverviewPage({
     .map((account) => ({ ...account, used: (account.outstandingPaise / (account.creditLimitPaise ?? 1)) * 100 }))
     .sort((a, b) => b.used - a.used)[0];
   const worstCardUtilisation = worstCard ? Math.round(worstCard.used) : null;
+  /* Shown on the panels a filter cannot narrow, and only while one is set. */
+  const filterNote = selectedAccount ? "All accounts" : undefined;
   return (
     <div className="page-grid overview-page">
       {overview.summary.uncategorizedCount > 0 && (
@@ -1899,6 +1901,16 @@ function OverviewPage({
                 : overview.summary.availableCashPaise
             }
             icon={<WalletCards />}
+            /* An overdrawn account states itself as flatly as a healthy one otherwise -- and a
+               negative "Available cash" is either a real overdraft or an opening balance that
+               needs correcting. Either way it is not a neutral fact. */
+            tone={
+              (selectedAccount?.type === "credit_card"
+                ? (selectedAccount.availableLimitPaise ?? 0)
+                : overview.summary.availableCashPaise) < 0
+                ? "warning"
+                : "neutral"
+            }
             /* A food card is money and it is not spendable on a bill, so it is named here
                rather than folded into the figure above it. Silence would have been the page
                quietly overstating what the household can actually spend. */
@@ -1985,7 +1997,11 @@ function OverviewPage({
             )}
           </Panel>
 {canOpen("budgets") && (
-                    <Panel title="Budget guardrails" action={<button onClick={() => onNavigate("budgets")}>Plan</button>}>
+                    <Panel
+                      title="Budget guardrails"
+                      scopeNote={filterNote}
+                      action={<button onClick={() => onNavigate("budgets")}>Plan</button>}
+                    >
             <BudgetGuardrails
               plan={budgetPlan}
               loadError={budgetPlanError}
@@ -1998,7 +2014,12 @@ function OverviewPage({
         </div>
         <Panel title="Cashflow">
           {wealth ? (
-            <CashflowPanel wealth={wealth} investedPaise={overview.summary.investedPaise} />
+            <CashflowPanel
+              wealth={wealth}
+              investedPaise={overview.summary.investedPaise}
+              overdrawn={Boolean(selectedAccount) && overview.summary.availableCashPaise <= 0}
+              runwayApplies={selectedAccount?.type !== "credit_card"}
+            />
           ) : wealthError ? (
             <PanelError title="Couldn't load your cashflow" reason={wealthError} onRetry={() => setWealthRetry((n) => n + 1)} />
           ) : (
@@ -2013,7 +2034,7 @@ function OverviewPage({
 
       <OverviewBand title="Wealth" deskWork>
         <div className="two-column overview-band-pair">
-          <Panel title="Net worth">
+          <Panel title="Net worth" scopeNote={filterNote}>
             {wealth ? (
               <NetWorthPanel wealth={wealth} />
             ) : wealthError ? (
@@ -2022,7 +2043,7 @@ function OverviewPage({
               <PanelLoader label="Loading net worth" />
             )}
           </Panel>
-          <Panel title="Asset allocation">
+          <Panel title="Asset allocation" scopeNote={filterNote}>
             {wealth && wealth.allocation.length > 0 ? (
               <DonutChart
                 segments={wealth.allocation.map((segment) => ({
@@ -2067,7 +2088,11 @@ function OverviewPage({
             centerValue={formatINRWhole(cardOutstandingPaise)}
             centerCountPaise={cardOutstandingPaise}
             className="overview-donut-chart"
-            emptyText="No credit card owes anything right now."
+            emptyText={
+              selectedAccount
+                ? "No credit card in this filter owes anything."
+                : "No credit card owes anything right now."
+            }
           />
         </Panel>
       </OverviewBand>
@@ -2190,7 +2215,19 @@ function NetWorthPanel({ wealth }: { wealth: WealthSummary }) {
   );
 }
 
-function CashflowPanel({ wealth, investedPaise }: { wealth: WealthSummary; investedPaise: number }) {
+function CashflowPanel({
+  wealth,
+  investedPaise,
+  overdrawn = false,
+  runwayApplies = true
+}: {
+  wealth: WealthSummary;
+  investedPaise: number;
+  /** Filtered to an account with no spendable balance, so there is no runway rather than no data. */
+  overdrawn?: boolean;
+  /** False when the filter is a credit card: a runway measures cash, and a card holds none. */
+  runwayApplies?: boolean;
+}) {
   const { cashflow, runwayMonths } = wealth;
   return (
     <div className="cashflow-panel">
@@ -2230,11 +2267,30 @@ function CashflowPanel({ wealth, investedPaise }: { wealth: WealthSummary; inves
           just not as cash.
         </p>
       )}
+      {/* A credit card has no cash to run down, so the row is absent rather than explaining
+          itself. A question that does not apply is better unasked than answered "none". */}
+      {runwayApplies && (
       <div className="cashflow-runway">
         <span>Emergency-fund runway</span>
-        <strong>{runwayMonths === null ? "Not enough data yet" : `${runwayMonths} months`}</strong>
+        {/* Withheld for two different reasons, which should not read as one. Filtered to an
+            account with nothing spendable in it there is no runway to state, and saying "not
+            enough data" there blames the records for what is really the balance. */}
+        {/* Past a decade the figure stops being a forecast and starts being arithmetic: an
+            account with cash and almost no spending through it reported 5541.4 months, which is
+            462 years and tells the reader nothing except that the divisor was small. A ceiling
+            says the true thing -- there is far more than enough -- without the false precision. */}
+        <strong>
+          {runwayMonths === null
+            ? overdrawn
+              ? "Nothing to draw on in this account"
+              : "Not enough data yet"
+            : runwayMonths > 120
+              ? "Over 10 years"
+              : `${runwayMonths} months`}
+        </strong>
         <small>How long your liquid cash covers your recent average monthly spending.</small>
       </div>
+      )}
     </div>
   );
 }
@@ -10052,16 +10108,28 @@ export function AccountEditDialog({
 function Panel({
   title,
   action,
+  scopeNote,
   children
 }: {
   title: string;
   action?: React.ReactNode;
+  /**
+   * Said when a filter is active and this panel does not obey it.
+   *
+   * Some figures narrow to one account and some cannot: a month's spending has a per-account
+   * answer, a household's net worth does not, and a budget is kept by SubType and knows nothing
+   * about accounts at all. Leaving that difference unsaid is what let two "Outflow" figures
+   * disagree on one screen while both looked filtered. The panel that ignores the filter now
+   * admits it in its own header.
+   */
+  scopeNote?: string;
   children: React.ReactNode;
 }) {
   return (
     <section className="panel">
       <div className="panel-header">
         <h2>{title}</h2>
+        {scopeNote && <span className="panel-scope">{scopeNote}</span>}
         {action && <div className="panel-action">{action}</div>}
       </div>
       {children}
