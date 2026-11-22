@@ -29,6 +29,23 @@ export const EMI_SUBCATEGORY_ID = "sub_loan_emi";
 export const EXPENSE_EMI_SUBCATEGORY_ID = "sub_expense_emi";
 /** Every SubType that means "this is an instalment", wherever it hangs. */
 export const EMI_SUBCATEGORY_IDS = new Set<string>([EMI_SUBCATEGORY_ID, EXPENSE_EMI_SUBCATEGORY_ID]);
+/**
+ * What a card bill settles on one of the card's EMIs.
+ *
+ * The month's instalment, and never more than the EMI still has to pay -- the last one is
+ * smaller than the rest, and charging the full monthly figure to a 400-rupee remainder would
+ * take the outstanding below nothing.
+ *
+ * One rule, in one place, because the form that offers the figure and the suite that checks it
+ * must not each have their own idea of it.
+ */
+export function cardEmiSettlementPaise(emi: {
+  monthlyEmiPaise: number;
+  outstandingPaise: number;
+}): number {
+  return Math.max(Math.min(emi.monthlyEmiPaise, emi.outstandingPaise), 0);
+}
+
 export const ADJUSTMENT_SUBCATEGORY_ID = "sub_adjustment_balance";
 export const INCOME_TYPE_ID = "type_income";
 export const SELF_TRANSFER_SUBCATEGORY_ID = "sub_transfer_self";

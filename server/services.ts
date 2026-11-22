@@ -382,6 +382,14 @@ type TransactionQuery = {
   to?: string;
   limit?: number;
   offset?: number;
+  /**
+   * Show the instalment charges a card payment created, which the ledger folds away.
+   *
+   * Off everywhere the ledger is read, and the HTTP routes build their query field by field so
+   * no request can switch it on. It exists for the suite, which has to be able to see that the
+   * rows the ledger hides are still there and still doing the arithmetic.
+   */
+  includeCardEmiCharges?: boolean;
 };
 
 type SqlParam = string | number | null;
@@ -2177,6 +2185,34 @@ function buildTransactionFilters(query: TransactionQuery) {
   // still one person's ledger.
   const filters: string[] = ["t.user_id = ?"];
   const params: SqlParam[] = [currentUserId()];
+
+  /*
+   * One payment, one row.
+   *
+   * Paying a card bill of 30,000 that carried a 5,000 instalment charges that instalment to the
+   * card: it is how the 5,000 moves off the EMI's balance and into settled spending, and it is
+   * why the card's outstanding falls by the whole 30,000 rather than by 25,000. The charge is
+   * bookkeeping the payment did, though, not a second payment the owner made, and listing it
+   * beside its parent read as one -- the owner's words were "30k credit card payment and 5k emi
+   * payment transactions are both added, which is confusing".
+   *
+   * So the ledger leaves it out. Nothing about the arithmetic changes: the row is still there,
+   * still charged to the card, still coming off the EMI, and the payment it hangs from already
+   * says how much of itself went to EMIs. Filtered here rather than in the page, so the list,
+   * its totals and the exported file cannot disagree about which rows exist.
+   *
+   * Narrow on purpose. A loan's instalment paid from a bank is the same `emi` kind and is a
+   * payment in its own right, so the test is the pair: an instalment that hangs from a card
+   * payment.
+   */
+  if (!query.includeCardEmiCharges) {
+    filters.push(
+      `NOT (t.kind = 'emi' AND t.linked_transaction_id IS NOT NULL AND EXISTS (
+         SELECT 1 FROM transactions p
+         WHERE p.id = t.linked_transaction_id AND p.user_id = t.user_id AND p.kind = 'card_payment'
+       ))`
+    );
+  }
 
   if (query.accountId) {
     filters.push("t.account_id = ?");

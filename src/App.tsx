@@ -123,7 +123,8 @@ import {
   PAYOUT_FREQUENCIES,
   isPayoutInvestmentType,
   type HoldingGrouping,
-  calculateEmiPaise
+  calculateEmiPaise,
+  cardEmiSettlementPaise
 } from "../shared/finance";
 
 // System Type that ties a refund to the purchase it came from (see shared/finance.ts).
@@ -1166,8 +1167,6 @@ export default function App() {
     ? { transactions: shellOverview.summary.uncategorizedCount }
     : {};
 
-  const [search, setSearch] = useState("");
-
   /* One way to turn the theme over, now that two places offer it: the switch on the profile page
      and the one in the top bar. Written here rather than twice, so they cannot drift over
      whether the choice is remembered. */
@@ -1572,30 +1571,10 @@ export default function App() {
             </label>
             )}
 
-            {/* Search goes to the ledger with what was typed, which is the only place in the
-                application that can answer it. Not a box that filters whatever page you are on
-                into something smaller. */}
-            <form
-              className="topbar-search"
-              role="search"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const term = search.trim();
-                if (!term) return;
-                navigate("transactions", { search: term });
-                setSearch("");
-              }}
-            >
-              <Search size={16} aria-hidden="true" />
-              <input
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search transactions"
-                aria-label="Search transactions"
-              />
-            </form>
-
+            {/* No search here. Searching is the ledger's own job, and only the ledger can
+                answer it, so the field lives on that page beside the filters it works with.
+                A copy of it in the shell was a second way in to the same box -- and on every
+                other page it was a field that could not search what was in front of you. */}
             <AttentionMenu items={attention} onGo={(page) => navigate(page)} />
 
             <button
@@ -2030,7 +2009,7 @@ function OverviewPage({
 
       {/* The Overview is the month's shape, not its ledger. Activity & upcoming went first, then
           Recent activity with it: five transactions were a sample of a page that is one click
-          away in the navigation and in the search at the top of every screen. */}
+          away in the navigation. */}
 
       <OverviewBand title="Wealth" deskWork>
         <div className="two-column overview-band-pair">
@@ -2412,9 +2391,15 @@ function TransactionEntryForm({
   const firstAccount = visibleAccounts[0] ?? accounts[0];
   const defaultType = preferredType(categoryTypes, "expense") ?? categoryTypes[0];
   const [saving, setSaving] = useState(false);
-  // Which EMIs on the card being paid this payment covers, and for how much each, keyed by EMI.
-  // A key present means ticked, so unticking one forgets its amount rather than keeping a zero.
-  const [cardEmiAmounts, setCardEmiAmounts] = useState<Record<string, string>>({});
+  /*
+   * Which of the card's EMIs this payment covers.
+   *
+   * Just which ones. How much each settles is not a question the bill gets to answer: the bank
+   * charges the month's instalment and that is the figure, so it is worked out from the EMI
+   * rather than typed. This used to hold a typed amount per EMI, and the field invited an
+   * answer that the card's own statement had already decided.
+   */
+  const [cardEmiPickedIds, setCardEmiPickedIds] = useState<string[]>([]);
   const [settleCardEmis, setSettleCardEmis] = useState(false);
   const [form, setForm] = useState({
     date: todayISO(),
@@ -2457,7 +2442,7 @@ function TransactionEntryForm({
   // that is not a card payment at all, leaves it describing EMIs that are no longer on offer.
   useEffect(() => {
     setSettleCardEmis(false);
-    setCardEmiAmounts({});
+    setCardEmiPickedIds([]);
   }, [form.transferAccountId, form.typeId]);
 
   const selectedAccount = accounts.find((account) => account.id === form.accountId);
@@ -2506,8 +2491,8 @@ function TransactionEntryForm({
       ? cardEmis.filter((emi) => emi.accountId === form.transferAccountId && emi.outstandingPaise > 0)
       : [];
   const cardEmiAllocations = cardEmisForPayment
-    .filter((emi) => cardEmiAmounts[emi.id] !== undefined)
-    .map((emi) => ({ loanId: emi.id, amountPaise: parseAmountToPaise(cardEmiAmounts[emi.id] ?? "") }))
+    .filter((emi) => cardEmiPickedIds.includes(emi.id))
+    .map((emi) => ({ loanId: emi.id, amountPaise: cardEmiSettlementPaise(emi) }))
     .filter((allocation) => allocation.amountPaise > 0);
   const cardEmiTotalPaise = cardEmiAllocations.reduce((sum, allocation) => sum + allocation.amountPaise, 0);
   const paymentAmountPaise = parseAmountToPaise(form.amount);
@@ -2811,15 +2796,9 @@ function TransactionEntryForm({
             onChange={(event) => {
               const on = event.target.checked;
               setSettleCardEmis(on);
-              // Ticked, every EMI on the card starts at its monthly installment, which is
-              // what a bill normally carries. Each one can then be unticked or changed.
-              setCardEmiAmounts(
-                on
-                  ? Object.fromEntries(
-                      cardEmisForPayment.map((emi) => [emi.id, (emi.monthlyEmiPaise / 100).toFixed(2)])
-                    )
-                  : {}
-              );
+              // Ticked, every EMI on the card is in, which is what a bill normally carries.
+              // Any one of them can then be taken out.
+              setCardEmiPickedIds(on ? cardEmisForPayment.map((emi) => emi.id) : []);
             }}
           />
           <span>EMIs on this card part of this payment?</span>
@@ -2828,7 +2807,11 @@ function TransactionEntryForm({
       {selectedBehavior === "card_payment" && settleCardEmis && cardEmisForPayment.length > 0 && (
         <div className="card-emi-settle wide">
           {cardEmisForPayment.map((emi) => {
-            const picked = cardEmiAmounts[emi.id] !== undefined;
+            const picked = cardEmiPickedIds.includes(emi.id);
+            const partPaise = cardEmiSettlementPaise(emi);
+            // The last instalment is the leftover rather than the monthly figure, and saying so
+            // beside it is how a bill smaller than the usual one explains itself.
+            const isFinal = partPaise < emi.monthlyEmiPaise;
             return (
               <div className="card-emi-settle-row" key={emi.id}>
                 <label className="card-emi-settle-pick">
@@ -2836,15 +2819,13 @@ function TransactionEntryForm({
                     type="checkbox"
                     checked={picked}
                     onChange={(event) =>
-                      setCardEmiAmounts((current) => {
-                        const next = { ...current };
-                        if (event.target.checked) {
-                          next[emi.id] = (emi.monthlyEmiPaise / 100).toFixed(2);
-                        } else {
-                          delete next[emi.id];
-                        }
-                        return next;
-                      })
+                      setCardEmiPickedIds((current) =>
+                        event.target.checked
+                          ? current.includes(emi.id)
+                            ? current
+                            : [...current, emi.id]
+                          : current.filter((id) => id !== emi.id)
+                      )
                     }
                   />
                   <span>
@@ -2854,17 +2835,14 @@ function TransactionEntryForm({
                     </small>
                   </span>
                 </label>
-                <input
-                  className="card-emi-settle-amount"
-                  value={cardEmiAmounts[emi.id] ?? ""}
-                  onChange={(event) =>
-                    setCardEmiAmounts((current) => ({ ...current, [emi.id]: event.target.value }))
-                  }
-                  placeholder="₹0"
-                  inputMode="decimal"
-                  disabled={!picked}
-                  aria-label={`How much of this payment settles ${emi.name}`}
-                />
+                {/* Unticked, this says so in words rather than by fading the figure out: the
+                    caption is 0.68rem and the dimming that used to carry this state put it at
+                    1.8:1 on the panel, measured. The amount is on the left of the row either
+                    way, so nothing is lost by dropping it here. */}
+                <p className={`card-emi-settle-part${picked ? "" : " is-out"}`}>
+                  <strong aria-hidden={!picked}>{picked ? formatINR(partPaise) : "\u2014"}</strong>
+                  <small>{picked ? (isFinal ? "last instalment" : "this month") : "not included"}</small>
+                </p>
               </div>
             );
           })}
@@ -3758,6 +3736,15 @@ function LedgerRow({
           title={`${typeCategory.name}: ${subTypeCategory.name}`}
           color={subTypeCategory.color}
         />
+        {cardEmiNote(transaction) && (
+          <TransactionTag
+            tone="subtype"
+            icon={<IconGlyph name="receipt" size={13} />}
+            label={cardEmiNote(transaction)!}
+            title={`This payment settled ${cardEmiNote(transaction)} running on that card.`}
+            color="#7c3aed"
+          />
+        )}
       </div>
       <strong className={`transaction-amount-cell ${transaction.direction === "inflow" ? "amount-in" : "amount-out"}`}>
         {signedAmount(transaction.amountPaise, transaction.direction)}
@@ -9121,10 +9108,27 @@ function TransactionTaxonomyBadge({
 }) {
   const typeCategory = typeCategoryFromTransaction(transaction);
   const category = categoryFromTransaction(transaction);
+  const emiNote = cardEmiNote(transaction);
   return (
     <span className={`taxonomy-badges ${compact ? "compact" : ""}`}>
       <CategoryBadge category={typeCategory} compact={compact} />
       <CategoryBadge category={category} compact={compact} />
+      {/* The same note the ledger row carries, so a bill that settled an EMI says so wherever
+          it is listed rather than only in one of the two views. */}
+      {emiNote && (
+        <CategoryBadge
+          category={{
+            id: "card-emi-note",
+            name: emiNote,
+            icon: "receipt",
+            color: "#7c3aed",
+            isSystem: true,
+            isLocked: false,
+            sortOrder: 0
+          }}
+          compact={compact}
+        />
+      )}
     </span>
   );
 }
@@ -9139,6 +9143,20 @@ function typeCategoryFromTransaction(transaction: Transaction): Category {
     isLocked: false,
     sortOrder: 0
   };
+}
+
+/**
+ * What a card payment settled in instalments, worded once.
+ *
+ * The ledger does not list the instalment charge a payment created -- one payment is one row --
+ * so this line is the only thing in the ledger that says a bill carried an EMI. It is short on
+ * purpose: it has to survive a 375px row without being cut off.
+ */
+function cardEmiNote(transaction: Transaction): string | null {
+  if (transaction.kind !== "card_payment" || transaction.cardEmiPaise <= 0) {
+    return null;
+  }
+  return `${formatINR(transaction.cardEmiPaise)} of EMIs`;
 }
 
 function categoryFromTransaction(transaction: Transaction): Category {
@@ -9160,12 +9178,10 @@ function categoryFromTransaction(transaction: Transaction): Category {
   if (transaction.kind === "card_payment" && transaction.transferAccountName) {
     return {
       id: transaction.transferAccountId ?? "",
-      // A bill that also settled EMIs says so in the row: without it, two payments of different
-      // amounts on the same card look like the same thing.
-      name:
-        transaction.cardEmiPaise > 0
-          ? `${transaction.transferAccountName} · ${formatINR(transaction.cardEmiPaise)} EMIs`
-          : transaction.transferAccountName,
+      // Just the card. What the bill settled in EMIs is a tag of its own beside this one --
+      // packed into this label it made a chip too long for a phone, and a phone truncated it
+      // at exactly the figure: "AXIS NEO · ₹9,5...". See cardEmiNote below.
+      name: transaction.transferAccountName,
       icon: "credit-card",
       color: transaction.typeColor ?? "#ea580c",
       isSystem: true,

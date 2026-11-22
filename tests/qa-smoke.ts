@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
 import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
 import { formatINR, formatINRWhole, todayISO } from "../src/format.ts";
-import { INFLOW_BEHAVIORS, SELF_TRANSFER_SUBCATEGORY_ID } from "../shared/finance.ts";
+import { INFLOW_BEHAVIORS, SELF_TRANSFER_SUBCATEGORY_ID, cardEmiSettlementPaise } from "../shared/finance.ts";
 import type { ReportType } from "../src/types.ts";
 
 const testDbPath = path.join(tmpdir(), `finance-tracker-qa-${Date.now()}.db`);
@@ -4314,9 +4314,12 @@ test("an installment settled by a card payment moves and vanishes with that paym
     { loanId: first.id, amountPaise: 1_000_00 },
     { loanId: second.id, amountPaise: 2_000_00 }
   ]);
+  // includeCardEmiCharges, because the ledger folds these rows into the payment they hang from.
+  // This test is about the rows themselves, so it asks for them.
   const installments = async () =>
-    (await services.listTransactions({ from: "2013-05-01", to: "2013-05-31", accountId: card.id }))
-      .filter((row) => row.kind === "emi");
+    (await services.listTransactions({
+      from: "2013-05-01", to: "2013-05-31", accountId: card.id, includeCardEmiCharges: true
+    })).filter((row) => row.kind === "emi");
   assert((await installments()).length === 2, "The payment should have charged both installments to the card.");
 
   // An installment is not an event of its own -- it exists because the payment covered it.
@@ -4331,6 +4334,267 @@ test("an installment settled by a card payment moves and vanishes with that paym
   assert((await cardOf(card.id))?.spendOutstandingPaise === 20_000_00, "The card should owe its spending again.");
   assert((await cardOf(card.id))?.emiOutstandingPaise === 30_000_00, "Both EMI balances should be restored.");
   assert((await cardOf(bank.id))?.balancePaise === 1_00_000_00, "The bank should be whole again.");
+});
+
+/*
+ * The owner's own example, in the owner's own figures: a 30,000 card bill for a month that
+ * carried a 5,000 instalment.
+ *
+ * What he asked for is that the bank falls by 30,000, the card's outstanding falls by 30,000,
+ * and the month's instalment is settled -- once, not twice. The instalment charge the payment
+ * creates is what makes that add up, and these tests pin all three figures so a later change
+ * cannot quietly fold the charge away and leave the card owing 5,000 it has already paid.
+ */
+async function cardWithOneZeroInterestEmi(label: string, spendPaise: number) {
+  const bank = await services.createAccount({
+    name: `QA ${label} Bank`, type: "bank", startingBalancePaise: 2_00_000_00
+  });
+  const card = await services.createAccount({
+    name: `QA ${label} Card`, type: "credit_card", startingBalancePaise: 0, creditLimitPaise: 3_00_000_00
+  });
+  if (spendPaise > 0) {
+    await services.createTransaction({
+      date: "2013-07-02", accountId: card.id, method: "credit_card", merchant: `QA ${label} shopping`,
+      typeId: await typeId("Expense"), subcategoryId: await subcategoryId("Expense", "Groceries"),
+      amountPaise: spendPaise, direction: "outflow", kind: "expense"
+    });
+  }
+  // No-cost EMI, which is how the laptop in the owner's example is bought: every rupee of the
+  // instalment comes off the principal, so the figures are his and not his plus interest.
+  const emi = await services.createLoan({
+    name: `QA ${label} MacBook`, subcategoryId: await subcategoryId("Loan", "Vehicle"),
+    accountId: card.id, principalAmountPaise: 60_000_00, startingOutstandingPaise: 60_000_00,
+    startMonth: "2013-06", annualInterestRateBps: 0, tenureMonths: 12, monthlyEmiPaise: 5_000_00
+  });
+  return { bank, card, emi };
+}
+
+const payBill = async (
+  bank: { id: string },
+  card: { id: string },
+  amountPaise: number,
+  cardEmiPayments: Array<{ loanId: string; amountPaise: number }>
+) =>
+  await services.createTransaction({
+    date: "2013-07-10", accountId: bank.id, method: "bank_transfer", merchant: "QA July card bill",
+    typeId: await typeId("Credit Card Payment"), amountPaise, direction: "outflow",
+    kind: "card_payment", transferAccountId: card.id, cardEmiPayments
+  });
+
+test("a card payment carrying an EMI moves the bank and the card by the payment, and nothing twice", async () => {
+  const { bank, card, emi } = await cardWithOneZeroInterestEmi("Owner", 25_000_00);
+  const bankBefore = (await cardOf(bank.id))?.balancePaise ?? 0;
+  const cardBefore = (await cardOf(card.id))?.outstandingPaise ?? 0;
+  const emiBefore = (await emiOf(emi.id))?.outstandingPaise ?? 0;
+  assert(cardBefore === 25_000_00 + 60_000_00, `The card should owe its spending and its EMI, got ${cardBefore}.`);
+
+  await payBill(bank, card, 30_000_00, [{ loanId: emi.id, amountPaise: 5_000_00 }]);
+
+  const bankAfter = (await cardOf(bank.id))?.balancePaise ?? 0;
+  const cardAfter = (await cardOf(card.id))?.outstandingPaise ?? 0;
+  const emiAfter = (await emiOf(emi.id))?.outstandingPaise ?? 0;
+
+  assert(
+    bankBefore - bankAfter === 30_000_00,
+    `The bank should fall by the payment and no more; it fell by ${bankBefore - bankAfter}.`
+  );
+  assert(
+    cardBefore - cardAfter === 30_000_00,
+    `The card's outstanding should fall by the payment; it fell by ${cardBefore - cardAfter}.`
+  );
+  assert(
+    emiBefore - emiAfter === 5_000_00,
+    `The month's instalment should come off the EMI once; it came off by ${emiBefore - emiAfter}.`
+  );
+  assert(
+    (await cardOf(card.id))?.spendOutstandingPaise === 0,
+    "The 25,000 of spending the bill also covered should be settled."
+  );
+});
+
+test("a card payment that settled an EMI reads as one row with one total", async () => {
+  const { bank, card, emi } = await cardWithOneZeroInterestEmi("OneRow", 25_000_00);
+  const payment = await payBill(bank, card, 30_000_00, [{ loanId: emi.id, amountPaise: 5_000_00 }]);
+
+  const july = { from: "2013-07-01", to: "2013-07-31" };
+  const ledger = await services.listTransactions(july);
+  const mine = ledger.filter((row) => row.accountId === bank.id || row.accountId === card.id);
+
+  // The bill, and the shopping it was paying for. Not a third row for the instalment.
+  assert(mine.length === 2, `July should hold two rows, not ${mine.length}: ${mine.map((r) => `${r.kind} ${r.amountPaise}`).join(", ")}`);
+  assert(
+    mine.filter((row) => row.kind === "emi").length === 0,
+    "The instalment the payment settled should not be listed beside it."
+  );
+  const listed = mine.find((row) => row.id === payment.transaction.id);
+  assert(listed, "The payment itself should be in the ledger.");
+  assert(listed?.amountPaise === 30_000_00, "The payment should be listed at its full 30,000.");
+  assert(
+    listed?.cardEmiPaise === 5_000_00,
+    `The payment should say 5,000 of it went to EMIs, it says ${listed?.cardEmiPaise}.`
+  );
+
+  // The totals read the same filters, so they must count the same rows: 25,000 of shopping plus
+  // the 30,000 bill, and not the 5,000 charge a second time.
+  const totals = await services.summarizeTransactions({ ...july, accountId: bank.id });
+  assert(totals.count === 1, `The bank's July should hold one row, not ${totals.count}.`);
+  assert(
+    totals.outflowPaise === 30_000_00,
+    `The bank's July outflow should be the payment alone, got ${totals.outflowPaise}.`
+  );
+  const cardTotals = await services.summarizeTransactions({ ...july, accountId: card.id });
+  assert(
+    cardTotals.outflowPaise === 25_000_00,
+    `The card's July outflow should be its shopping alone, got ${cardTotals.outflowPaise}.`
+  );
+});
+
+test("the instalment a card payment settled is still recorded, and still comes off the EMI", async () => {
+  const { bank, card, emi } = await cardWithOneZeroInterestEmi("Control", 25_000_00);
+  const payment = await payBill(bank, card, 30_000_00, [{ loanId: emi.id, amountPaise: 5_000_00 }]);
+
+  // Hidden, not deleted. Asked for by name, the row is there, charged to the card, hanging from
+  // the payment -- which is what makes the card's outstanding fall by 30,000 and not 25,000.
+  const shown = await services.listTransactions({
+    from: "2013-07-01", to: "2013-07-31", accountId: card.id, includeCardEmiCharges: true
+  });
+  const charge = shown.find((row) => row.kind === "emi");
+  assert(charge, "The instalment charge should still exist when it is asked for.");
+  assert(charge?.accountId === card.id, "The instalment is charged to the card, not to the bank.");
+  assert(charge?.amountPaise === 5_000_00, "The instalment charge should be the 5,000 it settled.");
+  assert(
+    charge?.linkedTransactionId === payment.transaction.id,
+    "The instalment charge should hang from the payment that settled it."
+  );
+  assert(charge?.loanId === emi.id, "The instalment charge should name the EMI it paid.");
+
+  // And it is still the row the application protects, so nothing has been orphaned by hiding it.
+  await assertRejectsWithMessage(
+    "Deleting a hidden instalment alone",
+    async () => await services.deleteTransaction(charge!.id),
+    "Change that payment instead"
+  );
+});
+
+test("a loan instalment paid from a bank stays in the ledger", async () => {
+  // The fold is for an instalment a card payment charged to a card. A loan's instalment paid out
+  // of a bank is the same `emi` kind and is a payment in its own right, so it must survive.
+  const bank = await services.createAccount({
+    name: "QA LoanEmi Bank", type: "bank", startingBalancePaise: 2_00_000_00
+  });
+  const loan = await services.createLoan({
+    name: "QA LoanEmi Home", subcategoryId: await subcategoryId("Loan", "Vehicle"),
+    principalAmountPaise: 5_00_000_00, startingOutstandingPaise: 5_00_000_00, startMonth: "2013-07",
+    annualInterestRateBps: 900, tenureMonths: 120, monthlyEmiPaise: 7_000_00
+  });
+  const paid = await services.createTransaction({
+    date: "2013-08-05", accountId: bank.id, method: "bank_transfer", merchant: "QA home loan EMI",
+    typeId: await typeId("Loan"), subcategoryId: await subcategoryId("Loan", "EMI"),
+    amountPaise: 7_000_00, direction: "outflow", kind: "emi",
+    loanId: loan.id, loanPaymentType: "emi"
+  });
+
+  const august = await services.listTransactions({ from: "2013-08-01", to: "2013-08-31", accountId: bank.id });
+  assert(
+    august.some((row) => row.id === paid.transaction.id),
+    "A loan instalment paid from a bank should still be in the ledger."
+  );
+  const totals = await services.summarizeTransactions({
+    from: "2013-08-01", to: "2013-08-31", accountId: bank.id
+  });
+  assert(totals.count === 1, `August should count the loan instalment, got ${totals.count} row(s).`);
+  assert(totals.outflowPaise === 7_000_00, `August's outflow should be the instalment, got ${totals.outflowPaise}.`);
+});
+
+test("the export of a ledger carrying a settled card EMI holds the rows the ledger shows", async () => {
+  const { bank, card, emi } = await cardWithOneZeroInterestEmi("Export", 25_000_00);
+  await payBill(bank, card, 30_000_00, [{ loanId: emi.id, amountPaise: 5_000_00 }]);
+
+  // Scoped to the card, because that is where the instalment charge sits: a file taken from the
+  // bank would be clean whether the ledger folds the charge away or not, and would prove nothing.
+  const onTheCard = { from: "2013-07-01", to: "2013-07-31", accountId: card.id };
+  const cardCsv = await services.exportTransactionsCsv(onTheCard);
+  const cardLines = cardCsv.trim().split("\n").filter((line) => line.length > 0);
+  const cardListed = await services.listTransactions(onTheCard);
+  assert(
+    cardLines.length - 1 === cardListed.length,
+    `The card's file should hold the ${cardListed.length} row(s) the ledger shows, it holds ${cardLines.length - 1}.`
+  );
+  assert(
+    cardLines.length - 1 === 1,
+    `The card's July is one row of shopping, the file holds ${cardLines.length - 1}:\n${cardCsv}`
+  );
+  assert(
+    !cardLines.slice(1).some((line) => /,"emi",/.test(line)),
+    `The file should not carry the instalment charge the ledger folded away:\n${cardCsv}`
+  );
+
+  // And the bank's file carries the payment once, at its full amount.
+  const fromTheBank = { from: "2013-07-01", to: "2013-07-31", accountId: bank.id };
+  const bankCsv = await services.exportTransactionsCsv(fromTheBank);
+  const bankLines = bankCsv.trim().split("\n").filter((line) => line.length > 0);
+  assert(
+    bankLines.length - 1 === (await services.listTransactions(fromTheBank)).length,
+    "The bank's file should hold the rows its ledger shows."
+  );
+  assert(
+    bankLines.slice(1).filter((line) => /,"card_payment",/.test(line)).length === 1,
+    `The file should carry the payment once:\n${bankCsv}`
+  );
+  assert(
+    bankLines.slice(1).some((line) => /,"30000.00",/.test(line)),
+    `The payment should be exported at its full 30,000:\n${bankCsv}`
+  );
+});
+
+test("the instalment a card payment offers is its monthly figure, capped by what is left", async () => {
+  // Measured off real EMI records rather than restated: one with plenty left, one near the end
+  // with less left than a month costs. The last instalment of an EMI is the leftover, and a bill
+  // that charged the full monthly figure to it would take the outstanding below nothing.
+  const { bank, card } = await cardWithOneZeroInterestEmi("Cap", 25_000_00);
+  const stub = await services.createLoan({
+    name: "QA Cap Phone", subcategoryId: await subcategoryId("Loan", "Vehicle"),
+    accountId: card.id, principalAmountPaise: 60_000_00, startingOutstandingPaise: 2_000_00,
+    startMonth: "2013-06", annualInterestRateBps: 0, tenureMonths: 12, monthlyEmiPaise: 5_000_00
+  });
+
+  const ordinary = (await services.listLoans(true, "card-emi")).find((loan) => loan.name === "QA Cap MacBook");
+  const ending = (await services.listLoans(true, "card-emi")).find((loan) => loan.id === stub.id);
+  assert(ordinary && ending, "Both EMIs should be readable.");
+  assert(
+    ordinary!.monthlyEmiPaise === 5_000_00 && ordinary!.outstandingPaise === 60_000_00,
+    `The running EMI should cost 5,000 of 60,000, got ${ordinary!.monthlyEmiPaise} of ${ordinary!.outstandingPaise}.`
+  );
+  assert(
+    ending!.monthlyEmiPaise === 5_000_00 && ending!.outstandingPaise === 2_000_00,
+    `The ending EMI should cost 5,000 with 2,000 left, got ${ending!.monthlyEmiPaise} of ${ending!.outstandingPaise}.`
+  );
+
+  assert(
+    cardEmiSettlementPaise(ordinary!) === ordinary!.monthlyEmiPaise,
+    `With plenty left a bill settles the month's instalment, it offered ${cardEmiSettlementPaise(ordinary!)}.`
+  );
+  assert(
+    cardEmiSettlementPaise(ending!) === ending!.outstandingPaise,
+    `Near the end a bill settles only what is left (2,000), it offered ${cardEmiSettlementPaise(ending!)}.`
+  );
+  assert(
+    cardEmiSettlementPaise(ordinary!) !== cardEmiSettlementPaise(ending!),
+    "The rule should read each EMI, not return the same figure for both."
+  );
+
+  // And what it offers is what the server will take: the ending EMI settles for 2,000.
+  const bill = await payBill(bank, card, 27_000_00, [
+    { loanId: ending!.id, amountPaise: cardEmiSettlementPaise(ending!) }
+  ]);
+  assert(
+    (await services.getTransaction(bill.transaction.id))?.cardEmiPaise === 2_000_00,
+    "The payment should carry the 2,000 the rule offered."
+  );
+  assert(
+    (await services.listLoans(true, "card-emi")).find((loan) => loan.id === stub.id)?.outstandingPaise === 0,
+    "The ending EMI should now be settled, not overpaid."
+  );
 });
 
 // A post office scheme keeps the money invested and pays the interest into a bank on a set day.

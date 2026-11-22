@@ -40,8 +40,9 @@ is decided by a single environment variable, `DATABASE_URL`.
   month worked out from the outstanding balance (a regular final EMI closes the loan). The interest paid before
   you started recording EMIs is read from the loan's own schedule, walked until it has repaid the gap between
   the original principal and the balance you entered
-- Credit-card EMIs settled as part of the card bill: paying the card asks which EMIs the payment covered, and
-  updates the card and each instalment together
+- Credit-card EMIs settled as part of the card bill: paying the card asks which EMIs the payment covered and
+  settles each one's instalment for the month, updating the card and the EMI together. The bill stays one
+  entry in the ledger -- the instalment it carried is named on the payment rather than listed beside it
 - AutoPay subscriptions that take their own payment from the bank you attach, only when the balance covers it,
   and stay listed under Upcoming payments when it doesn't
 - Account, credit-card and food-card tracking with per-account minimum balances; an account's name, opening
