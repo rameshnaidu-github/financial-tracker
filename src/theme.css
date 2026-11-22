@@ -4382,6 +4382,14 @@ button.budget-hint-chip:focus-visible {
     flex-direction: column;
   }
 
+  /* The headline figures stay first. Promoting the cards with order:-1 put them ahead of every
+     sibling, the lead row included, so the phone opened on a chart and the cash figure arrived
+     below it -- and this product's own account of the job puts available cash before card
+     utilisation. The cards move ahead of the wealth, not ahead of the answer. */
+  .overview-page > .overview-lead {
+    order: -2;
+  }
+
   .overview-page > .overview-band:has(#overview-band-cards) {
     order: -1;
   }
@@ -4427,5 +4435,87 @@ button.budget-hint-chip:focus-visible {
 @media (max-width: 1120px) and (prefers-reduced-motion: reduce) {
   .overview-band-fold > summary::after {
     transition: none;
+  }
+}
+
+/* ---------- Money figures need the room money figures need ---------- */
+/*
+ * Four columns of a 309px panel is 68px a column, and "+₹1,35,253" is 94px wide with
+ * white-space: nowrap and overflow visible. The boxes did not overlap, so a layout check that
+ * measured boxes said this was fine; the glyphs overlapped, because each figure spilled up to
+ * 26px into a 12px gap. On a page of money, two amounts touching is both unreadable and a
+ * straight loss of confidence in the numbers.
+ *
+ * Two columns rather than a smaller type size: the figures are the content, and shrinking them
+ * to fit a column count chosen for a desktop is the wrong thing to give up.
+ *
+ * net-worth-breakdown has the same construction -- a fixed column count plus nowrap -- and
+ * currently reflows only because it has one fewer column and shorter labels. It gets the same
+ * floor so it does not become this bug the first time a household's net worth reaches a crore.
+ */
+@media (max-width: 720px) {
+  .cashflow-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 12px;
+  }
+
+  .net-worth-breakdown {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 12px;
+  }
+}
+
+/* ---------- A panel that could not load says so ---------- */
+/*
+ * Deliberately unlike an empty state. An empty state is grey and quiet because it describes a
+ * situation the reader created; this describes a failure they did not, and carries the one
+ * control that can clear it.
+ */
+.panel-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  padding: 14px;
+}
+
+.panel-error > svg {
+  flex: none;
+  color: var(--danger);
+}
+
+.panel-error > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.panel-error strong {
+  font-size: 0.92rem;
+  font-weight: 650;
+}
+
+.panel-error small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.panel-error button {
+  flex: none;
+}
+
+@media (max-width: 720px) {
+  /* The reason can be a sentence; at this width it needs the row to itself. */
+  .panel-error {
+    flex-wrap: wrap;
+  }
+
+  .panel-error button {
+    width: 100%;
+    min-height: 44px;
   }
 }

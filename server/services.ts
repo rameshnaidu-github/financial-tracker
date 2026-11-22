@@ -2887,7 +2887,20 @@ export async function getWealthSummary(): Promise<WealthSummary> {
   const byType = (types: string[]) =>
     investments.filter((item) => types.includes(item.type)).reduce((sum, item) => sum + item.netWorthValuePaise, 0);
   const allocation: WealthAllocationSegment[] = [
-    { key: "cash", label: "Cash", color: "#0284c7", valuePaise: netWorth.liquidPaise + netWorth.restrictedPaise },
+    {
+      key: "cash",
+      /*
+       * Named for what it contains.
+       *
+       * This slice is every rupee of cash the household holds, which is the banks plus the food
+       * cards -- correct for an allocation ring, and ₹2,200 larger than the "Available cash"
+       * tile on the same page. Two numbers under one word was the terminology drift this very
+       * change set out to remove, so the label carries the difference instead of hiding it.
+       */
+      label: netWorth.restrictedPaise > 0 ? "Cash & food cards" : "Cash",
+      color: "#0284c7",
+      valuePaise: netWorth.liquidPaise + netWorth.restrictedPaise
+    },
     { key: "equity", label: "Equity (stocks + MF)", color: "#4f46e5", valuePaise: byType(["stocks", "mutual_funds"]) },
     { key: "gold", label: "Gold", color: "#d97706", valuePaise: byType(["gold"]) },
     { key: "realestate", label: "Real estate", color: "#0f766e", valuePaise: byType(["land", "property"]) },

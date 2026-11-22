@@ -1756,6 +1756,12 @@ function OverviewPage({
   const [loadError, setLoadError] = useState("");
   const [budgetPlan, setBudgetPlan] = useState<BudgetPlan | null>(null);
   const [wealth, setWealth] = useState<WealthSummary | null>(null);
+  const [wealthError, setWealthError] = useState("");
+  const [budgetPlanError, setBudgetPlanError] = useState("");
+  /* Bumped by Retry, so one panel can try again without reloading the page or disturbing the
+     other two requests. */
+  const [wealthRetry, setWealthRetry] = useState(0);
+  const [planRetry, setPlanRetry] = useState(0);
 
   useEffect(() => {
     setLoading(true);
@@ -1769,35 +1775,50 @@ function OverviewPage({
       .finally(() => setLoading(false));
   }, [selectedAccountId, refreshKey]);
 
+  /*
+   * Three states, not two.
+   *
+   * These both discarded the error and set the data to null, which the render then read as
+   * "nothing yet". A failed request became indistinguishable from a pending one, so Cashflow
+   * and Net worth said "...is loading." for as long as the page stayed open -- and worse, the
+   * two panels with a data-shaped empty state told a household with five accounts and eight
+   * budget lines to go and add some. A panel that is wrong about WHY it is empty invites the
+   * reader to repair data that was never broken, and this is an application whose whole claim
+   * is that the figure on screen can be trusted.
+   */
   useEffect(() => {
     let active = true;
+    setBudgetPlanError("");
     Api.budgetPlan()
       .then((plan) => {
-        if (active) {
-          setBudgetPlan(plan);
-        }
+        if (active) setBudgetPlan(plan);
       })
-      .catch(() => {
-        if (active) setBudgetPlan(null);
+      .catch((err) => {
+        if (!active) return;
+        setBudgetPlan(null);
+        setBudgetPlanError(err instanceof Error ? err.message : "Could not load the budget plan.");
       });
     return () => {
       active = false;
     };
-  }, [refreshKey]);
+  }, [refreshKey, planRetry]);
 
   useEffect(() => {
     let active = true;
+    setWealthError("");
     Api.wealth()
       .then((next) => {
         if (active) setWealth(next);
       })
-      .catch(() => {
-        if (active) setWealth(null);
+      .catch((err) => {
+        if (!active) return;
+        setWealth(null);
+        setWealthError(err instanceof Error ? err.message : "Could not load your wealth figures.");
       });
     return () => {
       active = false;
     };
-  }, [refreshKey]);
+  }, [refreshKey, wealthRetry]);
 
   if (loading) {
     return <PanelLoader label="Loading overview" />;
@@ -1967,6 +1988,8 @@ function OverviewPage({
                     <Panel title="Budget guardrails" action={<button onClick={() => onNavigate("budgets")}>Plan</button>}>
             <BudgetGuardrails
               plan={budgetPlan}
+              loadError={budgetPlanError}
+              onRetry={() => setPlanRetry((n) => n + 1)}
               uncategorizedCount={overview.summary.uncategorizedCount}
               onReviewUncategorized={() => onNavigate("transactions", { status: "uncategorized" })}
             />
@@ -1976,8 +1999,10 @@ function OverviewPage({
         <Panel title="Cashflow">
           {wealth ? (
             <CashflowPanel wealth={wealth} investedPaise={overview.summary.investedPaise} />
+          ) : wealthError ? (
+            <PanelError title="Couldn't load your cashflow" reason={wealthError} onRetry={() => setWealthRetry((n) => n + 1)} />
           ) : (
-            <EmptyState text="Cashflow is loading." />
+            <PanelLoader label="Loading cashflow" />
           )}
         </Panel>
       </OverviewBand>
@@ -1989,7 +2014,13 @@ function OverviewPage({
       <OverviewBand title="Wealth" deskWork>
         <div className="two-column overview-band-pair">
           <Panel title="Net worth">
-            {wealth ? <NetWorthPanel wealth={wealth} /> : <EmptyState text="Net worth is loading." />}
+            {wealth ? (
+              <NetWorthPanel wealth={wealth} />
+            ) : wealthError ? (
+              <PanelError title="Couldn't load your net worth" reason={wealthError} onRetry={() => setWealthRetry((n) => n + 1)} />
+            ) : (
+              <PanelLoader label="Loading net worth" />
+            )}
           </Panel>
           <Panel title="Asset allocation">
             {wealth && wealth.allocation.length > 0 ? (
@@ -2007,6 +2038,12 @@ function OverviewPage({
                 centerCountPaise={allocationTotal}
                 className="overview-donut-chart"
               />
+            ) : wealthError ? (
+              /* Never the empty state below when the request failed: it tells a household with
+                 five accounts that they have none. */
+              <PanelError title="Couldn't load your allocation" reason={wealthError} onRetry={() => setWealthRetry((n) => n + 1)} />
+            ) : !wealth ? (
+              <PanelLoader label="Loading asset allocation" />
             ) : (
               <EmptyState text="Add accounts or investments to see your allocation." />
             )}
@@ -2204,14 +2241,25 @@ function CashflowPanel({ wealth, investedPaise }: { wealth: WealthSummary; inves
 
 function BudgetGuardrails({
   plan,
+  loadError,
+  onRetry,
   uncategorizedCount,
   onReviewUncategorized
 }: {
   plan: BudgetPlan | null;
+  /** Set when the request failed, which is not the same as the household having no budget. */
+  loadError?: string;
+  onRetry?: () => void;
   uncategorizedCount: number;
   onReviewUncategorized: () => void;
 }) {
-  if (!plan || plan.lines.length === 0) {
+  if (!plan && loadError) {
+    return <PanelError title="Couldn't load your budget" reason={loadError} onRetry={onRetry ?? (() => undefined)} />;
+  }
+  if (!plan) {
+    return <PanelLoader label="Loading budget guardrails" />;
+  }
+  if (plan.lines.length === 0) {
     return <EmptyState text="Add budget lines to see month-to-date guardrails." />;
   }
 
@@ -10344,6 +10392,32 @@ function Metric({ label, value, warning = false }: { label: string; value: strin
 
 function EmptyState({ text }: { text: string }) {
   return <div className="empty-state">{text}</div>;
+}
+
+/**
+ * A panel whose data did not arrive.
+ *
+ * Distinct from an empty state on purpose. An empty state says something about the reader's
+ * data -- "add budget lines" -- and saying that when the request failed is a lie that invites
+ * them to re-enter data they already have. This says something about the request, names the
+ * reason, and offers the one action that can help.
+ *
+ * role="alert" because it replaces content the reader was waiting for, and a screen reader that
+ * was told "loading" needs to hear that it stopped.
+ */
+function PanelError({ title, reason, onRetry }: { title: string; reason: string; onRetry: () => void }) {
+  return (
+    <div className="panel-error" role="alert">
+      <CircleAlert size={18} />
+      <div>
+        <strong>{title}</strong>
+        {reason ? <small>{reason}</small> : null}
+      </div>
+      <button type="button" className="secondary-action" onClick={onRetry}>
+        Retry
+      </button>
+    </div>
+  );
 }
 
 function PanelLoader({ label }: { label: string }) {
