@@ -513,43 +513,10 @@ a {
   padding: 18px;
   overflow: hidden;
   position: relative;
-  background: linear-gradient(135deg, var(--accent-soft) 0%, var(--panel) 100%);
-}
-
-:root[data-theme="dark"] .summary-card {
-  background: linear-gradient(135deg, var(--accent-soft) 0%, var(--panel) 100%);
-}
-
-.summary-grid .summary-card:nth-child(2) {
-  background: linear-gradient(135deg, #fff7ed 0%, #fff1f2 100%);
-}
-
-.summary-grid .summary-card:nth-child(3) {
-  background: linear-gradient(135deg, #eef2ff 0%, #faf5ff 100%);
-}
-
-.summary-grid .summary-card:nth-child(4) {
-  background: linear-gradient(135deg, #fdf2f8 0%, #fff7ed 100%);
-}
-
-.summary-grid .summary-card:nth-child(5) {
-  background: linear-gradient(135deg, #ecfdf5 0%, #f0fdfa 100%);
-}
-
-:root[data-theme="dark"] .summary-grid .summary-card:nth-child(2) {
-  background: linear-gradient(135deg, #33210f 0%, #24161a 100%);
-}
-
-:root[data-theme="dark"] .summary-grid .summary-card:nth-child(3) {
-  background: linear-gradient(135deg, #1e2c4b 0%, #23183c 100%);
-}
-
-:root[data-theme="dark"] .summary-grid .summary-card:nth-child(4) {
-  background: linear-gradient(135deg, #321728 0%, #2c2113 100%);
-}
-
-:root[data-theme="dark"] .summary-grid .summary-card:nth-child(5) {
-  background: linear-gradient(135deg, #0f2e28 0%, #10221f 100%);
+  /* A plain panel. This was an accent gradient in both themes, and theme.css then undid it
+     for every card with a `:nth-child(n)` selector written purely to outrank this line. The
+     cause is gone, so the workaround could go too. */
+  background: var(--panel);
 }
 
 :root[data-theme="dark"] .summary-card > span {

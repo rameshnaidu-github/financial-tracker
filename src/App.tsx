@@ -47,7 +47,6 @@ import {
   MONTH_CHOICES,
   currentMonth,
   formatINR,
-  formatINRCompact,
   formatINRWhole,
   formatMonth,
   EARLIEST_DATE,
@@ -10466,9 +10465,17 @@ function SummaryCard({
       <span>{icon}</span>
       <div>
         <p>{label}</p>
-        {/* A money tile shows short scale so a crore figure still fits; the exact amount is
-            the tooltip, and CountUp keeps it as the text a screen reader reads. */}
-        <strong className={valueClassName} title={countPaise === undefined ? undefined : value}>
+        {/*
+          * The figure is the actual amount, not a rounding of it.
+          *
+          * This showed short scale -- "₹6.76 L" -- and put the real number in a `title`, which
+          * is to say behind a hover. On the device this product is built around there is no
+          * hover, so a sighted person on a phone could never see what they had; the number was
+          * reachable only by mouse or by screen reader. Measured at 375px, the tiles are 116
+          * to 142px wide and "₹6,75,636" wants 70, so the shortening was buying 18px that
+          * nothing needed. The short form is still there for anywhere genuinely narrow.
+          */}
+        <strong className={valueClassName}>
           {countPaise === undefined ? value : <CountUp paise={countPaise} label={value} />}
         </strong>
         {note}
@@ -10480,7 +10487,9 @@ function SummaryCard({
 /** A money figure that counts up to its value when it first appears or changes. */
 function CountUp({ paise, label }: { paise: number; label: string }) {
   const ref = useRef<HTMLSpanElement>(null);
-  useCountUp(ref, paise, formatINRCompact);
+  /* The full amount, which is also what the hidden label beside it says, so the two cannot
+     disagree about what this tile is worth. */
+  useCountUp(ref, paise, formatINR);
   return (
     <>
       <span className="visually-hidden">{label}</span>

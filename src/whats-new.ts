@@ -21,6 +21,13 @@ export type NewsEntry = {
 
 export const WHATS_NEW: NewsEntry[] = [
   {
+    date: "2026-11-27",
+    fixed: [
+      "The figures on Overview, Budget Planner and Accounts show the actual amount \u2014 \u20b96,75,636, not \u20b96.76 L. The exact number used to be the hover tooltip, which a phone has no way to reach, so on the device this app is built around you could never see what you had.",
+      "A summary tile is tinted by what it means rather than by where it sits. Four of them took a colour each from their position in the row, so a figure that wanted watching could come out reassuringly green for being fifth. Amber now marks what wants watching and green what is well."
+    ]
+  },
+  {
     date: "2026-11-26",
     fixed: [
       "Transactions fits a phone. A row is two lines instead of three, the count of what you are looking at is stated once next to the More button rather than twice, and the totals put Export beside the heading instead of under the figures.",
