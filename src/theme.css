@@ -2934,6 +2934,24 @@ button.mix-bar-head:hover > span {
     min-width: 0;
   }
 
+  /*
+   * The method leaves the row; the merchant keeps the line to itself.
+   *
+   * The second line under the merchant cost 21px in a 117px row, twelve times over -- a
+   * quarter of a screen spent on one word per row. Putting the two side by side was tried
+   * first and the merchant paid for it: at 375px a row has 191px for this, and
+   * "Outstanding adjustment" alone wants all of it, so sharing clipped the one thing you
+   * scan the list by. "Utilisation pro...", "Outstanding adjustm...".
+   *
+   * So the method goes instead. It is the more expendable of the two and often the more
+   * redundant -- on a card row it read "Credit card" beside a chip already naming the credit
+   * card -- and it is still on the row's edit form, and on a laptop, where there is width for
+   * both. What you scan a ledger by is the name and the amount, and both are now whole.
+   */
+  .ledger-row.transaction-row-card .transaction-primary-cell > span {
+    display: none;
+  }
+
   /* One line of tags, trimmed at the end rather than wrapped onto a second. Sharing the line
      with the actions leaves them narrow, and wrapping cost 11px on every row of the page for a
      second chip that the first already half-tells you. */
@@ -3158,6 +3176,57 @@ button.mix-bar-head:hover > span {
 
   .ledger-totals .ledger-export {
     margin-inline-start: auto;
+  }
+}
+
+/* ---------- The ledger, made to fit a phone ---------- */
+/*
+ * The page was 2,409px at 375px -- just under three screens -- and the three things paying for
+ * it were a duplicated sentence, a totals block stacked four deep, and a second line in every
+ * one of the twelve rows.
+ */
+@media (max-width: 720px) {
+  /*
+   * The count is stated once, at the end, next to the button that acts on it.
+   *
+   * It was stated twice: "Showing 12 of 33 transactions / More history available" above the
+   * list, and "Showing latest 12. Use More to load older transactions." below it. The second
+   * one has the More button beside it; the first is text only, and its "More history
+   * available" pointed at a control seventeen hundred pixels further down. On a laptop both
+   * are on screen together and the repetition is merely redundant; on a phone the top one is
+   * a promise you have to scroll a page and a half to collect.
+   */
+  .ledger-result-summary {
+    display: none;
+  }
+
+  /*
+   * Export moves up beside the heading, and the figures keep their own lines.
+   *
+   * Stacked, the block was 173px: a heading, three figures each on a row of their own, and a
+   * 44px button under all of them. Pairing the figures two-across was tried and abandoned --
+   * "Money out ₹2,73,097" and its two siblings are 437px of text and the panel is 283px wide,
+   * so half-width cells only turned three clear rows into four cramped ones. The button was
+   * the part with somewhere else to go.
+   */
+  .ledger-totals {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px 12px;
+  }
+
+  .ledger-totals-label {
+    grid-area: 1 / 1 / 2 / 2;
+  }
+
+  .ledger-totals .ledger-export {
+    grid-area: 1 / 2 / 2 / 3;
+    justify-self: end;
+  }
+
+  .ledger-totals .ledger-total {
+    grid-column: 1 / -1;
   }
 }
 

@@ -21,6 +21,13 @@ export type NewsEntry = {
 
 export const WHATS_NEW: NewsEntry[] = [
   {
+    date: "2026-11-26",
+    fixed: [
+      "Transactions fits a phone. A row is two lines instead of three, the count of what you are looking at is stated once next to the More button rather than twice, and the totals put Export beside the heading instead of under the figures.",
+      "A transaction's payment method no longer takes a line of its own in the phone ledger. It is still on the row's edit form and on a laptop; what you scan the list by is the shop and the amount, and long names like \u201cOutstanding adjustment\u201d now fit whole."
+    ]
+  },
+  {
     date: "2026-11-25",
     fixed: [
       "Simple mode on a phone now actually shows less, instead of only hiding sections. Overview leads with the two figures you open it for \u2014 available cash and card outstanding \u2014 and the month's spends, outflow and inflow sit quietly underneath them.",
