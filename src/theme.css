@@ -360,10 +360,11 @@ p {
   letter-spacing: -0.015em;
 }
 
-/* Neutral cards; the icon carries the accent instead of a pastel wash per card. */
-.summary-grid .summary-card:nth-child(n),
-:root[data-theme="dark"] .summary-grid .summary-card:nth-child(n) {
-  background: var(--panel);
+/* The icon carries the accent, not a wash behind the whole card. `background-clip` only; the
+   panel colour itself is set on `.summary-card` in styles.css now. This rule used to restate
+   it through `:nth-child(n)`, a selector chosen for its specificity rather than for anything
+   it matched -- it meant "every card", which is what the plain class already means. */
+.summary-grid .summary-card {
   background-clip: padding-box;
 }
 
@@ -4185,16 +4186,37 @@ button.budget-hint-chip:focus-visible {
 
 }
 
-/* The reference tints each tile by what it means -- green on what is planned and left, amber on
-   what is going. Kept to a wash: the figure is what should carry the eye, not the box. */
-.budget-tiles .summary-card.good {
-  background-image: linear-gradient(135deg, color-mix(in srgb, var(--good) 11%, transparent), transparent 62%);
-}
-
-.budget-tiles .summary-card.warning {
+/*
+ * A tile is tinted by what it means, not by where it sits.
+ *
+ * Cards two to five used to take a gradient each from `:nth-child` -- orange into rose,
+ * indigo into violet, pink into orange, emerald into teal -- and none of it said anything.
+ * The component already receives a tone of neutral, warning or good, so the fifth card could
+ * come out reassuringly green while the figure on it was a warning, purely for being fifth.
+ * Colour that looks like meaning and is not is worse than no colour at all. Those rules were
+ * also dead: another selector further up had been overriding every one of them.
+ *
+ * So the wash the budget tiles had is now what every summary grid gets -- amber on what wants
+ * watching, green on what is well, nothing on what is merely a number.
+ *
+ * Written against `.summary-grid .summary-card` rather than the bare class, and here rather
+ * than beside the card, because the dark theme sets `background` on `.summary-card` as a
+ * shorthand further down. A shorthand resets background-image, so at equal weight the wash
+ * survived in the light theme and vanished in the dark one.
+ */
+.summary-grid .summary-card.warning {
   background-image: linear-gradient(135deg, color-mix(in srgb, var(--warning) 12%, transparent), transparent 62%);
 }
 
+.summary-grid .summary-card.good {
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--good) 11%, transparent), transparent 62%);
+}
+
+/* The Overview's lead is deliberately one flat slab divided by hairlines, and the rule that
+   makes it so outranks these -- so the five figures there stay unwashed, as that design
+   intends. Its tones speak through the note under each figure instead. */
+
+/* The one tint particular to this grid: its first tile is the total the others measure against. */
 .budget-tiles .summary-card:first-child {
   background-image: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 62%);
 }
