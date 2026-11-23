@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -5311,6 +5311,18 @@ dbModule.db.close();
 
 if (existsSync(testDbPath)) {
   unlinkSync(testDbPath);
+}
+
+/*
+ * The backups directory goes too.
+ *
+ * Every run made one, named after the clock, and only the database file was ever removed --
+ * so a machine that had run this suite a few hundred times was carrying a few hundred of
+ * these. Found at 603 of them and 2.9GB in the system temp directory, which is also what had
+ * started making later runs slow enough to trip a two-minute timeout.
+ */
+if (existsSync(testBackupDir)) {
+  rmSync(testBackupDir, { recursive: true, force: true });
 }
 
 if (failed > 0) {
