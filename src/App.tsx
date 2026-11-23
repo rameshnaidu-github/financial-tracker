@@ -936,6 +936,7 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
+
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -1114,6 +1115,24 @@ export default function App() {
   );
 
   const simpleMode = simpleModeFromSettings(bootstrap?.settings);
+  /*
+   * Simple mode is a flag on the root element, not on the shell inside it.
+   *
+   * It used to sit on `.app-shell`, which was enough for rules that only needed an ancestor to
+   * test. It is not enough for the type scale: bringing every size down in this mode means one
+   * `font-size` on the element that `rem` is measured from, and that element is `:root`. With
+   * the flag one level lower, every size would have to be hunted down and rewritten by hand,
+   * and the next size added would be missed.
+   *
+   * Before paint, for the same reason as the theme: nothing should be seen at one scale and
+   * then jump to another.
+   */
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    if (simpleMode) root.dataset.simpleMode = "on";
+    else delete root.dataset.simpleMode;
+    return () => { delete root.dataset.simpleMode; };
+  }, [simpleMode]);
   const navigationModel = navigationFor(simpleMode);
 
   /*
@@ -1509,11 +1528,11 @@ export default function App() {
   };
 
   return (
-    /* Simple mode reaches the stylesheet, not just the navigation. The owner's words were
-       that a phone in this mode should not bombard you, and that is a question about how much
-       a page says as well as which pages exist -- so the mode is on the shell where CSS can
-       see it. Read only at phone width; a laptop in simple mode is unchanged. */
-    <div className="app-shell" data-simple-mode={simpleMode ? "on" : undefined}>
+    /* Simple mode reaches the stylesheet, not just the navigation: how much a page says is as
+       much a part of it as which pages exist. The flag itself is set on the root element in a
+       layout effect above, because the type scale hangs off it. Read only at phone width; a
+       laptop in simple mode is unchanged. */
+    <div className="app-shell">
       {introOpen && <IntroVideo onClose={closeIntro} />}
       <aside className="sidebar">
         <div className="brand">
@@ -3630,6 +3649,8 @@ function TransactionsPage({
                     onCancel={() => setEditDraft(null)}
                     onSave={saveEdit}
                     onDelete={() => remove(transaction)}
+                    onRefund={canRefund(transaction) ? () => startRefund(transaction) : undefined}
+                    onAddAgain={canAddAgain(transaction) ? () => void addAgain(transaction) : undefined}
                   />
                 ) : (
                   <LedgerRow
@@ -3730,8 +3751,36 @@ function LedgerRow({
   onAddAgain?: () => void;
   onEdit: () => void;
 }) {
+  const openLabel = `Open ${transaction.merchant || transaction.note || "this transaction"}`
+    + ` for ${formatINR(transaction.amountPaise)} on ${formatShortDate(transaction.date)} for editing`;
+
   return (
     <div className={`ledger-row transaction-row-card${selected ? " selected" : ""}`}>
+      {/*
+        * Tapping the row opens it.
+        *
+        * This is a real button stretched across the row, not a click handler on the row's own
+        * div and not `role="button"` on it. The row contains a checkbox and the amount's own
+        * markup; giving the row a button role would make all of that presentational to a
+        * screen reader, and a handler on a plain div is reachable by neither keyboard nor
+        * assistive technology. A button that happens to be the size of the row is both.
+        *
+        * It sits behind the content and in front of nothing: the checkbox is a sibling drawn
+        * above it, so a thumb on the checkbox still selects rather than opens, with no event
+        * plumbing between them.
+        *
+        * It is rendered at every width and shown at none but this one: `display: none` by
+        * default, turned on only for simple mode at phone width. A laptop keeps the Edit
+        * button it already has, and a full-width invisible button over a grid row there would
+        * swallow text selection for no gain.
+        */}
+      <button
+        type="button"
+        data-row-open
+        className="row-open-hit"
+        onClick={onEdit}
+        aria-label={openLabel}
+      />
       {/*
         * Two wrappers, head and foot, so a phone can lay this out as two plain flex lines and
         * leave the grid behind entirely. Both are `display: contents` at every other width, so
@@ -3837,7 +3886,9 @@ function TransactionEditRow({
   onChange,
   onCancel,
   onSave,
-  onDelete
+  onDelete,
+  onRefund,
+  onAddAgain
 }: {
   draft: TransactionEditDraft;
   accounts: Account[];
@@ -3852,6 +3903,11 @@ function TransactionEditRow({
   onCancel: () => void;
   onSave: () => void;
   onDelete: () => void;
+  /* Both optional for the same reason they were optional on the row: not every transaction can
+     be refunded, and not every one is worth repeating. An absent handler means an absent
+     button, rather than a button that has to explain why it will not work. */
+  onRefund?: () => void;
+  onAddAgain?: () => void;
 }) {
   const selectedAccount = accounts.find((account) => account.id === draft.accountId);
   const selectedType = categoryTypes.find((type) => type.id === draft.typeId);
@@ -4125,6 +4181,27 @@ function TransactionEditRow({
           <Trash2 size={16} />
           Delete
         </button>
+        {/*
+          * Refund and Add again live here now.
+          *
+          * On a phone they used to be two of three round icon buttons on every ledger row, and
+          * those buttons were most of the reason a transaction needed two lines. They are not
+          * row furniture: they are things you do to one transaction you have singled out,
+          * which is exactly the state this form is. Carrying a word instead of a bare icon
+          * costs nothing here, where there is room for words.
+          */}
+        {onRefund && (
+          <button type="button" className="secondary-action" onClick={onRefund}>
+            <RotateCcw size={16} />
+            Refund
+          </button>
+        )}
+        {onAddAgain && (
+          <button type="button" className="secondary-action" onClick={onAddAgain}>
+            <Plus size={16} />
+            Add again
+          </button>
+        )}
         <span />
         <button className="secondary-action" onClick={onCancel}>
           Cancel
