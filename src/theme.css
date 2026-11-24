@@ -1078,12 +1078,39 @@ textarea:focus {
 }
 
 @container (max-width: 620px) {
+  /*
+   * Two columns, and never narrower than a control can live in.
+   *
+   * `minmax(0, 1fr)` let a track go below the width of what was in it. A native control does not
+   * follow a track it cannot fit: measured in the sheet at a 412px window, a control whose own
+   * minimum exceeded its 173px track rendered 260px wide and laid 87px of itself across the
+   * field beside it, with the tracks reporting 173px each the whole time. That is the collision
+   * the owner photographed -- a date field touching the account field next to it.
+   *
+   * 200px is what one of these fields needs: a date reading "24 Nov 2026" with the control's own
+   * padding and its picker glyph. Two of them plus the 12px gutter is 412px, which is below the
+   * width at which this rule applies at all (see the block below), so the floor can never be the
+   * thing that overflows the form.
+   */
   .entry-form {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(200px, 1fr));
   }
 }
 
-@container (max-width: 340px) {
+/*
+ * A phone gets one field to a line.
+ *
+ * This threshold was 340px, which is narrower than any phone in use: at a 412px window the
+ * sheet's body is 358px and it took the two-column branch, giving each field 173px. The fix
+ * above stops a control overflowing a track, but the better answer on a phone is that there is
+ * no field beside it to collide with, and a date, an account and an amount each read better on
+ * their own line than squeezed into half of a 358px sheet.
+ *
+ * 430px is where two columns start being worth having: it is the narrowest sheet that can give
+ * both fields the 200px above with the gutter between them, with a little room to spare. A
+ * tablet gets its two columns; every phone gets one.
+ */
+@container (max-width: 430px) {
   .entry-form {
     grid-template-columns: 1fr;
   }
@@ -1116,6 +1143,69 @@ textarea:focus {
   width: 44px;
   min-width: 44px;
   padding: 0;
+}
+
+/*
+ * The row's one button, and the menu behind it.
+ *
+ * The menu is painted on the body, outside every section's stacking context and outside the
+ * transforms those sections carry while they animate in -- a `position: fixed` box inside a
+ * transformed ancestor is positioned against that ancestor, not the viewport, and lands
+ * somewhere off screen. Its top and left are written by the component after it has measured
+ * itself against the trigger, so the only thing stated here is what it looks like.
+ */
+.row-menu-trigger[aria-expanded="true"] {
+  background: var(--panel-soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.row-menu {
+  position: fixed;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  min-width: 184px;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 18px 40px -16px rgba(16, 24, 40, 0.28), 0 2px 8px -2px rgba(16, 24, 40, 0.12);
+}
+
+:root[data-theme="dark"] .row-menu {
+  box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.6), 0 2px 8px -2px rgba(0, 0, 0, 0.4);
+}
+
+/* 44px a line, because this is the one place these two actions can now be reached from. */
+.row-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.92rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row-menu-item:hover,
+.row-menu-item:focus-visible {
+  background: var(--panel-soft);
+}
+
+.row-menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.row-menu-item .ui-icon {
+  color: var(--muted);
+  flex: 0 0 auto;
 }
 
 .search-box {
@@ -2779,12 +2869,38 @@ button.mix-bar-head:hover > span {
   .entry-form-actions .add-button {
     min-width: 0;
   }
+
+  /*
+   * Both buttons take the width; neither is pinned to a side.
+   *
+   * `.add-button { align-self: end }` is written in the base stylesheet, where this footer is a
+   * row and "end" means the bottom of the line -- harmless. Turned to a column here, the same
+   * declaration is read against the cross axis, which is now horizontal, and it means the right
+   * edge. So "Add transaction" came out 184px wide and pinned right while Cancel, which has no
+   * such rule, stretched to the full 358px underneath it. One full-width button and one
+   * half-width one above it, which is what the owner photographed.
+   *
+   * `align-items: stretch` on the container could not undo it: `align-self` on the item wins.
+   * Naming both children at a specificity the single class cannot reach is what settles it.
+   * This is the same trap the Overview hit, where `align-items: center` became horizontal
+   * centring the moment that flex line turned into a column.
+   */
+  .entry-form-actions > .primary-action,
+  .entry-form-actions > .secondary-action {
+    align-self: stretch;
+  }
 }
 
 @media (max-width: 480px) {
   .dialog-form-actions {
     flex-direction: column-reverse;
     align-items: stretch;
+  }
+
+  /* The same rule, for the dialog footer that is laid out by media query rather than container. */
+  .dialog-form-actions > .primary-action,
+  .dialog-form-actions > .secondary-action {
+    align-self: stretch;
   }
 }
 
@@ -4686,6 +4802,46 @@ button.budget-hint-chip:focus-visible {
     font-size: 1rem;
   }
 
+  /*
+   * Below 360px the three totals take two lines rather than overflow three columns.
+   *
+   * Measured at 320px: a tile is 93px wide, 73px of it inside its own padding, and "₹1,85,000"
+   * wants 79px -- so the figure left its card by 6px, which the sweep caught on the very row
+   * this scope was opened about. Rounding to whole rupees bought three glyphs back but not
+   * enough: a figure in lakhs will not fit a third of a 320px screen at any size worth reading.
+   *
+   * Two columns, and Net takes the second line to itself. The rule that stretches an odd last
+   * tile across the row is what puts it there, and here -- unlike the Overview's five, where it
+   * had to be turned off -- that is exactly the right outcome: Money out and Money in are a
+   * pair, and Net is what they come to.
+   */
+  @media (max-width: 360px) {
+    .summary-grid.ledger-total-tiles {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .summary-grid.ledger-total-tiles > .summary-card:last-child:nth-child(odd) {
+      grid-column: 1 / -1;
+    }
+  }
+
+  /*
+   * Two rows of space between the totals and the first date, which is what the owner asked for.
+   *
+   * They sat 2px apart: measured on a phone, the gap was 2px against an 18px line, which is a
+   * ninth of one row. The three tiles and the first day's heading read as one block, and the
+   * heading -- which is a date, a count and that day's net -- looked like a fourth tile that
+   * had fallen out of the grid.
+   *
+   * 2.25rem is two of this heading's own lines at the phone's type scale, not a round number
+   * chosen by eye: the heading's line box measures 18px, so two rows is 36px, and 36px is
+   * 2.25rem at this root size. Stated in rem so it keeps meaning two rows if the owner's phone
+   * is set to larger text, which several of these screenshots suggest it is.
+   */
+  .ledger-list {
+    margin-top: 2.25rem;
+  }
+
   /* A spreadsheet is opened at a desk. The owner asked for this off the phone's ledger. */
   .ledger-export {
     display: none;
@@ -4796,6 +4952,56 @@ button.budget-hint-chip:focus-visible {
 
   .budget-bar {
     grid-area: 3 / 1 / 4 / 3;
+  }
+
+  /*
+   * An account card reads straight down instead of across.
+   *
+   * The two-column row above is the Budget card's design and a good one for it: "1,070 left"
+   * and "2,930 spent · 153 a day" are two halves of one sentence and belong on one line. An
+   * account card's second half is not that. It is "9% of 1,50,000 · 1,36,213 left" -- three
+   * figures qualifying the amount beside them -- and on a phone it was given whatever the
+   * amount did not want. The owner's own card has 13,787 owed, which leaves 171px for all
+   * three, so they broke across three lines next to one short figure, and the card became a
+   * tall column of fragments with a hole beside it.
+   *
+   * One column, and the order the owner drew: the amount, the bar, then in words what the bar
+   * just said, then the split of what is owed. The explicit areas go with the two columns they
+   * were written for -- head spans `1 / 3`, which in a single-column grid would conjure an
+   * implicit second column and put the two-column layout straight back.
+   */
+  .budget-card.account-card-v2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .budget-card.account-card-v2 .budget-card-head,
+  .budget-card.account-card-v2 .budget-card-figure,
+  .budget-card.account-card-v2 .budget-card-foot,
+  .budget-card.account-card-v2 .budget-bar {
+    grid-area: auto;
+  }
+
+  /*
+   * Room to the card's own edge, and room under the heading that names the group.
+   *
+   * 12px of padding around text that runs the full width of a 288px card is close enough to the
+   * border that the card reads as packed rather than composed, which is what the owner meant by
+   * the whole card being cramped. 14px is not a large change; it is the difference between the
+   * figures sitting in the card and sitting against it.
+   *
+   * The group heading had 12px under it against its own 16px line -- three quarters of a row --
+   * so "CARDS" sat closer to the card below than to the gap above it and read as part of that
+   * card. 20px gives it a line and a quarter, and it belongs to the group again.
+   */
+  .budget-card.account-card-v2 {
+    padding: 14px;
+  }
+
+  /* Named through its group so it outranks the `margin: 0 0 var(--space-3)` shorthand further
+     down this stylesheet, which resets the bottom margin and, at equal specificity, would
+     otherwise win on source order and leave this rule doing nothing. Measured, not assumed. */
+  .account-group .account-group-title {
+    margin-bottom: 20px;
   }
 
   /*

@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
 import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
-import { formatINR, formatINRWhole, todayISO } from "../src/format.ts";
+import { formatINR, formatINRWhole, outstandingSpendLabel, outstandingSplit, todayISO } from "../src/format.ts";
 import { INFLOW_BEHAVIORS, SELF_TRANSFER_SUBCATEGORY_ID, cardEmiSettlementPaise } from "../shared/finance.ts";
 import {
   NAV_ORDER,
@@ -3939,6 +3939,27 @@ test("whole-rupee headline figures round and never show paise", async () => {
     assert(!/\.\d/.test(shown), `formatINRWhole(${paise}) must not show paise`);
   }
   assert(formatINR(1_23_456_49).endsWith(".49"), "Row figures keep their paise.");
+});
+
+test("a card paid ahead of its cycle says so instead of printing a negative at 0%", async () => {
+  /* The owner's own card: the EMIs still stand, and the cycle's own spending is in credit. */
+  const ahead = outstandingSplit(-41_213_00, 55_000_00);
+  assert(ahead.show, "A card with EMIs running and a positive total still shows its split.");
+  assert(ahead.spendPercent === 0, `The bar clamps a negative share to 0, got ${ahead.spendPercent}.`);
+
+  const said = outstandingSpendLabel(ahead).replace(/\u00a0/g, " ");
+  assert(!said.includes("-₹"), `A paid-ahead cycle must not print a negative amount, got "${said}".`);
+  assert(!/\b0%/.test(said), `A paid-ahead cycle must not print 0%, got "${said}".`);
+  assert(said.includes("Paid ahead"), `A paid-ahead cycle should say so, got "${said}".`);
+  assert(said.includes("₹41,213"), `It should still say how much, got "${said}".`);
+
+  /* And the ordinary case is untouched: a cycle with spending on it reads as it always did. */
+  const normal = outstandingSpendLabel(outstandingSplit(30_000_00, 10_000_00)).replace(/\u00a0/g, " ");
+  assert(normal === "Monthly spends 75% · ₹30,000", `An ordinary cycle should be unchanged, got "${normal}".`);
+
+  /* Zero is not negative: a cycle with nothing on it is still "monthly spends", not "paid ahead". */
+  const none = outstandingSpendLabel(outstandingSplit(0, 10_000_00)).replace(/\u00a0/g, " ");
+  assert(none === "Monthly spends 0% · ₹0", `A cycle with no spending should read plainly, got "${none}".`);
 });
 
 // ---------------------------------------------------------------------------
