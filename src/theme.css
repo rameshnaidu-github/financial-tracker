@@ -1711,21 +1711,20 @@ select:not([multiple]):not([size]) {
   margin-bottom: var(--space-4);
 }
 
-/* Overview: Available cash leads; the other three headline figures form a quieter group. */
-@media (min-width: 1121px) {
-  .summary-grid.overview-summary {
-    grid-template-columns: minmax(0, 1.45fr) repeat(3, minmax(0, 1fr));
-  }
-
-  .overview-summary .summary-card:first-child strong {
-    font-size: clamp(1.75rem, 1.25rem + 1vw, 2.25rem);
-  }
-
-  .overview-summary .summary-card:first-child > span {
-    width: 48px;
-    height: 48px;
-  }
-}
+/*
+ * Removed: "Available cash leads; the other three headline figures form a quieter group."
+ *
+ * This was written when the row held four cards. It holds five now, so its four-track template
+ * had already been overridden by the five-track one below and was dead; what still applied was
+ * the larger figure and the larger icon on the first card, from 1121px up. Measured at 1280px,
+ * that figure wanted 121px in the 108px its card could give it and ran out across the hairline
+ * into the cell beside it, while the next cell along had 6px of clearance -- so there was
+ * nothing to widen the first column with either.
+ *
+ * The emphasis was first narrowed to 1500px and up, where the row is wide enough to carry it.
+ * It fitted there, and still did not match the four cells beside it, which was the complaint.
+ * It is gone from every width now; see the >=900px block below for the whole argument.
+ */
 
 /* Settings rows: quiet fills instead of boxed outlines. */
 .settings-row {
@@ -1942,20 +1941,42 @@ body::after {
    half-empty second row, which reads as a second, lesser group rather than as part of the same
    line. Below this width they go back to wrapping, where one row would leave each too narrow. */
 @media (min-width: 900px) {
+  /*
+   * Five equal columns, and all five figures set the same.
+   *
+   * Available cash used to be the exception here: a figure 60% larger than its neighbours, a
+   * 48px icon against their 42px, and a column half again as wide to hold it. The owner's words
+   * for the result were that it "doesn't match with other cells in the same row", and it did
+   * not: at 1512px it was 38.9px against 24.4px, in a 318px column against 219px.
+   *
+   * It also never fitted. At 1512px "3,44,285" rendered 181px wide in the 133px the cell gave
+   * it and ran out across the hairline into "Credit card outstanding" -- the figure the row
+   * leads with, reading as though it had been cut. Widening its column moved the defect one
+   * cell along: at 1280px, taking 20px from each of the other four pushed "1,85,000" 13px out
+   * of ITS cell. Scoping the emphasis to 1500px and up made it fit and left the mismatch.
+   *
+   * Five peers in one row, then. Available cash leads by being read first, which is what a row
+   * is for, rather than by being a different size from everything beside it.
+   *
+   * The spill stayed invisible to the sweep because the overflow is `visible`: the detectors
+   * look for text clipped by a box that hides it, and nothing was clipped -- it was spilling.
+   * `spillsOutOfCell` was written for exactly this and is what now holds it at zero.
+   */
   .overview-lead .summary-grid.overview-summary {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
-  /* Five across leaves each column too narrow for the first figure's full size. */
-  .overview-lead .overview-summary .summary-card:first-child strong {
-    font-size: clamp(1.4rem, 0.9rem + 0.9vw, 2rem);
-  }
-
-  /* "Credit card outstanding" needs two lines in a column this narrow and "Outflow" needs one,
-     which left their figures at different heights along the row. Every label keeps room for two
-     lines, so the five figures read across as one line of numbers. */
+  /*
+   * "Credit card outstanding" needs two lines in a column this narrow and "Outflow" needs one,
+   * which left their figures at different heights along the row. Every label keeps room for two
+   * lines, so the five figures read across as one line of numbers.
+   *
+   * 2.8em, not the 2.5em this was first written with: a two-line label measures 36px against a
+   * 13.12px font, which is 2.74em, so 2.5em was three pixels short and the figures under the
+   * two-line labels still sat three pixels low. Measured rather than rounded.
+   */
   .overview-lead .overview-summary .summary-card p {
-    min-height: 2.5em;
+    min-height: 2.8em;
   }
 }
 
@@ -1979,11 +2000,12 @@ body::after {
   }
 }
 
-@media (min-width: 1500px) {
-  .overview-lead .overview-summary .summary-card:first-child strong {
-    font-size: clamp(1.9rem, 1.3rem + 1.2vw, 2.5rem);
-  }
-}
+/*
+ * Removed: the >=1500px block that set the first card's figure in clamp(1.9rem .. 2.5rem), gave
+ * it a 48px icon and widened its column to 1.45fr. That was the emphasis the owner reported as
+ * not matching the rest of the row; see the >=900px block above for why it is gone rather than
+ * rescoped again.
+ */
 
 /* ---------- C. Overview bands and rows ---------- */
 .content-area > .overview-page {
@@ -2444,6 +2466,59 @@ body::before {
     gap: 14px;
   }
 }
+
+/*
+ * The row is measured against its own width, not the window's, because they disagree.
+ *
+ * At 1121px the sidebar stops being an icon rail and becomes a labelled nav, which costs this
+ * row 275px: the grid is 1,084px wide at a 1,120px window and 809px wide at a 1,121px one. So
+ * the row has LESS room on the wider screen, and every viewport rule written for it is wrong on
+ * one side of that step. Measured at 1121px, all five figures ran out of their cells -- the two
+ * long ones by 22px, straight across the hairline -- while at 1120px the same five had 34px of
+ * clearance each. Nothing about the window told you that; the grid's own width did.
+ *
+ * So the one thing that varies here is set by container query. `container-type` is declared only
+ * from 900px up, which is where the five cards share a row and a card is a fifth of the grid;
+ * below that the row wraps, no container exists, and these rules cannot match.
+ *
+ * What gives way is the icon disc. At a 161px card there is no arrangement that keeps it: take
+ * the 44px of padding, the 42px disc and the 14px gap and 61px are left for a figure that needs
+ * 104px. Shrinking the figure to fit would mean 15px type. The disc is the decoration and the
+ * figure is the point, and the label already says the word -- which is the same argument, with
+ * the same conclusion, that the phone layout reached when it dropped the disc at 720px.
+ *
+ * The threshold is 1,160px of row, where a card is 231px. Measured with the disc at the first
+ * width above it, 1,199px (a 1,512px window): "3,44,285" is 113px in the 139px the card gives
+ * it, 26px spare. Below it, without the disc and with 14px of side padding, the tightest case
+ * in the whole range is a 161px card with 26px spare. Both hold; a figure of two more digits
+ * would not, and would want this threshold raised rather than the disc squeezed.
+ */
+@media (min-width: 900px) {
+  .overview-lead .summary-grid.overview-summary {
+    container-type: inline-size;
+  }
+}
+
+@container (max-width: 1160px) {
+  .overview-lead .summary-grid .summary-card:nth-child(n),
+  :root[data-theme="dark"] .overview-lead .summary-grid .summary-card:nth-child(n) {
+    padding: 20px 14px;
+  }
+
+  .overview-lead .overview-summary .summary-card > span:first-child {
+    display: none;
+  }
+}
+
+/*
+ * No top-alignment override here, and none needed.
+ *
+ * One was added when the first cell was set larger than the other four: centring floated its
+ * label 6px above theirs and its figure 8px above theirs, because that cell was taller. With
+ * all five cells set the same, and every label keeping room for two lines (see the >=900px
+ * block above), the five cells are the same height and centring lines them up by itself.
+ * Measured at 1280px, 1512px and 1920px: label spread 0, figure spread 0.
+ */
 
 /* Profile Save shares the primary look: dark label on the light accent in dark mode (white was ~2.4:1). */
 .profile-menu .profile-save-button:hover {
@@ -4763,7 +4838,6 @@ button.budget-hint-chip:focus-visible {
        its scrollWidth does not grow when it does, so no clipping check catches it. */
     min-width: auto;
   }
-
 
   .budget-month-picker .control-label {
     position: absolute;
