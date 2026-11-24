@@ -16,6 +16,7 @@ import {
   simpleModeFromSettings,
   mobileLabelFor
 } from "../src/navigation.ts";
+import { WHATS_NEW } from "../src/whats-new.ts";
 import type { ReportType } from "../src/types.ts";
 
 const testDbPath = path.join(tmpdir(), `finance-tracker-qa-${Date.now()}.db`);
@@ -5286,7 +5287,47 @@ test("both navigations read one answer, so they cannot drift apart", async () =>
   }
 });
 
+/*
+ * What's new cannot claim the future, and cannot list a day twice.
+ *
+ * The file's own header says a reader opens it to find out what the application does today, and
+ * every entry is dated. Those dates were written by hand alongside the change and they drifted:
+ * three entries ended up dated 25, 26 and 27 November while the day was the 24th, so the newest
+ * thing the application had to say about itself had not happened yet. A reader has no way to
+ * tell a typo from a plan.
+ *
+ * Checked against the machine's clock rather than a constant, so it still means something
+ * tomorrow.
+ */
+test("What's new is dated in the past, one entry per day, newest first", async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const ahead = WHATS_NEW.filter((e) => e.date > today);
+  assert(
+    ahead.length === 0,
+    `What's new is dated in the future: ${ahead.map((e) => e.date).join(", ")} (today is ${today}).`
+  );
+
+  const seen = new Set<string>();
+  const repeated = WHATS_NEW.filter((e) => seen.size === seen.add(e.date).size);
+  assert(
+    repeated.length === 0,
+    `A date appears more than once in What's new: ${repeated.map((e) => e.date).join(", ")}.`
+  );
+
+  const newestFirst = [...WHATS_NEW].sort((a, b) => (a.date < b.date ? 1 : -1));
+  assert(
+    JSON.stringify(newestFirst.map((e) => e.date)) === JSON.stringify(WHATS_NEW.map((e) => e.date)),
+    "What's new is not newest-first, so the dot that marks unread news marks the wrong entry."
+  );
+
+  for (const entry of WHATS_NEW) {
+    const lines = [...(entry.added ?? []), ...(entry.fixed ?? [])];
+    assert(lines.length > 0, `${entry.date} has no lines, so it is a date with nothing to say.`);
+  }
+});
+
 let failed = 0;
+let ran = 0;
 
 // The suite exercises the services directly rather than over HTTP, so there is no request to
 // carry whose rows these are. It acts as the owner, and says so once here rather than in every
@@ -5304,8 +5345,27 @@ await dbModule.asOwner(async () => {
       // an asynchronous data layer.
       console.error(error instanceof Error ? (error.stack ?? error.message) : error);
     }
+    ran += 1;
   }
 });
+
+/*
+ * Every registered test has to have actually run.
+ *
+ * The runner consumes `tests` at the point this file reaches it, but the count printed at the
+ * end came from `tests.length` -- so a test registered BELOW the runner was never executed and
+ * still added one to the total. A test added at the bottom of the file, which is where anyone
+ * would naturally add one, would announce itself as passing without running.
+ *
+ * Found by planting a deliberately failing case and watching the suite report success.
+ */
+if (ran !== tests.length) {
+  console.error(
+    `${tests.length - ran} test(s) were registered after the runner had already started and never ran. ` +
+      "Move them above the `for (const item of tests)` loop."
+  );
+  process.exit(1);
+}
 
 dbModule.db.close();
 
@@ -5330,4 +5390,4 @@ if (failed > 0) {
   process.exit(1);
 }
 
-console.log(`${tests.length} QA tests passed.`);
+console.log(`${ran} QA tests passed.`);

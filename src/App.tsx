@@ -1915,16 +1915,10 @@ function OverviewPage({
                 ? "warning"
                 : "neutral"
             }
-            /* A food card is money and it is not spendable on a bill, so it is named here
-               rather than folded into the figure above it. Silence would have been the page
-               quietly overstating what the household can actually spend. */
-            note={
-              selectedAccount?.type !== "credit_card" && overview.summary.foodCardCashPaise > 0 ? (
-                <span className="summary-change">
-                  {`plus ${formatINRWhole(overview.summary.foodCardCashPaise)} on food cards, which only buy food`}
-                </span>
-              ) : undefined
-            }
+            /* The food-card note is gone at the owner's request. It read "plus Rs2,200 on food
+               cards, which only buy food" and was there so the figure above it did not overstate
+               what can actually be spent. That money is still on Accounts, under the food card
+               itself; what this tile answers now is one question with one number. */
           />
           <SummaryCard
             label="Credit card outstanding"
@@ -1935,13 +1929,11 @@ function OverviewPage({
                signal that is always on carries nothing. It follows the worst card's share of
                its own limit now, which is the thing actually worth warning about. */
             tone={worstCardUtilisation !== null && worstCardUtilisation >= 80 ? "warning" : "neutral"}
-            note={
-              worstCard && worstCardUtilisation !== null && worstCardUtilisation >= 80 ? (
-                <span className="summary-change bad">
-                  {`${worstCard.name} is at ${worstCardUtilisation}% of its limit`}
-                </span>
-              ) : undefined
-            }
+            /* The utilisation note is gone at the owner's request. It read "AXIS NEO is at 93% of
+               its limit" and said again, in a tile about what is owed, what the Cards panel a
+               little further down this same page already says per card, with the limit and a bar.
+               The amber tone stays: it is still driven by the worst card's share of its limit, so
+               the tile still marks itself as worth a look and the detail is one glance below. */
           />
           {/* What the cards were actually used for this month, which the outstanding beside it
               cannot say: that figure carries EMIs and whatever was left unpaid from before. */}
