@@ -6,6 +6,8 @@
 import { Airplane } from "@phosphor-icons/react/dist/csr/Airplane";
 import { Archive as PhArchive } from "@phosphor-icons/react/dist/csr/Archive";
 import { ArrowCounterClockwise } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
+import { ArrowDownRight as PhArrowDownRight } from "@phosphor-icons/react/dist/csr/ArrowDownRight";
+import { ArrowUpRight as PhArrowUpRight } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import { ArrowsDownUp } from "@phosphor-icons/react/dist/csr/ArrowsDownUp";
 import { Bank } from "@phosphor-icons/react/dist/csr/Bank";
 import { CalendarBlank } from "@phosphor-icons/react/dist/csr/CalendarBlank";
@@ -37,6 +39,7 @@ import { Sun as PhSun } from "@phosphor-icons/react/dist/csr/Sun";
 import { Tag } from "@phosphor-icons/react/dist/csr/Tag";
 import { Target as PhTarget } from "@phosphor-icons/react/dist/csr/Target";
 import { Trash } from "@phosphor-icons/react/dist/csr/Trash";
+import { Scales } from "@phosphor-icons/react/dist/csr/Scales";
 import { TrendUp } from "@phosphor-icons/react/dist/csr/TrendUp";
 import { UploadSimple } from "@phosphor-icons/react/dist/csr/UploadSimple";
 import { UserCircle as PhUserCircle } from "@phosphor-icons/react/dist/csr/UserCircle";
@@ -60,6 +63,10 @@ function wrap(Glyph: PhosphorIcon, name: string): UiIcon {
 export const Archive = wrap(PhArchive, "Archive");
 export const Megaphone = wrap(PhMegaphone, "Megaphone");
 export const ArrowDownUp = wrap(ArrowsDownUp, "ArrowDownUp");
+/* Money leaving, money arriving, and the balance between them -- the ledger's three totals. */
+export const ArrowUpRight = wrap(PhArrowUpRight, "ArrowUpRight");
+export const ArrowDownRight = wrap(PhArrowDownRight, "ArrowDownRight");
+export const Scale = wrap(Scales, "Scale");
 export const BarChart3 = wrap(ChartBar, "BarChart3");
 export const CalendarClock = wrap(CalendarCheck, "CalendarClock");
 export const CalendarDays = wrap(CalendarBlank, "CalendarDays");
