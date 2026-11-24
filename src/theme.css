@@ -7,8 +7,22 @@
 
 /* ---------- Tokens ---------- */
 :root {
-  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  /*
+   * Manrope, in place of Geist.
+   *
+   * Chosen by the owner from four. It is a semi-condensed geometric sans, and the narrower
+   * letterfit is the practical reason it suits this application: three scopes of work here have
+   * been spent finding horizontal room on a phone -- for a shop name beside an amount, for five
+   * figures across a row, for a chart legend -- and a face that asks for less of it gives some
+   * of that back everywhere at once.
+   *
+   * Geist Mono went with it. `--font-mono` was declared and then never used by a single rule,
+   * so the application was downloading a second webfont on every load to style nothing. The
+   * token stays, pointing at whatever the machine already has, so the next thing that wants a
+   * monospace has one without a download.
+   */
+  --font-sans: "Manrope Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 
   --bg: #f1f4f1;
   --bg-deep: #e7ebe7;
@@ -31,6 +45,21 @@
   --danger-soft: #fbeceb;
   --warning: #8a5a12;
   --warning-soft: #fbf3e4;
+  /*
+   * Record's own colour, for the phone bar.
+   *
+   * It has a token of its own rather than borrowing --warning, which is the nearest amber
+   * already here: recording a transaction is the thing this application is for, not something
+   * gone wrong, and a primary action that inherits the warning hue would change meaning the
+   * day that hue is retuned.
+   *
+   * Chosen by measurement, not by eye. White on it is 8.26:1, and its luminance sits 0.066
+   * below the accent green's, so the two do not merely differ in hue -- a green and an amber
+   * of matching weight are the pair a red-green deficiency collapses, and the whole point of
+   * this colour is that one thing in the bar says "you are here" and this is not it.
+   */
+  --record: #7a3f08;
+  --on-record: #ffffff;
   /* The track a progress bar runs in, named because three different bars drew their own. */
   --track: #e1e8e2;
 
@@ -127,6 +156,10 @@
   --danger-soft: #30201c;
   --warning: #f5d082;
   --warning-soft: #2e2817;
+  /* Record against the dark theme's mint: near-black on it reads at 8.66:1, and it sits 0.183
+     below the mint in luminance, which is the wider separation of the two themes. */
+  --record: #eda043;
+  --on-record: #06150d;
   --track: #3e4440;
 
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 26px -16px rgba(0, 0, 0, 0.6);
@@ -2195,12 +2228,26 @@ button.donut-legend-item:hover {
   border-radius: 3px;
 }
 
+/*
+ * A legend name wraps rather than being trimmed, at every width.
+ *
+ * It was one line with an ellipsis, and on a 1440px laptop the asset-allocation key still had
+ * only 99px for it: "Cash & food cards" wanted 124 and "Equity (stocks + MF)" 137, so both were
+ * trimmed on the widest screen the application runs on. A legend is the chart's own key, and a
+ * trimmed name does not identify the slice it belongs to.
+ *
+ * Found while checking whether changing the typeface had broken anything -- it had not; Geist
+ * trimmed exactly the same two names in a 99px box. It had simply never been looked at, because
+ * the laptop sweep only recorded page heights and never asked about cut text. The phone was
+ * given this fix already; this is the same rule, no longer scoped to a width.
+ */
 .donut-legend-name {
-  overflow: hidden;
+  overflow: visible;
   font-size: 0.9rem;
   font-weight: 540;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: clip;
+  white-space: normal;
+  line-height: 1.25;
 }
 
 .donut-legend-share {
@@ -3024,6 +3071,351 @@ button.mix-bar-head:hover > span {
  */
 @media (max-width: 720px) {
   /*
+   * ==========================================================================
+   * The spending pie, built for a phone
+   * ==========================================================================
+   *
+   * This chart used to be folded away on a phone, and the reason was sound: at its laptop size
+   * it was 743px of a 2439px Overview -- a 228px ring, then a legend beside it that wrapped
+   * underneath, three screens of scrolling before the card balances you check at a till.
+   *
+   * The owner asked for the opposite: show the expenses as a pie with each share and amount, as
+   * the laptop does, and stop sending them to Reports to see it. So the fold is gone and the
+   * cost is paid for here instead -- the same chart drawn for the screen it is on, rather than a
+   * laptop's chart unfolded onto a phone.
+   *
+   *   ring   228px -> 132px
+   *   row    36px  -> 30px minimum
+   *
+   * which is a little over 300px for the whole figure where it was 743px.
+   */
+  .donut-figure .donut-chart {
+    width: 116px;
+    height: 116px;
+  }
+
+  .donut-figure .donut-segment,
+  .donut-figure .donut-track,
+  .donut-figure .donut-empty {
+    /* In proportion with the smaller ring, so it reads as the same chart drawn smaller rather
+       than a thinner one. */
+    stroke-width: 26;
+  }
+
+  .donut-figure {
+    gap: 12px 16px;
+  }
+
+  /*
+   * The rows are not made shorter, and the ring carries the saving instead.
+   *
+   * A `min-height: 30px` here was written first and was dead on arrival: a thumb-target rule,
+   * `@media (pointer: coarse), (width <= 760px)`, holds every legend row at 44px, and it wins.
+   * It is right to win -- each row is a button that filters the ledger to that category, and a
+   * 30px button is one this project's own gate would fail. Eight categories at 44px is 352px,
+   * and that is what the owner's question costs to answer honestly on a touch screen.
+   */
+  .donut-legend-item {
+    gap: 8px;
+    padding: 3px 6px;
+  }
+
+  /*
+   * A legend name wraps rather than being cut.
+   *
+   * Measured at 320px: the name column was 101px while "Cash & food cards" wanted 124 and
+   * "Equity (stocks + MF)" wanted 137, so both were trimmed to an ellipsis. A legend is the
+   * chart's own key -- a trimmed name does not identify the slice it is pointing at, and the
+   * reading is lost. There is no width at which a fixed single line holds every category name,
+   * so the line is allowed to become two. A row that needs the space takes it; the rest do not.
+   */
+  /* Wrapping is the default everywhere now; what a phone still needs is the row kept centred
+     when a name takes two lines. */
+  .donut-legend-item {
+    align-items: center;
+  }
+
+  /*
+   * ==========================================================================
+   * The type scale, for simple mode on a phone only
+   * ==========================================================================
+   *
+   * One declaration, because `rem` is measured from the root and nothing else needs to know.
+   * 16px -> 15px takes roughly 6% off every size in the application at once, which is the
+   * difference between a page that fits and a page that is read in fragments, without any
+   * single thing becoming small enough to squint at. The owner asked for smaller type
+   * everywhere in this mode; everywhere is what a root font-size means.
+   *
+   * It is deliberately a modest step. 14px was tried and the amounts -- the figures this whole
+   * application exists to show -- stopped being comfortable to read at arm's length, which is
+   * a poor trade for one more row on screen.
+   *
+   * What does NOT move:
+   *  - Tap targets, which are specified in px precisely so that shrinking the type cannot
+   *    shrink the thing a thumb has to hit. That is asserted, not assumed.
+   *  - A phone in full mode, and every laptop: both keep the 16px root.
+   */
+  :root[data-simple-mode="on"] {
+    font-size: 15px;
+  }
+
+  /*
+   * Record stops wearing the colour that means "you are here".
+   *
+   * The bar had two green buttons at once: the active tab is a filled accent pill, and Record
+   * was filled with the same accent. Tapping Budget left Budget and Record both green, so the
+   * one signal that tells you where you are was being given by two things, one of which was
+   * not a place. The owner's report, exactly.
+   *
+   * Record is the odd one out now, and it is the right one to move: it is the only button in
+   * the bar that is not somewhere you can be.
+   *
+   * The pressed and hover states are restated because the rules they override set the accent
+   * explicitly; leaving them out would make the button flick back to green under a thumb,
+   * which is precisely the confusion being removed.
+   *
+   * Simple mode on a phone only, which is what was asked for. Everywhere else is untouched.
+   */
+  :root[data-simple-mode="on"] .mobile-nav button.mobile-nav-record,
+  :root[data-simple-mode="on"] .mobile-nav button.mobile-nav-record.active,
+  :root[data-simple-mode="on"] .mobile-nav button.mobile-nav-record:hover {
+    background: var(--record);
+    color: var(--on-record);
+  }
+
+  :root[data-simple-mode="on"] .mobile-nav button.mobile-nav-record svg {
+    color: var(--on-record);
+  }
+
+  /*
+   * A tag is sized like a tag.
+   *
+   * 0.72rem of a 15px root is 10.8px, against 11.52px elsewhere -- but the root alone would
+   * have taken tags down by exactly the 6% it takes everything down by, leaving them the same
+   * weight relative to the merchant and the amount as before. The owner raised tag type as its
+   * own point, and the reason it reads as noise is proportion, not absolute size: a chip
+   * naming an account or a category is the row's footnote, and it was set only a little
+   * smaller than the two things the row is actually scanned by.
+   *
+   * 0.62rem of a 15px root is 9.3px, which is under the floor a gate here holds tag text to.
+   * So the step is taken against the chip's own box as well: less padding and a tighter gap
+   * make the chip smaller without the label becoming unreadable, which is what "small tag"
+   * should mean. The label lands at 10.2px, and the chip around it loses more than the text
+   * does.
+   */
+  :root[data-simple-mode="on"] .transaction-tag {
+    gap: 4px;
+    padding: 3px 7px;
+    font-size: 0.68rem;
+  }
+
+  /*
+   * ==========================================================================
+   * One transaction, one line
+   * ==========================================================================
+   *
+   * The row was two lines: merchant and amount above, tags and three round action buttons
+   * below. Measured at 375px, the row had 285px of usable width and the three buttons took
+   * 148px of it -- more than half the row spent on controls, which is why the tags and the
+   * merchant could not share a line with the amount and why the page scrolled for twelve
+   * transactions.
+   *
+   * So the buttons go (Refund and Add again moved into the form the row opens; Edit is the
+   * row itself now), and with their 148px back, merchant, tag and amount fit across one line
+   * with room to spare.
+   *
+   * The two wrappers return to `display: contents`, exactly as they are on a laptop, so the
+   * row is a single flex line over the real children rather than a column of two lines. Their
+   * DOM order is select, merchant, amount, tags; `order` puts the tag between the merchant
+   * and the amount, so the line reads as what it was, how it is filed, how much.
+   */
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card {
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    /*
+     * 46px, not the 40px one line of 15px type comes to on its own.
+     *
+     * The row is the control now, and the stretched button inside it is inset by 1px, so the
+     * row's height is the height of the thing a thumb has to hit. At 40px that button measured
+     * 38px and twelve of them failed the 44px floor at once -- the type got smaller and took
+     * the tap target with it, which is the one thing shrinking type must never do.
+     *
+     * 46px was the first attempt and still measured 42px at the button, because an absolutely
+     * positioned element's `inset` resolves against the containing block's padding box, which
+     * is already inside the row's 1px border -- so insetting it by a further 1px charged for
+     * that border twice. The inset is gone and the floor is 48px, which measures 46px of
+     * button: clear of 44 rather than exactly on it.
+     */
+    min-height: 48px;
+    padding: 4px 12px;
+  }
+
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .transaction-row-head,
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .transaction-row-foot {
+    display: contents;
+  }
+
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .transaction-select {
+    order: 1;
+  }
+
+  /*
+   * The merchant gets the line's slack, and gives it up last.
+   *
+   * Measured at 375px: the row has 285px inside its padding, and the checkbox (23), the gaps
+   * (24) and the widest amount (79) leave 159px -- while the longest merchant here,
+   * "Outstanding adjustment", wants 166px. One line at this width cannot hold the longest name
+   * AND a tag AND the amount with nothing cut; that is arithmetic, not a styling choice.
+   *
+   * So the order of yielding is made explicit rather than left to flexbox's proportional
+   * shrinking, which would have taken a slice off each. `flex-shrink: 1` here against the tag
+   * strip's 999 means the strip collapses to nothing before the merchant loses a pixel, and
+   * the merchant only trails off on the rows where even an empty strip is not enough. Then it
+   * trails off with an ellipsis, so the reader can see there is more -- and the whole name is
+   * one tap away, in the form this row now opens.
+   */
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .transaction-primary-cell {
+    order: 2;
+    flex: 1 1 auto;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .transaction-primary-cell strong {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /*
+   * The tag strip takes what it needs and no more, and never at the merchant's expense.
+   *
+   * `flex: 0 1 auto` with a max-width rather than a share of the line: a basis in percent
+   * would hand the strip width on a row whose merchant needs it, and the strip is the row's
+   * footnote. It keeps the fade it already had, so a second chip that does not fit trails off
+   * rather than being cut square.
+   */
+  /*
+   * One whole chip, or none -- never a slice of one.
+   *
+   * The strip shrinks a thousand times more readily than the merchant beside it, so it is the
+   * first thing to give up room. Left to shrink all the way, though, it stopped at whatever
+   * pixels were spare and drew the remains of a pill: a 13px crescent of a chip at the end of
+   * the row, which reads as a rendering fault rather than as "there is more here". The fade
+   * was meant to soften exactly that and cannot, because there is nothing legible left to fade.
+   *
+   * So the strip has a floor, and the chip inside it is a mark rather than a word.
+   *
+   * Measured: with a labelled chip holding its 56px floor, six of twelve merchant names on
+   * this page were cut -- "BESCOM electricity", "Monthly salary", "Apollo Pharmacy" among
+   * them. The arithmetic at 375px is unforgiving: 285px inside the row, less 23 for the
+   * checkbox, 24 for the gaps and up to 79 for the amount, leaves 159px, and the longest name
+   * here wants 179. A labelled chip cannot also have its 56.
+   *
+   * Between a readable name and a readable account label, the name wins: it is what the list
+   * is scanned by, and the account is still carried by the chip's own icon and colour, still
+   * spoken in full by a screen reader, and still written out on the form the row opens and on
+   * every wider screen. The label is clipped out of sight rather than removed, so it stays in
+   * the accessibility tree.
+   */
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .transaction-tag-strip {
+    order: 3;
+    flex: 0 1 auto;
+    flex-shrink: 999;
+    min-width: 30px;
+    max-width: 38%;
+    overflow: hidden;
+    padding-bottom: 0;
+  }
+
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .transaction-tag {
+    gap: 0;
+    padding: 4px 6px;
+  }
+
+  /* Hidden to the eye, still present to a screen reader. */
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .transaction-tag span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /*
+   * One tag on the line, not the strip's full set.
+   *
+   * Two chips never fitted beside a merchant and an amount at this width -- the second was
+   * always the sliver described above. The account is the one kept: it is the thing a merchant
+   * name does not already imply, where the category usually is implied by it. The rest are a
+   * tap away on the row's own form, and on a laptop the whole strip is unchanged.
+   */
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .transaction-tag-strip .transaction-tag:nth-child(n + 2) {
+    display: none;
+  }
+
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .transaction-amount-cell {
+    order: 4;
+    flex: 0 0 auto;
+    text-align: right;
+    /* The figure stays on one line whatever else happens on the row. */
+    white-space: nowrap;
+  }
+
+  /*
+   * The three round buttons leave the list.
+   *
+   * `display: none` rather than visually hiding them: they are not reachable another way on
+   * this row any more, so leaving them in the tab order would be a keyboard trap of three
+   * stops per row that do nothing visible.
+   */
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .row-actions {
+    display: none;
+  }
+
+  /*
+   * The stretched hit area for "tap the row to open it".
+   *
+   * It fills the row's padding box, which already stops inside the row's own border, and sits
+   * behind everything else in the row with the checkbox lifted above it so that control still
+   * gets its own taps. No background: the row's existing press state does the feedback.
+   */
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .row-open-hit {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    border: 0;
+    border-radius: inherit;
+    background: transparent;
+    padding: 0;
+  }
+
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .row-open-hit:focus-visible {
+    /* The row is what is focused, so the ring belongs on the row's shape, not on a sliver. */
+    outline: 2px solid var(--accent);
+    outline-offset: -3px;
+  }
+
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card > *:not(.row-open-hit),
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .transaction-select {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* The checkbox keeps its own taps, so selecting is still possible on a row that opens. */
+  :root[data-simple-mode="on"] .ledger-row.transaction-row-card .transaction-select input {
+    position: relative;
+    z-index: 2;
+  }
+
+  /*
    * Two answers, then the month.
    *
    * Six columns rather than two, so one grid can hold a 2-up row of answers and a 3-up row of
@@ -3051,19 +3443,72 @@ button.mix-bar-head:hover > span {
     border-radius: var(--radius-shell);
   }
 
-  [data-simple-mode="on"] .summary-grid.overview-summary {
+  /*
+   * A merchant name wraps where the row has a second line for it.
+   *
+   * Measured at 320px in full mode: the name's cell is 98px of a 254px row, and the name was
+   * set to one line with an ellipsis -- so "Utilisation probe" (129px) and "Outstanding
+   * adjustment" (191px) were cut, seven names on the page. Nothing was gained by cutting them:
+   * this row is already two lines here, the tags and actions sit on the second, and a name
+   * taking two lines costs about 20px on the rows that need it and nothing on the rest.
+   *
+   * Simple mode is excluded, and deliberately. There the owner asked for one transaction per
+   * line, so a name cannot take a second one, and the previous scope settled what yields
+   * instead: the tag goes first, down to its icon, and only then does the name trail off.
+   */
+  :root:not([data-simple-mode="on"]) .ledger-row.transaction-row-card .transaction-primary-cell strong {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    line-height: 1.25;
+  }
+
+  /*
+   * ==========================================================================
+   * The Overview's five headline figures: two answers, then three figures
+   * ==========================================================================
+   *
+   * Two columns gave 2 + 2 + 1. The fifth figure then took a full-width card of its own with
+   * its number floating in empty space, and the row read as a layout that had run out of cells
+   * rather than as a group. Six columns hold it as 3 + 3 for the two answers and 2 + 2 + 2 for
+   * the three figures underneath -- the shape simple mode was re-laid with, now in both modes,
+   * because the owner reported this row in the mode that still had the old one.
+   */
+  .summary-grid.overview-summary {
     grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .summary-grid.overview-summary > .summary-card:nth-child(-n + 2) {
+    grid-column: span 3;
+  }
+
+  .summary-grid.overview-summary > .summary-card:nth-child(n + 3) {
+    grid-column: span 2;
+  }
+
+  /*
+   * The figures sit on one line because their labels reserve the same room.
+   *
+   * "Credit card outstanding" takes two lines in a column this narrow and "Available cash"
+   * takes one, so the two amounts sat 17px apart with the rule between the cells cutting
+   * across them -- the "cells collapsing into each other" the owner reported. This is the fix
+   * already written for the same fault at 900px and above, where the comment reads: "Every
+   * label keeps room for two lines, so the five figures read across as one line of numbers."
+   * It was simply never applied at the width where a label is most likely to wrap.
+   */
+  .overview-lead .overview-summary .summary-card p {
+    min-height: 2.5em;
+  }
+
+  [data-simple-mode="on"] .summary-grid.overview-summary {
     gap: 8px;
     /* The month's row gets its own air rather than a rule to separate it. */
     row-gap: 14px;
   }
 
-  [data-simple-mode="on"] .summary-grid.overview-summary > .summary-card:nth-child(-n + 2) {
-    grid-column: span 3;
-  }
-
+  /* The spans are set for both modes above; what stays here is what is particular to this one. */
   [data-simple-mode="on"] .summary-grid.overview-summary > .summary-card:nth-child(n + 3) {
-    grid-column: span 2;
     /* Flat: these are context, and a card around each one made them look like three more
        answers. The tint that marks a warning goes with the box -- nothing here is a warning. */
     padding: 2px 0 0;
@@ -4104,10 +4549,28 @@ button.budget-hint-chip:focus-visible {
     white-space: nowrap;
   }
 
+  /*
+   * The amount and its qualifier wrap instead of pushing out of the card's column.
+   *
+   * Measured at 320px: this is a `row nowrap` flex line with `overflow: visible` in a 151px
+   * grid column. "-61,365" at 26.4px takes 102px of it, and "available" was then placed at
+   * x=137 with a width of 52 -- ending at 189px, ten pixels inside the next column, drawn over
+   * "Opened at 45,000" and "No minimum set". `nowrap` does not keep a flex line inside its
+   * box; it only stops it wrapping, and with visible overflow the remainder simply leaves.
+   *
+   * Wrapping is also the better reading on a narrow card: the figure takes its line and the
+   * word that qualifies it sits underneath, rather than the two competing for 151px.
+   */
   .budget-card-figure {
     grid-area: 2 / 1 / 3 / 2;
     align-self: end;
+    flex-wrap: wrap;
+    min-width: 0;
     margin: 0;
+  }
+
+  .budget-card-figure > * {
+    min-width: 0;
   }
 
   .budget-card-foot {
@@ -4672,23 +5135,47 @@ button.budget-hint-chip:focus-visible {
     display: none;
   }
 
+  /*
+   * The filter takes a line of its own rather than a share of this one.
+   *
+   * Hiding the page's name freed room for the scope control, and on a roomy phone that was
+   * enough. It is not enough on a narrow one: measured at 320px the filter and three round
+   * buttons want 296px of a 288px bar, so the filter was squeezed to 84px while the option it
+   * was showing, "All active accounts and cards", needs 195px. In full mode at 375px it had
+   * 139px for the same 195px. The one control that says which money the whole page is showing
+   * could not show which money it had chosen.
+   *
+   * So the row wraps. The icons keep the top line, the filter drops beneath them with the full
+   * width, and nothing is removed from the bar. The control that carries a sentence stops
+   * competing with three that carry icons.
+   */
   .topbar-actions {
     display: flex;
     flex: 1 1 auto;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: flex-end;
     gap: 8px;
+    row-gap: 8px;
     min-width: 0;
   }
 
-  /* The scope takes the room the name gave up, and reads as the one piece of state in the row. */
   .topbar-actions > .account-filter {
-    flex: 1 1 auto;
+    order: 1;
+    flex: 1 0 100%;
     width: auto;
     min-width: 0;
     min-height: 44px;
-    margin-right: auto;
+  }
+
+  .topbar-actions > :not(.account-filter) {
+    order: 0;
+  }
+
+  /* The bar is two lines now where it needs to be, so it cannot be held to one line's height. */
+  .topbar {
+    height: auto;
+    align-items: flex-start;
   }
 
   .topbar-actions .account-filter .control-label {

@@ -2561,6 +2561,18 @@ a {
   display: inline-flex;
 }
 
+/*
+ * The row's "tap to open" hit area is off unless something turns it on.
+ *
+ * It is one stretched button per ledger row, and it is wanted only on a phone in simple mode,
+ * where the row's three action buttons have gone and the row itself has to be the control.
+ * Anywhere else it would be an unstyled button sitting in the middle of the row's grid, so the
+ * default is no button at all and the one place that wants it says so.
+ */
+.row-open-hit {
+  display: none;
+}
+
 .transaction-tag {
   flex: 0 1 auto;
   gap: 5px;

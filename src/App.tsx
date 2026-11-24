@@ -936,6 +936,7 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
+
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -1114,6 +1115,24 @@ export default function App() {
   );
 
   const simpleMode = simpleModeFromSettings(bootstrap?.settings);
+  /*
+   * Simple mode is a flag on the root element, not on the shell inside it.
+   *
+   * It used to sit on `.app-shell`, which was enough for rules that only needed an ancestor to
+   * test. It is not enough for the type scale: bringing every size down in this mode means one
+   * `font-size` on the element that `rem` is measured from, and that element is `:root`. With
+   * the flag one level lower, every size would have to be hunted down and rewritten by hand,
+   * and the next size added would be missed.
+   *
+   * Before paint, for the same reason as the theme: nothing should be seen at one scale and
+   * then jump to another.
+   */
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    if (simpleMode) root.dataset.simpleMode = "on";
+    else delete root.dataset.simpleMode;
+    return () => { delete root.dataset.simpleMode; };
+  }, [simpleMode]);
   const navigationModel = navigationFor(simpleMode);
 
   /*
@@ -1509,11 +1528,11 @@ export default function App() {
   };
 
   return (
-    /* Simple mode reaches the stylesheet, not just the navigation. The owner's words were
-       that a phone in this mode should not bombard you, and that is a question about how much
-       a page says as well as which pages exist -- so the mode is on the shell where CSS can
-       see it. Read only at phone width; a laptop in simple mode is unchanged. */
-    <div className="app-shell" data-simple-mode={simpleMode ? "on" : undefined}>
+    /* Simple mode reaches the stylesheet, not just the navigation: how much a page says is as
+       much a part of it as which pages exist. The flag itself is set on the root element in a
+       layout effect above, because the type scale hangs off it. Read only at phone width; a
+       laptop in simple mode is unchanged. */
+    <div className="app-shell">
       {introOpen && <IntroVideo onClose={closeIntro} />}
       <aside className="sidebar">
         <div className="brand">
@@ -1735,6 +1754,7 @@ function OverviewPage({
      it hides: pressing it would bounce the reader straight back with an apology. */
   canOpen: (page: Page) => boolean;
 }) {
+  const phone = usePhoneWidth();
   const [overview, setOverview] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -1895,16 +1915,10 @@ function OverviewPage({
                 ? "warning"
                 : "neutral"
             }
-            /* A food card is money and it is not spendable on a bill, so it is named here
-               rather than folded into the figure above it. Silence would have been the page
-               quietly overstating what the household can actually spend. */
-            note={
-              selectedAccount?.type !== "credit_card" && overview.summary.foodCardCashPaise > 0 ? (
-                <span className="summary-change">
-                  {`plus ${formatINRWhole(overview.summary.foodCardCashPaise)} on food cards, which only buy food`}
-                </span>
-              ) : undefined
-            }
+            /* The food-card note is gone at the owner's request. It read "plus Rs2,200 on food
+               cards, which only buy food" and was there so the figure above it did not overstate
+               what can actually be spent. That money is still on Accounts, under the food card
+               itself; what this tile answers now is one question with one number. */
           />
           <SummaryCard
             label="Credit card outstanding"
@@ -1915,13 +1929,11 @@ function OverviewPage({
                signal that is always on carries nothing. It follows the worst card's share of
                its own limit now, which is the thing actually worth warning about. */
             tone={worstCardUtilisation !== null && worstCardUtilisation >= 80 ? "warning" : "neutral"}
-            note={
-              worstCard && worstCardUtilisation !== null && worstCardUtilisation >= 80 ? (
-                <span className="summary-change bad">
-                  {`${worstCard.name} is at ${worstCardUtilisation}% of its limit`}
-                </span>
-              ) : undefined
-            }
+            /* The utilisation note is gone at the owner's request. It read "AXIS NEO is at 93% of
+               its limit" and said again, in a tile about what is owed, what the Cards panel a
+               little further down this same page already says per card, with the limit and a bar.
+               The amber tone stays: it is still driven by the worst card's share of its limit, so
+               the tile still marks itself as worth a look and the detail is one glance below. */
           />
           {/* What the cards were actually used for this month, which the outstanding beside it
               cannot say: that figure carries EMIs and whatever was left unpaid from before. */}
@@ -1964,13 +1976,24 @@ function OverviewPage({
 
       <OverviewBand title="This month" detail={formatMonth(overview.month)}>
         <div className="two-column overview-band-pair">
-          {/* Folded on a phone: "where did it go" is a sit-down question, and open it was a
-              third of the page standing between the month's figures and the card balances you
-              check at a till. */}
+          {/*
+            * The pie is on screen on a phone, not folded behind a button.
+            *
+            * It used to fold, for a reason that was real: open at its laptop size it was 743px
+            * of a 2439px Overview, three screens of scrolling before the card balances you check
+            * at a till. The owner's answer to that was not "give me the fold" but "show me the
+            * chart" -- they asked for the expenses as a pie with each share and amount, as the
+            * laptop has always shown it, and not to be sent to Reports to find it.
+            *
+            * So the fold goes and the reason behind it is answered instead: at phone widths the
+            * chart and its legend are drawn compact (see theme.css), which costs a few hundred
+            * pixels rather than a third of the page. "Open reports" leaves the header here too --
+            * it existed to send you somewhere else for this answer, and the answer is now here.
+            * The laptop keeps both the chart and the shortcut; nothing about it changes.
+            */}
           <Panel
             title="Spending mix"
-            foldOnPhone
-            action={<button onClick={() => onNavigate("reports")}>Open reports</button>}
+            action={phone ? undefined : <button onClick={() => onNavigate("reports")}>Open reports</button>}
           >
             {spendingSegments.length === 0 || overview.summary.spendingPaise <= 0 ? (
               <EmptyState text="No category spending yet this month." />
@@ -3630,6 +3653,8 @@ function TransactionsPage({
                     onCancel={() => setEditDraft(null)}
                     onSave={saveEdit}
                     onDelete={() => remove(transaction)}
+                    onRefund={canRefund(transaction) ? () => startRefund(transaction) : undefined}
+                    onAddAgain={canAddAgain(transaction) ? () => void addAgain(transaction) : undefined}
                   />
                 ) : (
                   <LedgerRow
@@ -3730,8 +3755,36 @@ function LedgerRow({
   onAddAgain?: () => void;
   onEdit: () => void;
 }) {
+  const openLabel = `Open ${transaction.merchant || transaction.note || "this transaction"}`
+    + ` for ${formatINR(transaction.amountPaise)} on ${formatShortDate(transaction.date)} for editing`;
+
   return (
     <div className={`ledger-row transaction-row-card${selected ? " selected" : ""}`}>
+      {/*
+        * Tapping the row opens it.
+        *
+        * This is a real button stretched across the row, not a click handler on the row's own
+        * div and not `role="button"` on it. The row contains a checkbox and the amount's own
+        * markup; giving the row a button role would make all of that presentational to a
+        * screen reader, and a handler on a plain div is reachable by neither keyboard nor
+        * assistive technology. A button that happens to be the size of the row is both.
+        *
+        * It sits behind the content and in front of nothing: the checkbox is a sibling drawn
+        * above it, so a thumb on the checkbox still selects rather than opens, with no event
+        * plumbing between them.
+        *
+        * It is rendered at every width and shown at none but this one: `display: none` by
+        * default, turned on only for simple mode at phone width. A laptop keeps the Edit
+        * button it already has, and a full-width invisible button over a grid row there would
+        * swallow text selection for no gain.
+        */}
+      <button
+        type="button"
+        data-row-open
+        className="row-open-hit"
+        onClick={onEdit}
+        aria-label={openLabel}
+      />
       {/*
         * Two wrappers, head and foot, so a phone can lay this out as two plain flex lines and
         * leave the grid behind entirely. Both are `display: contents` at every other width, so
@@ -3837,7 +3890,9 @@ function TransactionEditRow({
   onChange,
   onCancel,
   onSave,
-  onDelete
+  onDelete,
+  onRefund,
+  onAddAgain
 }: {
   draft: TransactionEditDraft;
   accounts: Account[];
@@ -3852,6 +3907,11 @@ function TransactionEditRow({
   onCancel: () => void;
   onSave: () => void;
   onDelete: () => void;
+  /* Both optional for the same reason they were optional on the row: not every transaction can
+     be refunded, and not every one is worth repeating. An absent handler means an absent
+     button, rather than a button that has to explain why it will not work. */
+  onRefund?: () => void;
+  onAddAgain?: () => void;
 }) {
   const selectedAccount = accounts.find((account) => account.id === draft.accountId);
   const selectedType = categoryTypes.find((type) => type.id === draft.typeId);
@@ -4125,6 +4185,27 @@ function TransactionEditRow({
           <Trash2 size={16} />
           Delete
         </button>
+        {/*
+          * Refund and Add again live here now.
+          *
+          * On a phone they used to be two of three round icon buttons on every ledger row, and
+          * those buttons were most of the reason a transaction needed two lines. They are not
+          * row furniture: they are things you do to one transaction you have singled out,
+          * which is exactly the state this form is. Carrying a word instead of a bare icon
+          * costs nothing here, where there is room for words.
+          */}
+        {onRefund && (
+          <button type="button" className="secondary-action" onClick={onRefund}>
+            <RotateCcw size={16} />
+            Refund
+          </button>
+        )}
+        {onAddAgain && (
+          <button type="button" className="secondary-action" onClick={onAddAgain}>
+            <Plus size={16} />
+            Add again
+          </button>
+        )}
         <span />
         <button className="secondary-action" onClick={onCancel}>
           Cancel
