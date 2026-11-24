@@ -1754,6 +1754,7 @@ function OverviewPage({
      it hides: pressing it would bounce the reader straight back with an apology. */
   canOpen: (page: Page) => boolean;
 }) {
+  const phone = usePhoneWidth();
   const [overview, setOverview] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -1983,13 +1984,24 @@ function OverviewPage({
 
       <OverviewBand title="This month" detail={formatMonth(overview.month)}>
         <div className="two-column overview-band-pair">
-          {/* Folded on a phone: "where did it go" is a sit-down question, and open it was a
-              third of the page standing between the month's figures and the card balances you
-              check at a till. */}
+          {/*
+            * The pie is on screen on a phone, not folded behind a button.
+            *
+            * It used to fold, for a reason that was real: open at its laptop size it was 743px
+            * of a 2439px Overview, three screens of scrolling before the card balances you check
+            * at a till. The owner's answer to that was not "give me the fold" but "show me the
+            * chart" -- they asked for the expenses as a pie with each share and amount, as the
+            * laptop has always shown it, and not to be sent to Reports to find it.
+            *
+            * So the fold goes and the reason behind it is answered instead: at phone widths the
+            * chart and its legend are drawn compact (see theme.css), which costs a few hundred
+            * pixels rather than a third of the page. "Open reports" leaves the header here too --
+            * it existed to send you somewhere else for this answer, and the answer is now here.
+            * The laptop keeps both the chart and the shortcut; nothing about it changes.
+            */}
           <Panel
             title="Spending mix"
-            foldOnPhone
-            action={<button onClick={() => onNavigate("reports")}>Open reports</button>}
+            action={phone ? undefined : <button onClick={() => onNavigate("reports")}>Open reports</button>}
           >
             {spendingSegments.length === 0 || overview.summary.spendingPaise <= 0 ? (
               <EmptyState text="No category spending yet this month." />

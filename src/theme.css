@@ -3044,6 +3044,76 @@ button.mix-bar-head:hover > span {
 @media (max-width: 720px) {
   /*
    * ==========================================================================
+   * The spending pie, built for a phone
+   * ==========================================================================
+   *
+   * This chart used to be folded away on a phone, and the reason was sound: at its laptop size
+   * it was 743px of a 2439px Overview -- a 228px ring, then a legend beside it that wrapped
+   * underneath, three screens of scrolling before the card balances you check at a till.
+   *
+   * The owner asked for the opposite: show the expenses as a pie with each share and amount, as
+   * the laptop does, and stop sending them to Reports to see it. So the fold is gone and the
+   * cost is paid for here instead -- the same chart drawn for the screen it is on, rather than a
+   * laptop's chart unfolded onto a phone.
+   *
+   *   ring   228px -> 132px
+   *   row    36px  -> 30px minimum
+   *
+   * which is a little over 300px for the whole figure where it was 743px.
+   */
+  .donut-figure .donut-chart {
+    width: 116px;
+    height: 116px;
+  }
+
+  .donut-figure .donut-segment,
+  .donut-figure .donut-track,
+  .donut-figure .donut-empty {
+    /* In proportion with the smaller ring, so it reads as the same chart drawn smaller rather
+       than a thinner one. */
+    stroke-width: 26;
+  }
+
+  .donut-figure {
+    gap: 12px 16px;
+  }
+
+  /*
+   * The rows are not made shorter, and the ring carries the saving instead.
+   *
+   * A `min-height: 30px` here was written first and was dead on arrival: a thumb-target rule,
+   * `@media (pointer: coarse), (width <= 760px)`, holds every legend row at 44px, and it wins.
+   * It is right to win -- each row is a button that filters the ledger to that category, and a
+   * 30px button is one this project's own gate would fail. Eight categories at 44px is 352px,
+   * and that is what the owner's question costs to answer honestly on a touch screen.
+   */
+  .donut-legend-item {
+    gap: 8px;
+    padding: 3px 6px;
+  }
+
+  /*
+   * A legend name wraps rather than being cut.
+   *
+   * Measured at 320px: the name column was 101px while "Cash & food cards" wanted 124 and
+   * "Equity (stocks + MF)" wanted 137, so both were trimmed to an ellipsis. A legend is the
+   * chart's own key -- a trimmed name does not identify the slice it is pointing at, and the
+   * reading is lost. There is no width at which a fixed single line holds every category name,
+   * so the line is allowed to become two. A row that needs the space takes it; the rest do not.
+   */
+  .donut-legend-name {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+    line-height: 1.25;
+  }
+
+  .donut-legend-item {
+    align-items: center;
+  }
+
+  /*
+   * ==========================================================================
    * The type scale, for simple mode on a phone only
    * ==========================================================================
    *
@@ -3350,19 +3420,72 @@ button.mix-bar-head:hover > span {
     border-radius: var(--radius-shell);
   }
 
-  [data-simple-mode="on"] .summary-grid.overview-summary {
+  /*
+   * A merchant name wraps where the row has a second line for it.
+   *
+   * Measured at 320px in full mode: the name's cell is 98px of a 254px row, and the name was
+   * set to one line with an ellipsis -- so "Utilisation probe" (129px) and "Outstanding
+   * adjustment" (191px) were cut, seven names on the page. Nothing was gained by cutting them:
+   * this row is already two lines here, the tags and actions sit on the second, and a name
+   * taking two lines costs about 20px on the rows that need it and nothing on the rest.
+   *
+   * Simple mode is excluded, and deliberately. There the owner asked for one transaction per
+   * line, so a name cannot take a second one, and the previous scope settled what yields
+   * instead: the tag goes first, down to its icon, and only then does the name trail off.
+   */
+  :root:not([data-simple-mode="on"]) .ledger-row.transaction-row-card .transaction-primary-cell strong {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    line-height: 1.25;
+  }
+
+  /*
+   * ==========================================================================
+   * The Overview's five headline figures: two answers, then three figures
+   * ==========================================================================
+   *
+   * Two columns gave 2 + 2 + 1. The fifth figure then took a full-width card of its own with
+   * its number floating in empty space, and the row read as a layout that had run out of cells
+   * rather than as a group. Six columns hold it as 3 + 3 for the two answers and 2 + 2 + 2 for
+   * the three figures underneath -- the shape simple mode was re-laid with, now in both modes,
+   * because the owner reported this row in the mode that still had the old one.
+   */
+  .summary-grid.overview-summary {
     grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .summary-grid.overview-summary > .summary-card:nth-child(-n + 2) {
+    grid-column: span 3;
+  }
+
+  .summary-grid.overview-summary > .summary-card:nth-child(n + 3) {
+    grid-column: span 2;
+  }
+
+  /*
+   * The figures sit on one line because their labels reserve the same room.
+   *
+   * "Credit card outstanding" takes two lines in a column this narrow and "Available cash"
+   * takes one, so the two amounts sat 17px apart with the rule between the cells cutting
+   * across them -- the "cells collapsing into each other" the owner reported. This is the fix
+   * already written for the same fault at 900px and above, where the comment reads: "Every
+   * label keeps room for two lines, so the five figures read across as one line of numbers."
+   * It was simply never applied at the width where a label is most likely to wrap.
+   */
+  .overview-lead .overview-summary .summary-card p {
+    min-height: 2.5em;
+  }
+
+  [data-simple-mode="on"] .summary-grid.overview-summary {
     gap: 8px;
     /* The month's row gets its own air rather than a rule to separate it. */
     row-gap: 14px;
   }
 
-  [data-simple-mode="on"] .summary-grid.overview-summary > .summary-card:nth-child(-n + 2) {
-    grid-column: span 3;
-  }
-
+  /* The spans are set for both modes above; what stays here is what is particular to this one. */
   [data-simple-mode="on"] .summary-grid.overview-summary > .summary-card:nth-child(n + 3) {
-    grid-column: span 2;
     /* Flat: these are context, and a card around each one made them look like three more
        answers. The tint that marks a warning goes with the box -- nothing here is a warning. */
     padding: 2px 0 0;
@@ -4403,10 +4526,28 @@ button.budget-hint-chip:focus-visible {
     white-space: nowrap;
   }
 
+  /*
+   * The amount and its qualifier wrap instead of pushing out of the card's column.
+   *
+   * Measured at 320px: this is a `row nowrap` flex line with `overflow: visible` in a 151px
+   * grid column. "-61,365" at 26.4px takes 102px of it, and "available" was then placed at
+   * x=137 with a width of 52 -- ending at 189px, ten pixels inside the next column, drawn over
+   * "Opened at 45,000" and "No minimum set". `nowrap` does not keep a flex line inside its
+   * box; it only stops it wrapping, and with visible overflow the remainder simply leaves.
+   *
+   * Wrapping is also the better reading on a narrow card: the figure takes its line and the
+   * word that qualifies it sits underneath, rather than the two competing for 151px.
+   */
   .budget-card-figure {
     grid-area: 2 / 1 / 3 / 2;
     align-self: end;
+    flex-wrap: wrap;
+    min-width: 0;
     margin: 0;
+  }
+
+  .budget-card-figure > * {
+    min-width: 0;
   }
 
   .budget-card-foot {
@@ -4971,23 +5112,47 @@ button.budget-hint-chip:focus-visible {
     display: none;
   }
 
+  /*
+   * The filter takes a line of its own rather than a share of this one.
+   *
+   * Hiding the page's name freed room for the scope control, and on a roomy phone that was
+   * enough. It is not enough on a narrow one: measured at 320px the filter and three round
+   * buttons want 296px of a 288px bar, so the filter was squeezed to 84px while the option it
+   * was showing, "All active accounts and cards", needs 195px. In full mode at 375px it had
+   * 139px for the same 195px. The one control that says which money the whole page is showing
+   * could not show which money it had chosen.
+   *
+   * So the row wraps. The icons keep the top line, the filter drops beneath them with the full
+   * width, and nothing is removed from the bar. The control that carries a sentence stops
+   * competing with three that carry icons.
+   */
   .topbar-actions {
     display: flex;
     flex: 1 1 auto;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: flex-end;
     gap: 8px;
+    row-gap: 8px;
     min-width: 0;
   }
 
-  /* The scope takes the room the name gave up, and reads as the one piece of state in the row. */
   .topbar-actions > .account-filter {
-    flex: 1 1 auto;
+    order: 1;
+    flex: 1 0 100%;
     width: auto;
     min-width: 0;
     min-height: 44px;
-    margin-right: auto;
+  }
+
+  .topbar-actions > :not(.account-filter) {
+    order: 0;
+  }
+
+  /* The bar is two lines now where it needs to be, so it cannot be held to one line's height. */
+  .topbar {
+    height: auto;
+    align-items: flex-start;
   }
 
   .topbar-actions .account-filter .control-label {
