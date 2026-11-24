@@ -3090,16 +3090,23 @@ button.mix-bar-head:hover > span {
    * which is a little over 300px for the whole figure where it was 743px.
    */
   .donut-figure .donut-chart {
-    width: 116px;
-    height: 116px;
+    /*
+     * 168px. It was 116px, which was me cutting the chart down to keep the Overview short after
+     * it stopped being folded away; the owner's answer was that the pies had come out too small
+     * to read. A chart that cannot be read is not worth the pixels it does take, so the figure
+     * gets its size back -- still well under the 228px of a laptop, which is what made the
+     * panel a third of the page before.
+     */
+    width: 168px;
+    height: 168px;
   }
 
   .donut-figure .donut-segment,
   .donut-figure .donut-track,
   .donut-figure .donut-empty {
-    /* In proportion with the smaller ring, so it reads as the same chart drawn smaller rather
+    /* In proportion with the ring, so it reads as the same chart at a different size rather
        than a thinner one. */
-    stroke-width: 26;
+    stroke-width: 25;
   }
 
   .donut-figure {
@@ -3174,16 +3181,18 @@ button.mix-bar-head:hover > span {
    * explicitly; leaving them out would make the button flick back to green under a thumb,
    * which is precisely the confusion being removed.
    *
-   * Simple mode on a phone only, which is what was asked for. Everywhere else is untouched.
+   * Both modes, at phone width. This was first written for simple mode alone, because that was
+   * the mode the owner had asked about; they then met the same two greens in full mode, which
+   * is the same fault on the same bar and was never a thing the mode should have decided.
    */
-  :root[data-simple-mode="on"] .mobile-nav button.mobile-nav-record,
-  :root[data-simple-mode="on"] .mobile-nav button.mobile-nav-record.active,
-  :root[data-simple-mode="on"] .mobile-nav button.mobile-nav-record:hover {
+  .mobile-nav button.mobile-nav-record,
+  .mobile-nav button.mobile-nav-record.active,
+  .mobile-nav button.mobile-nav-record:hover {
     background: var(--record);
     color: var(--on-record);
   }
 
-  :root[data-simple-mode="on"] .mobile-nav button.mobile-nav-record svg {
+  .mobile-nav button.mobile-nav-record svg {
     color: var(--on-record);
   }
 
@@ -3496,9 +3505,27 @@ button.mix-bar-head:hover > span {
    * already written for the same fault at 900px and above, where the comment reads: "Every
    * label keeps room for two lines, so the five figures read across as one line of numbers."
    * It was simply never applied at the width where a label is most likely to wrap.
+   *
+   * Narrower than a modern phone, a label can take a third line and overrun the reservation.
+   * Measured at 320px: "Credit card spends" runs to 3.4 lines in its 97px column while
+   * "Outflow" and "Inflow" take two, putting their figures 21px apart again. Raising the
+   * reservation everywhere would buy that back by adding a third of a line of dead space to
+   * five cards at the width most people actually hold, so the taller one is scoped to the
+   * widths that need it.
+   *
+   * It is a reservation sized to the worst label, not true alignment: a label longer still
+   * would overrun it too, and the sweep that measures this is what would say so.
    */
   .overview-lead .overview-summary .summary-card p {
     min-height: 2.5em;
+  }
+
+  @media (max-width: 360px) {
+    .overview-lead .overview-summary .summary-card p {
+      /* 4.2em: the longest label here, "Credit card spends", measures 54px in its 97px column
+         and the label's own em is 13.1px. 3.6em left it 7px over and the figures still apart. */
+      min-height: 4.2em;
+    }
   }
 
   [data-simple-mode="on"] .summary-grid.overview-summary {
@@ -4521,19 +4548,112 @@ button.budget-hint-chip:focus-visible {
    * Edit keeps its 44px and loses its word: it is one of eight identical buttons down a page,
    * and the pencil says it. The label stays for a screen reader.
    */
-  .budget-card {
-    grid-template-columns: minmax(0, 1fr) auto;
+  /*
+   * A folded panel reads like a row you can open, not like a card with a word in the middle.
+   *
+   * `.panel-header` is flipped to a column at this width so a title and its action stack rather
+   * than fight for the line. A foldable panel's header is a `<summary>`, though, and it carries
+   * its chevron as an `::after` pushed right with `margin-inline-start: auto` -- which means
+   * nothing in a column. Worse, the summary sets `align-items: center` to centre the chevron
+   * against the title vertically, and in a column that becomes horizontal centring. So Cashflow
+   * came out as the word "Cashflow" centred in an empty card with the chevron stranded on a
+   * line below it, directly above the Wealth band's heading, which is left-aligned with its own
+   * chevron at the far right. Two things that fold, drawn two entirely different ways.
+   *
+   * The summary stays a row: title at the left, chevron at the right, one line.
+   */
+  .panel-fold > summary.panel-header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+  }
+
+  .panel-fold > summary.panel-header > h2,
+  .panel-fold > summary.panel-header > h3 {
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: left;
+  }
+
+  /*
+   * The ledger's three totals sit three across, not two and a wide one.
+   *
+   * Two columns put Money out and Money in on the first row and left Net alone on a full-width
+   * tile with its figure at one end and nothing at the other -- the same hole the owner pointed
+   * at on the budget cards. Three equal figures want three equal columns, which is the shape
+   * the Overview already uses for its three supporting figures at this width.
+   */
+  .summary-grid.ledger-total-tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
+  }
+
+  /*
+   * A rule elsewhere stretches an odd last tile across the row, so that a grid of two columns
+   * does not end with a hole beside its final card. Here there are three columns and three
+   * tiles, so there is no hole to fill and the stretch only put Net back on a row of its own.
+   */
+  .summary-grid.ledger-total-tiles > .summary-card:last-child:nth-child(odd) {
+    grid-column: auto;
+  }
+
+  /* The icon is the tile's decoration, and at a third of the width it is the first thing to go. */
+  .ledger-total-tiles .summary-card > span:first-child {
+    display: none;
+  }
+
+  .ledger-total-tiles .summary-card {
+    padding: 10px;
+  }
+
+  .ledger-total-tiles .summary-card strong {
+    font-size: 1rem;
+  }
+
+  /* A spreadsheet is opened at a desk. The owner asked for this off the phone's ledger. */
+  .ledger-export {
+    display: none;
+  }
+
+  /*
+   * The hole down the middle of the card is closed.
+   *
+   * Measured on a 361px card: the amount and the figures beside it were in two grid columns
+   * with the first taking all the slack, so "1,070" sat in a 255px column it needed 80px of
+   * and "2,930 spent" was pinned to the far edge -- a 177px gap between them, and 164px on the
+   * line below. Close to half the card was a gap, in the middle, where a gap reads as something
+   * missing rather than as room to breathe.
+   *
+   * Two columns cannot fix it on their own, because a grid's tracks are shared down every row:
+   * sizing the first to the amount also sizes it to the name above. So the name takes the full
+   * width, the pencil is lifted out of the flow to the corner it was already drawn in, and the
+   * tracks are then free to size to the second row -- the amount, and the figures that explain
+   * it reading straight on from it.
+   *
+   *   [icon] Health                    * On track      [pencil]
+   *          4,000 a month
+   *   1,070 left   2,930 spent - 153 a day
+   *   [====================------------------]
+   */
+  .budget-card {
+    position: relative;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 8px 10px;
     padding: 12px 12px 10px;
   }
 
   .budget-card-head {
-    grid-area: 1 / 1 / 2 / 2;
+    grid-area: 1 / 1 / 2 / 3;
+    /* Room for the pencil, which no longer takes a column of its own. */
+    padding-right: 52px;
     min-width: 0;
   }
 
   .budget-card-edit {
-    grid-area: 1 / 2 / 2 / 3;
+    position: absolute;
+    top: 10px;
+    right: 10px;
     align-self: center;
     width: 44px;
     padding-inline: 0;
@@ -4563,7 +4683,7 @@ button.budget-hint-chip:focus-visible {
    */
   .budget-card-figure {
     grid-area: 2 / 1 / 3 / 2;
-    align-self: end;
+    align-self: baseline;
     flex-wrap: wrap;
     min-width: 0;
     margin: 0;
@@ -4573,14 +4693,30 @@ button.budget-hint-chip:focus-visible {
     min-width: 0;
   }
 
+  /*
+   * The supporting figures read on from the amount instead of being pushed to the far edge.
+   *
+   * Stacked and right-aligned they cost two lines and opened the gap described above. Side by
+   * side on one line, after the amount, they fill the row and the card loses a line.
+   */
   .budget-card-foot {
     grid-area: 2 / 2 / 3 / 3;
-    align-self: end;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 0;
-    text-align: right;
-    white-space: nowrap;
+    align-self: baseline;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: flex-start;
+    column-gap: 10px;
+    row-gap: 0;
+    text-align: left;
+    min-width: 0;
+  }
+
+  /* A middot between them, so the two read as one line rather than two stray figures. */
+  .budget-card-foot > * + *::before {
+    content: "\00b7";
+    margin-right: 8px;
+    color: var(--muted);
   }
 
   .budget-bar {
@@ -5571,6 +5707,16 @@ button.budget-hint-chip:focus-visible {
   .net-worth-breakdown {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 14px 12px;
+  }
+
+  /*
+   * Three figures in two columns leave the third alone beside a hole -- measured at 158px of a
+   * 327px row. Going back to three columns is not the answer, for the reason written above: at
+   * this width that is what pushed two amounts into each other. The odd one takes the whole
+   * row instead, which is what the summary grids on this page already do with an odd last card.
+   */
+  .net-worth-breakdown > *:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
   }
 }
 

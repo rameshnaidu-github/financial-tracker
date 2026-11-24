@@ -1,5 +1,7 @@
 import {
+  ArrowDownRight,
   ArrowDownUp,
+  ArrowUpRight,
   BarChart3,
   CalendarClock,
   CalendarDays,
@@ -27,6 +29,7 @@ import {
   Plane,
   Plus,
   RotateCcw,
+  Scale,
   Search,
   SlidersHorizontal,
   Sun,
@@ -3540,46 +3543,75 @@ function TransactionsPage({
           {selectedAccount ? ` for ${selectedAccount.name}` : ""}
         </span>
         {hasMoreTransactions && <small>More history available</small>}
+        {/*
+          * Export sits with the line that says what is being shown, because that is exactly what
+          * it writes out. It is hidden at phone width: a spreadsheet is opened at a desk, which
+          * is the same reasoning already applied to Import on this page.
+          */}
+        <a
+          className="secondary-action ledger-export"
+          href={`/api/export/transactions.csv${exportParams ? `?${exportParams}` : ""}`}
+          download
+        >
+          <Download size={16} />
+          Export CSV
+        </a>
       </div>
 
       {shownTotals && shownTotals.count > 0 && (
-        <div className="ledger-totals" aria-live="polite">
-          <span className="ledger-totals-label">
+        /*
+         * The three figures are tiles, the same ones Budget Planner leads with.
+         *
+         * They used to be a label and three lines of running text with an Export CSV button
+         * beside them, which read as a paragraph about the list rather than as the figures the
+         * list adds up to. The owner asked for them to match the tiles at the top of Budget --
+         * Budgeted, Spent, Left, Per day -- and they are the same kind of thing, so they are
+         * now the same component.
+         *
+         * Export went with it. Exporting a spreadsheet is a thing done at a desk, which is the
+         * reasoning already applied to Import on this page; it is still on a laptop, where it
+         * sits in the page header rather than among the figures.
+         */
+        <section className="ledger-totals-tiles" aria-live="polite">
+          <h3 className="ledger-totals-label">
             {search.trim()
               ? `Total for “${search.trim()}”`
               : typeId || subcategoryId || from || to || selectedAccountId || statusFilter
                 ? "Total for these filters"
                 : "Total of all transactions"}
-          </span>
-          <span className="ledger-total">
-            Money out <strong className="amount-out">{formatINR(shownTotals.outflowPaise)}</strong>
-          </span>
-          {shownTotals.inflowPaise > 0 && (
-            <span className="ledger-total">
-              Money in <strong className="amount-in">{formatINR(shownTotals.inflowPaise)}</strong>
-            </span>
-          )}
-          {shownTotals.inflowPaise > 0 && shownTotals.outflowPaise > 0 && (
-            <span className="ledger-total">
-              Net{" "}
-              <strong
-                className={
+          </h3>
+          <div className="summary-grid ledger-total-tiles">
+            <SummaryCard
+              label="Money out"
+              value={formatINR(shownTotals.outflowPaise)}
+              countPaise={shownTotals.outflowPaise}
+              icon={<ArrowUpRight />}
+              valueClassName="amount-out"
+            />
+            {shownTotals.inflowPaise > 0 && (
+              <SummaryCard
+                label="Money in"
+                value={formatINR(shownTotals.inflowPaise)}
+                countPaise={shownTotals.inflowPaise}
+                icon={<ArrowDownRight />}
+                valueClassName="amount-in"
+              />
+            )}
+            {shownTotals.inflowPaise > 0 && shownTotals.outflowPaise > 0 && (
+              <SummaryCard
+                label="Net"
+                value={signedImpact(shownTotals.inflowPaise - shownTotals.outflowPaise)}
+                icon={<Scale />}
+                /* No caption under any of the three. The count is already on the line below
+                   ("Showing 9 transactions"), and the sign and colour say which way Net runs --
+                   captions here only wrapped to a second line and made the tiles ragged. */
+                valueClassName={
                   shownTotals.inflowPaise - shownTotals.outflowPaise >= 0 ? "amount-in" : "amount-out"
                 }
-              >
-                {signedImpact(shownTotals.inflowPaise - shownTotals.outflowPaise)}
-              </strong>
-            </span>
-          )}
-          <a
-            className="secondary-action ledger-export"
-            href={`/api/export/transactions.csv${exportParams ? `?${exportParams}` : ""}`}
-            download
-          >
-            <Download size={16} />
-            Export CSV
-          </a>
-        </div>
+              />
+            )}
+          </div>
+        </section>
       )}
 
       {/* Only once something is ticked: an empty bar would be a permanent invitation to delete. */}
