@@ -7,8 +7,22 @@
 
 /* ---------- Tokens ---------- */
 :root {
-  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  /*
+   * Manrope, in place of Geist.
+   *
+   * Chosen by the owner from four. It is a semi-condensed geometric sans, and the narrower
+   * letterfit is the practical reason it suits this application: three scopes of work here have
+   * been spent finding horizontal room on a phone -- for a shop name beside an amount, for five
+   * figures across a row, for a chart legend -- and a face that asks for less of it gives some
+   * of that back everywhere at once.
+   *
+   * Geist Mono went with it. `--font-mono` was declared and then never used by a single rule,
+   * so the application was downloading a second webfont on every load to style nothing. The
+   * token stays, pointing at whatever the machine already has, so the next thing that wants a
+   * monospace has one without a download.
+   */
+  --font-sans: "Manrope Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 
   --bg: #f1f4f1;
   --bg-deep: #e7ebe7;
@@ -2214,12 +2228,26 @@ button.donut-legend-item:hover {
   border-radius: 3px;
 }
 
+/*
+ * A legend name wraps rather than being trimmed, at every width.
+ *
+ * It was one line with an ellipsis, and on a 1440px laptop the asset-allocation key still had
+ * only 99px for it: "Cash & food cards" wanted 124 and "Equity (stocks + MF)" 137, so both were
+ * trimmed on the widest screen the application runs on. A legend is the chart's own key, and a
+ * trimmed name does not identify the slice it belongs to.
+ *
+ * Found while checking whether changing the typeface had broken anything -- it had not; Geist
+ * trimmed exactly the same two names in a 99px box. It had simply never been looked at, because
+ * the laptop sweep only recorded page heights and never asked about cut text. The phone was
+ * given this fix already; this is the same rule, no longer scoped to a width.
+ */
 .donut-legend-name {
-  overflow: hidden;
+  overflow: visible;
   font-size: 0.9rem;
   font-weight: 540;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: clip;
+  white-space: normal;
+  line-height: 1.25;
 }
 
 .donut-legend-share {
@@ -3101,13 +3129,8 @@ button.mix-bar-head:hover > span {
    * reading is lost. There is no width at which a fixed single line holds every category name,
    * so the line is allowed to become two. A row that needs the space takes it; the rest do not.
    */
-  .donut-legend-name {
-    overflow: visible;
-    white-space: normal;
-    text-overflow: clip;
-    line-height: 1.25;
-  }
-
+  /* Wrapping is the default everywhere now; what a phone still needs is the row kept centred
+     when a name takes two lines. */
   .donut-legend-item {
     align-items: center;
   }
