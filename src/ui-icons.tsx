@@ -19,6 +19,7 @@ import { ChartBar } from "@phosphor-icons/react/dist/csr/ChartBar";
 import { Check as PhCheck } from "@phosphor-icons/react/dist/csr/Check";
 import { CircleNotch } from "@phosphor-icons/react/dist/csr/CircleNotch";
 import { CreditCard as PhCreditCard } from "@phosphor-icons/react/dist/csr/CreditCard";
+import { DotsThreeVertical } from "@phosphor-icons/react/dist/csr/DotsThreeVertical";
 import { DownloadSimple } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { Eye as PhEye } from "@phosphor-icons/react/dist/csr/Eye";
 import { EyeSlash as PhEyeSlash } from "@phosphor-icons/react/dist/csr/EyeSlash";
@@ -78,6 +79,8 @@ export const CircleAlert = wrap(WarningCircle, "CircleAlert");
 export const CircleHelp = wrap(Question, "CircleHelp");
 export const CreditCard = wrap(PhCreditCard, "CreditCard");
 export const Download = wrap(DownloadSimple, "Download");
+/* The one button a transaction row wears, standing for everything it can do. */
+export const MoreVertical = wrap(DotsThreeVertical, "MoreVertical");
 export const Eye = wrap(PhEye, "Eye");
 export const EyeSlash = wrap(PhEyeSlash, "EyeSlash");
 export const FileSpreadsheet = wrap(FileXls, "FileSpreadsheet");

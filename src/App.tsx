@@ -24,6 +24,7 @@ import {
   Archive,
   Megaphone,
   Moon,
+  MoreVertical,
   Pencil,
   PiggyBank,
   Plane,
@@ -61,6 +62,7 @@ import {
   ordinalDay,
   mondayWeekRange,
   monthValue,
+  outstandingSpendLabel,
   outstandingSplit,
   parseAmountToPaise,
   parseSignedAmount,
@@ -3581,9 +3583,18 @@ function TransactionsPage({
                 : "Total of all transactions"}
           </h3>
           <div className="summary-grid ledger-total-tiles">
+            {/*
+              * Whole rupees, as every other headline tile in the app already shows.
+              *
+              * These three were the one set still printing paise, and at a third of a phone's
+              * width that is three glyphs they cannot afford: on the owner's own screen "Money
+              * out" read "₹12,82,056.1" with the last of it against the tile's edge. The paise
+              * on a figure this size are not what the tile is for, and the row below still says
+              * how many transactions it adds up.
+              */}
             <SummaryCard
               label="Money out"
-              value={formatINR(shownTotals.outflowPaise)}
+              value={formatINRWhole(shownTotals.outflowPaise)}
               countPaise={shownTotals.outflowPaise}
               icon={<ArrowUpRight />}
               valueClassName="amount-out"
@@ -3591,7 +3602,7 @@ function TransactionsPage({
             {shownTotals.inflowPaise > 0 && (
               <SummaryCard
                 label="Money in"
-                value={formatINR(shownTotals.inflowPaise)}
+                value={formatINRWhole(shownTotals.inflowPaise)}
                 countPaise={shownTotals.inflowPaise}
                 icon={<ArrowDownRight />}
                 valueClassName="amount-in"
@@ -3600,7 +3611,7 @@ function TransactionsPage({
             {shownTotals.inflowPaise > 0 && shownTotals.outflowPaise > 0 && (
               <SummaryCard
                 label="Net"
-                value={signedImpact(shownTotals.inflowPaise - shownTotals.outflowPaise)}
+                value={signedImpactWhole(shownTotals.inflowPaise - shownTotals.outflowPaise)}
                 icon={<Scale />}
                 /* No caption under any of the three. The count is already on the line below
                    ("Showing 9 transactions"), and the sign and colour say which way Net runs --
@@ -3696,7 +3707,6 @@ function TransactionsPage({
                     selected={selectedIds.includes(transaction.id)}
                     onToggleSelected={() => toggleSelected(transaction.id)}
                     onRefund={canRefund(transaction) ? () => startRefund(transaction) : undefined}
-                    onAddAgain={canAddAgain(transaction) ? () => void addAgain(transaction) : undefined}
                     onEdit={() => setEditDraft(draftFromTransaction(transaction, categoryTypes, accounts))}
                   />
                 )}
@@ -3768,6 +3778,190 @@ function TransactionsPage({
 
 /* One line of the ledger. Its five parts -- the tick, the item, its tags, the amount and the
    actions -- each get a track of their own, so none of them is pushed onto a second row. */
+/**
+ * The actions a transaction row can take, behind one button.
+ *
+ * A row used to wear up to three round buttons -- refund, add again, edit -- on the line under
+ * the merchant, sharing it with the tags. At 375px that line is 283px wide, and three 44px
+ * targets plus their gaps took 145px of it, so the tags were trimmed to make room for furniture
+ * that is only wanted on the one row in a hundred you have singled out. The owner asked for a
+ * three-dot menu instead, and it buys the tags their line back.
+ *
+ * The menu is portalled to the body rather than rendered inside the row. The page's sections
+ * carry transforms for their enter animation, and a transformed ancestor makes `position: fixed`
+ * resolve against that ancestor instead of the viewport -- a menu rendered in place lands off
+ * screen. This was learned the hard way once already in this codebase.
+ *
+ * It is positioned after it is measured, not from an estimate of its own height: the trigger's
+ * rect is known before the menu exists, but how tall the menu is depends on how many actions the
+ * row offers, so it is placed below the trigger, measured, and flipped above if it would hang off
+ * the bottom.
+ */
+function RowActionMenu({
+  label,
+  actions
+}: {
+  label: string;
+  actions: { key: string; text: string; icon: ReactNode; onSelect: () => void }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+
+  /* Closing has to put focus back where it came from, or a keyboard lands at the top of the
+     document and has to walk the whole page again to get back to the row it was working on. */
+  const close = useCallback((returnFocus: boolean) => {
+    setOpen(false);
+    setAt(null);
+    if (returnFocus) triggerRef.current?.focus();
+  }, []);
+
+  /*
+   * Where the menu goes, recomputed from where the trigger actually is.
+   *
+   * Placement is not decided once at open time, because the thing it is placed against moves:
+   * the page scrolls, the keyboard opens, the window turns. It is recomputed whenever any of
+   * that happens, and the result is clamped into the viewport rather than reasoned about from
+   * where it started -- measured at 320x700, a trigger sitting at y=731 flipped its menu to
+   * y=623, which satisfies "the top is on screen" and left the bottom 33px below it.
+   */
+  const place = useCallback(() => {
+    const trigger = triggerRef.current;
+    const menu = menuRef.current;
+    if (!trigger || !menu) return;
+    const margin = 8;
+    const t = trigger.getBoundingClientRect();
+    const m = menu.getBoundingClientRect();
+    let left = t.right - m.width;
+    left = Math.min(Math.max(margin, left), window.innerWidth - m.width - margin);
+    let top = t.bottom + 6;
+    if (top + m.height > window.innerHeight - margin) top = t.top - m.height - 6;
+    top = Math.min(Math.max(margin, top), Math.max(margin, window.innerHeight - m.height - margin));
+    setAt({ top, left });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (open) place();
+  }, [open, place]);
+
+  useEffect(() => {
+    if (!open) return;
+    /*
+     * The first item takes focus, so the keyboard arrives inside the menu rather than behind it
+     * -- without scrolling to do it.
+     *
+     * `focus()` scrolls whatever it has to in order to bring its target into view, and this
+     * target was just placed against a trigger. The scroll it caused reached the handler below,
+     * which closed the menu in the same tick it opened: measured, two of three rows driven at
+     * 375px reported the menu never opening at all, because it had opened and shut again before
+     * anything could look at it.
+     */
+    const first = menuRef.current?.querySelector<HTMLButtonElement>("[role='menuitem']");
+    first?.focus({ preventScroll: true });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        close(true);
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") return;
+      const items = [...(menuRef.current?.querySelectorAll<HTMLButtonElement>("[role='menuitem']") ?? [])];
+      if (!items.length) return;
+      event.preventDefault();
+      const here = items.indexOf(document.activeElement as HTMLButtonElement);
+      const next =
+        event.key === "Home" ? 0
+        : event.key === "End" ? items.length - 1
+        : event.key === "ArrowDown" ? (here + 1) % items.length
+        : (here - 1 + items.length) % items.length;
+      items[next]?.focus();
+    };
+    /* `pointerdown`, not `click`: a tap that opens another row's menu should close this one on
+       the way down rather than leaving both open for a frame. */
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (menuRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      close(false);
+    };
+    /*
+     * Scrolling moves the trigger, so the menu follows it rather than being dismissed by it.
+     * It only gives up when the row it belongs to has left the screen entirely, which is the
+     * one case where staying would be a menu floating next to nothing.
+     */
+    const onViewportChange = () => {
+      const t = triggerRef.current?.getBoundingClientRect();
+      if (!t) return;
+      if (t.bottom < 0 || t.top > window.innerHeight) close(false);
+      else place();
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("pointerdown", onPointer, true);
+    window.addEventListener("scroll", onViewportChange, true);
+    window.addEventListener("resize", onViewportChange);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("scroll", onViewportChange, true);
+      window.removeEventListener("resize", onViewportChange);
+    };
+  }, [open, close, place]);
+
+  return (
+    <>
+      <button
+        type="button"
+        ref={triggerRef}
+        className="secondary-action row-icon-action row-menu-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        aria-label={`More actions for ${label}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((was) => !was);
+        }}
+      >
+        <MoreVertical size={18} />
+      </button>
+      {open
+        && portalled(
+          <div
+            className="row-menu"
+            id={menuId}
+            role="menu"
+            ref={menuRef}
+            aria-label={`Actions for ${label}`}
+            /* Hidden until placed, so it is never painted at the top-left corner first. */
+            style={at ? { top: at.top, left: at.left } : { top: 0, left: 0, visibility: "hidden" }}
+          >
+            {actions.map((action) => (
+              <button
+                key={action.key}
+                type="button"
+                role="menuitem"
+                className="row-menu-item"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  close(false);
+                  action.onSelect();
+                }}
+              >
+                {action.icon}
+                {action.text}
+              </button>
+            ))}
+          </div>
+        )}
+    </>
+  );
+}
+
 function LedgerRow({
   transaction,
   subTypeCategory,
@@ -3775,7 +3969,6 @@ function LedgerRow({
   selected,
   onToggleSelected,
   onRefund,
-  onAddAgain,
   onEdit
 }: {
   transaction: Transaction;
@@ -3784,7 +3977,6 @@ function LedgerRow({
   selected: boolean;
   onToggleSelected: () => void;
   onRefund?: () => void;
-  onAddAgain?: () => void;
   onEdit: () => void;
 }) {
   const openLabel = `Open ${transaction.merchant || transaction.note || "this transaction"}`
@@ -3876,33 +4068,23 @@ function LedgerRow({
           />
         )}
       </div>
+      {/*
+        * One button, not three.
+        *
+        * Add again has left the row entirely at the owner's direction -- it keeps its place in
+        * the edit form, where there is room for the words and where you have already singled
+        * out the transaction you mean. Edit and Refund moved behind the menu.
+        */}
       <div className="row-actions">
-        {onRefund && (
-          <button
-            type="button"
-            className="secondary-action row-icon-action"
-            onClick={onRefund}
-            title="Refund: record money you got back for this"
-            aria-label={`Record a refund for ${transaction.merchant || "this transaction"}`}
-          >
-            <RotateCcw size={16} />
-          </button>
-        )}
-        {onAddAgain && (
-          <button
-            type="button"
-            className="secondary-action row-icon-action"
-            onClick={onAddAgain}
-            title="Add again with today's date"
-            aria-label={`Add ${transaction.merchant || "this transaction"} again with today's date`}
-          >
-            <Plus size={16} />
-          </button>
-        )}
-        <button className="secondary-action row-edit-action" onClick={onEdit} aria-label="Edit">
-          <Pencil size={16} />
-          <span className="row-edit-text">Edit</span>
-        </button>
+        <RowActionMenu
+          label={transaction.merchant || transaction.note || "this transaction"}
+          actions={[
+            { key: "edit", text: "Edit", icon: <Pencil size={16} />, onSelect: onEdit },
+            ...(onRefund
+              ? [{ key: "refund", text: "Refund", icon: <RotateCcw size={16} />, onSelect: onRefund }]
+              : [])
+          ]}
+        />
       </div>
       </div>
     </div>
@@ -5977,7 +6159,7 @@ export function AccountCard({
           <p className="outstanding-split-legend">
             <span className="spend">
               <i aria-hidden="true" />
-              Monthly spends {split.spendPercent}% · {formatINRWhole(split.spendPaise)}
+              {outstandingSpendLabel(split)}
             </span>
             <span className="emi">
               <i aria-hidden="true" />
@@ -11126,6 +11308,12 @@ function gainToneClass(paise: number) {
 function signedImpact(paise: number) {
   if (paise === 0) return formatINR(0);
   return `${paise > 0 ? "+" : "-"}${formatINR(Math.abs(paise))}`;
+}
+
+/** The same, in whole rupees, for a headline tile that has no room for paise. */
+function signedImpactWhole(paise: number) {
+  if (paise === 0) return formatINRWhole(0);
+  return `${paise > 0 ? "+" : "-"}${formatINRWhole(Math.abs(paise))}`;
 }
 
 function formatShare(value: number) {

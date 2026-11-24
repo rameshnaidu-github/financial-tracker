@@ -197,6 +197,24 @@ export function outstandingSplit(spendPaise: number, emiPaise: number) {
   return { show, totalPaise, spendPaise, emiPaise, spendPercent, emiPercent: 100 - spendPercent };
 }
 
+/**
+ * What the spending half of that split says in words.
+ *
+ * A cycle can be paid ahead of itself -- you clear the card, then a refund or a reversal lands --
+ * and the spending part of what is owed goes negative while the EMIs still stand. The percentage
+ * is clamped to 0 so the bar stays a bar, and the amount was printed unclamped beside it, which
+ * produced "Monthly spends 0% · -₹41,213" on the owner's own card: a minus sign next to a zero
+ * percent, every figure of it correct, and it reads as something broken.
+ *
+ * So it is said rather than implied. A negative spending part is money the card owes back
+ * against this cycle, which is being paid ahead, and the percentage is dropped because zero
+ * percent of what is owed is not the fact worth printing.
+ */
+export function outstandingSpendLabel(split: { spendPercent: number; spendPaise: number }) {
+  if (split.spendPaise < 0) return `Paid ahead · ${formatINRWhole(Math.abs(split.spendPaise))}`;
+  return `Monthly spends ${split.spendPercent}% · ${formatINRWhole(split.spendPaise)}`;
+}
+
 /** What grouping needs of a holding: when it was invested, and when it was entered. */
 export type HoldingLike = { purchaseDate: string | null; createdAt: string };
 
