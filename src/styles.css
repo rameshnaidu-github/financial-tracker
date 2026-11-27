@@ -2586,28 +2586,35 @@ a {
   line-height: 1;
 }
 
-.transaction-tag.account {
-  border-color: rgba(15, 118, 110, 0.22);
-  background: rgba(15, 118, 110, 0.1);
-  color: var(--accent);
-}
-
-.transaction-tag.method {
-  border-color: rgba(37, 99, 235, 0.2);
-  background: rgba(37, 99, 235, 0.1);
-  color: var(--accent);
+/*
+ * Every chip on a ledger row is the same quiet grey.
+ *
+ * They used to carry four tints: teal for the account, blue for the method, and the category's
+ * own hue for the type and SubType. On one row that is a reasonable piece of colour-coding. Down
+ * a list of twelve it was five text hues at once -- teal, orange, green, pink, teal again -- and
+ * it was the loudest thing on a screen whose whole point is the figures. Colour-coding you have
+ * to learn is not colour-coding; it is decoration with a legend.
+ *
+ * The category hues are not gone from the app. They still carry the donut, the budget bars and
+ * the category badges, where a hue means one series and the chart is the thing being read. Here
+ * the chips are chrome, so they take the chrome's colours: a surface step, a hairline and muted
+ * text. The only colour left in a row is the amount -- green in, red out -- which is the one
+ * distinction worth seeing from across the room.
+ *
+ * `--cat-color` is still set on the element; nothing reads it here any more.
+ */
+.transaction-tag.account,
+.transaction-tag.method,
+.transaction-tag.type,
+.transaction-tag.subtype {
+  border-color: var(--line);
+  background: var(--panel-soft);
+  color: var(--muted);
 }
 
 .transaction-tag.type,
 .transaction-tag.subtype {
   max-width: 150px;
-  /* Darkened exactly as a category badge is, and for the same reason: these are the same hues at
-     the same small size on the same pale tint. Until the label stopped being overpainted grey,
-     this rule's colour never actually reached the text, so the fault was invisible rather than
-     absent. */
-  color: color-mix(in srgb, var(--cat-color) 68%, black);
-  background: color-mix(in srgb, var(--cat-color) 8%, transparent);
-  border-color: color-mix(in srgb, var(--cat-color) 19%, transparent);
 }
 
 /*
@@ -2624,26 +2631,6 @@ a {
   font-size: inherit;
 }
 
-:root[data-theme="dark"] .transaction-tag.type,
-:root[data-theme="dark"] .transaction-tag.subtype {
-  color: color-mix(in srgb, var(--cat-color) 52%, white);
-  background: color-mix(in srgb, var(--cat-color) 20%, transparent);
-  border-color: color-mix(in srgb, var(--cat-color) 32%, transparent);
-}
-
-:root[data-theme="dark"] .transaction-tag.account {
-  border-color: rgba(45, 212, 191, 0.26);
-  background: rgba(20, 184, 166, 0.14);
-  color: #5eead4;
-}
-
-:root[data-theme="dark"] .transaction-tag.method {
-  /* The method tag was tinted blue to sit beside a blue accent. The accent is green now, and the
-     tag takes its tint from it rather than from the colour it used to be. */
-  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
-}
 
 .transaction-tag span {
   display: inline-block;
@@ -3570,6 +3557,50 @@ a {
   .panel-header > :not(h2):not(h3),
   .toolbar-header > :not(h2):not(h3) {
     flex: 0 0 auto;
+  }
+
+  /*
+   * ...except a toolbar, which is not an action and must be allowed to shrink.
+   *
+   * The rule above was written for a one-word button -- "Manage" beside "Card utilisation" --
+   * and `flex: 0 0 auto` is right for that. On the ledger the header's non-heading child is the
+   * whole search-and-Filters row, and refusing to shrink it made the page 476px wide on a 375px
+   * screen: Filters sat entirely off the right edge, the search placeholder was cut mid-word,
+   * and the 101px of horizontal scroll dragged the bottom bar's last tab off with it. Measured,
+   * not inferred -- `documentElement.scrollWidth` read 476 against a `clientWidth` of 375.
+   *
+   * It is written after the rule it corrects. A media query adds no specificity of its own and
+   * these two selectors are a class apart, so order is the thing actually doing the work here.
+   */
+  .panel-header > .toolbar,
+  .toolbar-header > .toolbar {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /*
+   * The ledger panel loses its title so the search can have the line.
+   *
+   * The page heading already says "Transactions"; the panel said "All transactions" 60px below
+   * it and took 122px of the one row the search box had to live on. Two words for one thing,
+   * paid for in the width of the only control on the screen that needs width.
+   *
+   * `display: contents` on the wrapper rather than `display: none` on the heading, so the
+   * heading survives in the accessibility tree and the panel keeps its name.
+   */
+  .transactions-page .panel-header > .transactions-title {
+    display: contents;
+  }
+
+  .transactions-page .panel-header > .transactions-title > h2 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .bar-row {

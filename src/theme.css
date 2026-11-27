@@ -1186,10 +1186,6 @@ textarea:focus {
  * somewhere off screen. Its top and left are written by the component after it has measured
  * itself against the trigger, so the only thing stated here is what it looks like.
  */
-.row-menu-trigger[aria-expanded="true"] {
-  background: var(--panel-soft);
-  box-shadow: inset 0 0 0 1px var(--line);
-}
 
 .row-menu {
   position: fixed;
@@ -3839,18 +3835,54 @@ button.mix-bar-head:hover > span {
   /* Search and Filters are one row. They are both "narrow this list" and they were a slab each. */
   .transactions-page .toolbar.filter-toolbar {
     display: flex;
-    flex-wrap: nowrap;
+    /*
+     * `wrap`, so the opened filter panel below can take a row of its own.
+     *
+     * This read `nowrap` while the panel was a flex item on the same line as Search and the
+     * Filters button. Tapping Filters then laid Type, SubType, From, To and Apply out as a
+     * narrow column to the right of the two controls -- a 120px stack running 23px off the
+     * screen, with the search box crushed beside it. Nothing wraps to a second line in a
+     * `nowrap` row, however little room is left on the first.
+     */
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
   }
 
+  /*
+   * `flex-basis: 0`, not `auto`, so the search box asks for no width of its own.
+   *
+   * With `auto` the box's base size is its content width, which on a wrapping row was enough
+   * to claim the whole line and bump the Filters button down to a line of its own the moment
+   * the panel below it opened -- a button that moved when you pressed it. At `0` the box has
+   * no opinion about its width and simply takes whatever the Filters button leaves.
+   */
   .transactions-page .toolbar.filter-toolbar .search-box {
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-width: 0;
   }
 
   .transactions-page .toolbar.filter-toolbar .filters-toggle {
     flex: 0 0 auto;
+  }
+
+  /*
+   * The opened panel is a full row under the two controls that opened it, two fields across.
+   *
+   * `flex-basis: 100%` is what puts it on its own line: it cannot share a line with anything,
+   * so it always breaks to the next one, and the search box keeps the line above to itself.
+   * Four short fields pair up naturally -- Type with SubType, From with To -- and Apply, which
+   * acts on all four, spans them both rather than sitting under one.
+   */
+  .transactions-page .toolbar.filter-toolbar .filter-extra.open {
+    flex: 1 0 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: end;
+    margin-top: 2px;
+  }
+
+  .transactions-page .toolbar.filter-toolbar .filter-extra.open > button {
+    grid-column: 1 / -1;
   }
 
   /* The three figures read across, the way they are spoken: out, in, net. */
@@ -4423,6 +4455,39 @@ button.budget-hint-chip:focus-visible {
 :root[data-theme="dark"] .icon-button:hover {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong));
   background-color: var(--accent-soft);
+}
+
+/*
+ * At rest the row's menu trigger is three dots, not a box with three dots in it.
+ *
+ * It is one button repeated down every row of the ledger, and drawn as a bordered 44px tile it
+ * weighed as much as the chips beside it -- on a phone the row read as a chip, a chip and a
+ * third control, all competing for one line. The 44px hit area is untouched; only the paint is.
+ * The surface step comes back under a finger, under a keyboard focus ring and while the menu is
+ * open, which is where a state is worth showing.
+ *
+ * It has to be written here, below the dark button rules, and with `:root` carried into the
+ * selector. `.secondary-action` is the class this button also wears, and the dark rule above
+ * reaches it through `:root[data-theme="dark"] .secondary-action` -- three classes' worth of
+ * specificity against a bare `.row-menu-trigger`'s one. A plain class placed earlier simply
+ * lost, which is exactly how the first attempt at this came out looking unchanged.
+ */
+:root .row-menu-trigger,
+:root[data-theme="dark"] .row-menu-trigger {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+:root .row-menu-trigger:hover,
+:root .row-menu-trigger:focus-visible,
+:root .row-menu-trigger[aria-expanded="true"],
+:root[data-theme="dark"] .row-menu-trigger:hover,
+:root[data-theme="dark"] .row-menu-trigger:focus-visible,
+:root[data-theme="dark"] .row-menu-trigger[aria-expanded="true"] {
+  border-color: transparent;
+  background: var(--panel-soft);
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 
 /* The primary action's drop shadow is tinted with the accent; on a mint this
