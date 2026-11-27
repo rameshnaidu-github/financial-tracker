@@ -21,7 +21,6 @@ import {
   Landmark,
   LayoutGrid,
   Loader2,
-  Archive,
   Megaphone,
   Moon,
   MoreVertical,
@@ -70,6 +69,7 @@ import {
   splitMonth,
   todayISO,
   yearChoices,
+  splitLoansByStanding,
 } from "./format";
 import { IconGlyph } from "./icons";
 import { WHATS_NEW, hasUnreadNews, newestNewsDate, type NewsEntry } from "./whats-new";
@@ -6450,15 +6450,27 @@ function AccountsPage({
 
   function remove(account: Account) {
     requestConfirm({
-      message: "Are you sure you want to delete this?",
-      detail: `${account.name} will disappear from the app. Existing transaction history is preserved when history is linked to this account.`,
+      message: `Delete ${account.name}?`,
+      /*
+       * Say the one thing somebody deleting an account is actually worried about.
+       *
+       * This used to hedge -- "history is preserved when history is linked to this account" --
+       * which reads as a condition the reader has to work out for themselves. It is not a
+       * condition: every transaction that ever touched this account stays, because the database
+       * will not let them go, and that is the whole reason deleting here is safe.
+       */
+      detail: `${account.name} will disappear from your accounts, your filters and every figure. Every transaction on it stays in your ledger, still showing this account's name. This cannot be undone.`,
       confirmLabel: "Delete",
       tone: "danger",
       onConfirm: async () => {
         try {
           const result = await Api.deleteAccount(account.id);
           await refresh();
-          showNotice(result.mode === "hidden" ? "Account hidden. Existing history is preserved." : "Account deleted.");
+          showNotice(
+            result.mode === "hidden"
+              ? `${account.name} deleted. Its transactions are still in your ledger.`
+              : `${account.name} deleted.`
+          );
         } catch (err) {
           showNotice(err instanceof Error ? err.message : "Could not remove account.");
         }
@@ -6619,30 +6631,46 @@ function LoansPage({
   const noun = isCardEmi ? "EMI" : "loan";
   const [editingLoan, setEditingLoan] = useState<Loan | null>(null);
   const [adding, setAdding] = useState(false);
-  const activeLoans = loans.filter((loan) => !loan.isArchived);
-  const archivedLoans = loans.filter((loan) => loan.isArchived);
+  /*
+   * Still owing, and finished with. The owner asked for the two to stand apart.
+   *
+   * It used to be archived against not-archived, which is a filing decision rather than anything
+   * about the money: a loan paid off last month sat among the ones still wanting an instalment
+   * until somebody remembered to archive it.
+   */
+  const { active: activeLoans, closed: closedLoans } = splitLoansByStanding(loans);
   const loanType = categoryTypes.find((type) => type.behavior === "loan");
   const activeOutstanding = activeLoans.reduce((sum, loan) => sum + loan.outstandingPaise, 0);
   const monthlyEmiTotal = activeLoans.reduce((sum, loan) => sum + loan.monthlyEmiPaise, 0);
-  const paidInterest = activeLoans.reduce((sum, loan) => sum + loanInterestPaidValue(loan), 0);
+  /* Interest paid is history, so it counts what every loan cost, closed ones included. The two
+     figures above look forward and count only what still wants paying. */
+  const paidInterest = loans.reduce((sum, loan) => sum + loanInterestPaidValue(loan), 0);
 
-  function archive(loan: Loan) {
+  /*
+   * One Delete, and it does not take the money with it.
+   *
+   * This was Archive, which hid the loan and left the row. Delete removes it. What stays is every
+   * transaction that ever paid it -- those are rows of their own, in their own accounts, and
+   * nothing about removing a loan should reach them. What goes with it is the per-payment
+   * record of principal against interest, which only ever described this loan.
+   */
+  function remove(loan: Loan) {
     requestConfirm({
-      message: "Are you sure you want to archive this loan?",
+      message: `Delete ${loan.name}?`,
       detail:
         loan.outstandingPaise > 0
-          ? `${loan.name} will move out of active tracking. It still has ${formatINR(loan.outstandingPaise)} outstanding, which keeps counting in your net worth until it's paid.`
-          : `${loan.name} will move out of active tracking. Existing transactions and reports stay preserved.`,
-      confirmLabel: "Archive",
+          ? `Every transaction that paid it stays in your ledger. The ${formatINR(loan.outstandingPaise)} still outstanding stops counting in your net worth, and the record of how each instalment split into principal and interest goes with the ${noun}. This cannot be undone.`
+          : `Every transaction that paid it stays in your ledger. The record of how each instalment split into principal and interest goes with the ${noun}. This cannot be undone.`,
+      confirmLabel: "Delete",
       tone: "danger",
       onConfirm: async () => {
         try {
-          await Api.archiveLoan(loan.id);
+          await Api.deleteLoan(loan.id);
           if (editingLoan?.id === loan.id) setEditingLoan(null);
           await refresh();
-          showNotice("Loan archived.");
+          showNotice(`${loan.name} deleted. Its transactions are still in your ledger.`);
         } catch (err) {
-          showNotice(err instanceof Error ? err.message : "Could not archive loan.");
+          showNotice(err instanceof Error ? err.message : `Could not delete ${noun}.`);
         }
       }
     });
@@ -6659,22 +6687,12 @@ function LoansPage({
     }))
     .sort((a, b) => b.amountPaise - a.amountPaise);
 
-  /* Running and archived, each heading present only where something sits under it -- the same
-     rule the accounts page follows for banks and cards. */
+  /* Active and Closed, each heading present only where something sits under it -- the same rule
+     the accounts page follows for banks and cards. */
   const loanGroups = [
-    { key: "running", title: `Active ${noun}s`, loans: activeLoans },
-    { key: "archived", title: `Archived ${noun}s`, loans: archivedLoans }
+    { key: "active", title: `Active ${noun}s`, loans: activeLoans },
+    { key: "closed", title: `Closed ${noun}s`, loans: closedLoans }
   ].filter((group) => group.loans.length > 0);
-
-  async function restore(loan: Loan) {
-    try {
-      await Api.updateLoan(loan.id, { isArchived: false });
-      await refresh();
-      showNotice("Loan restored.");
-    } catch (err) {
-      showNotice(err instanceof Error ? err.message : "Could not restore loan.");
-    }
-  }
 
   return (
     <div className="page-grid loans-page">
@@ -6717,8 +6735,7 @@ function LoansPage({
                     key={loan.id}
                     loan={loan}
                     onEdit={setEditingLoan}
-                    onArchive={group.key === "running" ? archive : undefined}
-                    onRestore={group.key === "archived" ? restore : undefined}
+                    onDelete={remove}
                   />
                 ))}
               </div>
@@ -7021,13 +7038,11 @@ function LoanForm({
 function LoanCard({
   loan,
   onEdit,
-  onArchive,
-  onRestore
+  onDelete
 }: {
   loan: Loan;
   onEdit: (loan: Loan) => void;
-  onArchive?: (loan: Loan) => void;
-  onRestore?: (loan: Loan) => void;
+  onDelete: (loan: Loan) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const progress = loanProgressPercent(loan);
@@ -7125,17 +7140,18 @@ function LoanCard({
           <Pencil size={16} />
           Edit
         </button>
-        {loan.isArchived ? (
-          <button className="secondary-action" onClick={() => onRestore?.(loan)}>
-            <RotateCcw size={16} />
-            Restore
-          </button>
-        ) : (
-          <button className="secondary-action danger-action" onClick={() => onArchive?.(loan)}>
-            <Archive size={16} />
-            Archive
-          </button>
-        )}
+        {/*
+          * One action, on every card, whatever the loan's standing.
+          *
+          * This was a pair: Archive while it ran, Restore once archived. Both are gone. A loan
+          * you are finished with is Closed because it is paid off, not because you filed it, and
+          * a loan you want rid of is deleted -- which leaves every transaction that paid it
+          * exactly where it was.
+          */}
+        <button className="secondary-action danger-action" onClick={() => onDelete(loan)}>
+          <Trash2 size={16} />
+          Delete
+        </button>
       </div>
 
       <PaymentHistoryGrid source="loan" id={loan.id} />

@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
 import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
-import { formatINR, formatINRWhole, outstandingSpendLabel, outstandingSplit, todayISO } from "../src/format.ts";
+import { formatINR, formatINRWhole, loanIsClosed, outstandingSpendLabel, outstandingSplit, splitLoansByStanding, todayISO } from "../src/format.ts";
 import { INFLOW_BEHAVIORS, SELF_TRANSFER_SUBCATEGORY_ID, cardEmiSettlementPaise } from "../shared/finance.ts";
 import {
   NAV_ORDER,
@@ -996,10 +996,12 @@ test("tracks loan statement values, linked transactions, unlink, and archive", a
     "Linked loan must match the selected Loan SubType."
   );
 
-  const archiveResult = await services.archiveLoan(loan.id);
-  assert(archiveResult.mode === "archived", "Loan removal should archive, not hard-delete.");
-  assert(!(await services.listLoans(false)).some((item) => item.id === loan.id), "Archived loan should leave active loan list.");
-  assert((await services.listLoans(true)).find((item) => item.id === loan.id)?.isArchived, "Archived loan should remain in history.");
+  /* Removing a loan is a delete now, so the flag is set directly here: what this case is about
+     is that a payment cannot be recorded against a loan that is no longer running, and that
+     rule still has to hold for the loans that carry the flag from before. */
+  await services.updateLoan(loan.id, { isArchived: true });
+  assert(!(await services.listLoans(false)).some((item) => item.id === loan.id), "An archived loan should leave the active loan list.");
+  assert((await services.listLoans(true)).find((item) => item.id === loan.id)?.isArchived, "An archived loan should remain in history.");
 
   await assertRejectsWithMessage(
     "archived loan payment",
@@ -3807,8 +3809,10 @@ test("archived loans with a balance still count as owed", async () => {
     monthlyEmiPaise: 4_700_00
   });
   const before = (await services.getWealthSummary()).netWorth.liabilitiesPaise;
-  await services.archiveLoan(owed.id);
-  assert((await services.getWealthSummary()).netWorth.liabilitiesPaise === before, "Archiving must not make a debt disappear.");
+  await services.updateLoan(owed.id, { isArchived: true });
+  /* Filing a loan away puts it under Closed on the page; it does not stop the money being owed.
+     The two readings are separate on purpose, and this is the one that counts in net worth. */
+  assert((await services.getWealthSummary()).netWorth.liabilitiesPaise === before, "Filing a loan away must not make a debt disappear.");
   await services.updateLoan(owed.id, { startingOutstandingPaise: 0 });
   assert(
     (await services.getWealthSummary()).netWorth.liabilitiesPaise === before - 40_000_00,
@@ -5345,6 +5349,129 @@ test("What's new is dated in the past, one entry per day, newest first", async (
     const lines = [...(entry.added ?? []), ...(entry.fixed ?? [])];
     assert(lines.length > 0, `${entry.date} has no lines, so it is a date with nothing to say.`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Deleting a thing must never delete the money that passed through it. These
+// run against the real schema, because that is where the constraint lives and
+// a cascade is not something a unit test can mock honestly.
+// ---------------------------------------------------------------------------
+
+/** A loan with one EMI paid against it, and the id of the transaction that paid it. */
+async function loanWithOnePayment(label: string, kind: "loan" | "card-emi") {
+  const suffix = `${label}-${Date.now().toString().slice(-6)}`;
+  const loan = await services.createLoan({
+    name: `QA Delete ${suffix}`,
+    subcategoryId: await subcategoryId("Loan", kind === "card-emi" ? "Vehicle" : "Personal"),
+    principalAmountPaise: 2_00_000_00,
+    startingOutstandingPaise: 2_00_000_00,
+    startMonth: "2026-01",
+    annualInterestRateBps: 1200,
+    tenureMonths: 24,
+    monthlyEmiPaise: 10_000_00,
+    ...(kind === "card-emi" ? { debitedThrough: "card" as const } : {})
+  });
+  const paid = await services.createTransaction({
+    date: "2026-03-05",
+    accountId: state.bankId,
+    method: "bank_transfer",
+    merchant: `QA payment for ${suffix}`,
+    typeId: await typeId("Loan"),
+    subcategoryId: await subcategoryId("Loan", kind === "card-emi" ? "Vehicle" : "Personal"),
+    amountPaise: 10_000_00,
+    direction: "outflow",
+    kind: "emi",
+    loanId: loan.id,
+    loanPaymentType: "emi"
+  });
+  const txnId = paid.transaction?.id;
+  assert(txnId, "The paying transaction should exist before the loan is deleted.");
+  return { loan, txnId: txnId as string };
+}
+
+test("deleting a loan keeps every transaction that paid it", async () => {
+  const { loan, txnId } = await loanWithOnePayment("loan", "loan");
+  const before = await services.getTransaction(txnId);
+  assert(before?.amountPaise === 10_000_00, "The payment should be 10,000 before the delete.");
+
+  const result = await services.deleteLoan(loan.id);
+  assert(result.mode === "deleted", `The loan should be deleted outright, got ${result.mode}.`);
+  assert(result.paymentsUnlinked === 1, `One amortisation record should have gone with it, got ${result.paymentsUnlinked}.`);
+
+  assert(
+    !(await services.listLoans(true)).some((item) => item.id === loan.id),
+    "A deleted loan must not come back, archived or otherwise."
+  );
+
+  // The point of the whole change: the money is still there.
+  const after = await services.getTransaction(txnId);
+  assert(after, "The transaction that paid the loan must survive the loan.");
+  assert(after.amountPaise === 10_000_00, `Its amount must be untouched, got ${after.amountPaise}.`);
+  assert(after.accountId === state.bankId, "It must still belong to the account it was paid from.");
+  assert(after.direction === "outflow", "It must still be money going out.");
+});
+
+test("deleting a card EMI keeps every transaction that paid it", async () => {
+  const { loan, txnId } = await loanWithOnePayment("emi", "card-emi");
+  await services.deleteLoan(loan.id);
+  const after = await services.getTransaction(txnId);
+  assert(after, "The transaction that paid the EMI must survive the EMI.");
+  assert(after.amountPaise === 10_000_00, `Its amount must be untouched, got ${after.amountPaise}.`);
+  assert(
+    !(await services.listLoans(true, "card-emi")).some((item) => item.id === loan.id),
+    "A deleted EMI must leave the EMI list."
+  );
+});
+
+test("deleting an account keeps its transactions and takes it out of every figure", async () => {
+  const suffix = Date.now().toString().slice(-6);
+  const account = await services.createAccount({
+    name: `QA Doomed Bank ${suffix}`,
+    type: "bank",
+    startingBalancePaise: 50_000_00
+  });
+  const spend = await services.createTransaction({
+    date: "2026-03-09",
+    accountId: account.id,
+    method: "upi",
+    merchant: `QA spend on doomed ${suffix}`,
+    typeId: await typeId("Expense"),
+    subcategoryId: await subcategoryId("Expense", "Groceries"),
+    amountPaise: 1_250_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+  const txnId = spend.transaction?.id;
+  assert(txnId, "The spend should exist before the account is deleted.");
+
+  await services.deleteAccount(account.id);
+
+  /* The account leaves the list the application reads, which is what takes it out of every
+     figure built from that list. The constraint on transactions.account_id is the reason the
+     row itself cannot go, and the reason this history is safe. */
+  assert(
+    !(await services.listAccounts(false)).some((item) => item.id === account.id),
+    "A deleted account must be gone from the live accounts the application reads."
+  );
+
+  const after = await services.getTransaction(txnId as string);
+  assert(after, "The transaction must survive the account it was spent from.");
+  assert(after.amountPaise === 1_250_00, `Its amount must be untouched, got ${after.amountPaise}.`);
+});
+
+test("loans and EMIs split into what is still owed and what is closed", async () => {
+  const running = { outstandingPaise: 5_00_000_00, isArchived: false };
+  const paidOff = { outstandingPaise: 0, isArchived: false };
+  const filedAway = { outstandingPaise: 3_00_000_00, isArchived: true };
+
+  assert(!loanIsClosed(running), "A loan with money still owing is active.");
+  assert(loanIsClosed(paidOff), "A loan with nothing outstanding is closed.");
+  // Decision D2: archiving was how "finished with this" used to be said.
+  assert(loanIsClosed(filedAway), "A loan the owner had archived is closed, whatever it still owes.");
+
+  const split = splitLoansByStanding([running, paidOff, filedAway]);
+  assert(split.active.length === 1 && split.active[0] === running, "Only the running loan is active.");
+  assert(split.closed.length === 2, `Both the paid-off and the archived loan are closed, got ${split.closed.length}.`);
 });
 
 let failed = 0;

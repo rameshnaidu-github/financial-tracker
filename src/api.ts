@@ -193,8 +193,9 @@ export const Api = {
     accountId: string | null;
     isArchived: boolean;
   }>) => api<Loan>(`/api/loans/${id}`, { method: "PATCH", body }),
-  archiveLoan: (id: string) =>
-    api<{ ok: true; mode: "archived" }>(`/api/loans/${id}`, { method: "DELETE" }),
+  /* Deletes the loan or EMI. Its transactions stay; only the amortisation records go with it. */
+  deleteLoan: (id: string) =>
+    api<{ ok: true; mode: "deleted"; paymentsUnlinked: number }>(`/api/loans/${id}`, { method: "DELETE" }),
   subscriptions: (includeArchived = true) =>
     api<AutopaySubscription[]>(
       `/api/subscriptions?${new URLSearchParams({ includeArchived: String(includeArchived) })}`
