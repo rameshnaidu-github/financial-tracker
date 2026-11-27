@@ -634,9 +634,9 @@ a {
   border-bottom: 1px solid var(--line);
   color: var(--muted);
   padding: 0 0 10px;
-  font-size: 0.76rem;
+  font-size: 0.8125rem;
   font-weight: 500;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 .table-row {
@@ -880,9 +880,9 @@ a {
 .cashflow-summary-head span {
   color: var(--muted);
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 0.72rem;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.8125rem;
 }
 
 .cashflow-summary-head strong {
@@ -937,10 +937,10 @@ a {
 .cashflow-equation-name,
 .cashflow-equation-total-card span {
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
   font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
   overflow-wrap: anywhere;
 }
 
@@ -1066,9 +1066,9 @@ a {
 .vacation-budget-head span {
   color: var(--muted);
   font-weight: 500;
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+  font-size: 0.8125rem;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .vacation-budget-bar {
@@ -1218,10 +1218,10 @@ a {
 
 .investment-group-metrics span {
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: 0.8125rem;
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .investment-group-metrics strong {
@@ -1537,9 +1537,9 @@ a {
 .section-subtitle {
   margin: 18px 0 10px;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   letter-spacing: 0;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 .account-icon {
@@ -1883,10 +1883,10 @@ a {
 
 .card-emi-settle-part small {
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.8125rem;
   font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 /* An EMI left out of the bill says so in words. It is not faded: at this size a dimmed caption
@@ -1972,10 +1972,10 @@ a {
   gap: 8px;
   margin: 0 0 8px;
   color: var(--muted);
-  font-size: 0.76rem;
+  font-size: 0.8125rem;
   font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 /* A setting chosen from a list rather than typed. */
@@ -2999,10 +2999,10 @@ a {
 
 .report-chart-header span {
   color: var(--muted);
-  font-size: 0.74rem;
+  font-size: 0.8125rem;
   font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .report-chart-header strong {
@@ -3637,10 +3637,10 @@ a {
 }
 
 .payment-history-title {
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   font-weight: 600;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--muted);
 }
 
@@ -3707,10 +3707,10 @@ a {
 }
 
 .payment-history-month {
-  font-size: 0.68rem;
+  font-size: 0.8125rem;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--muted);
 }
 
