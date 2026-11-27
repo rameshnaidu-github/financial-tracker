@@ -5474,6 +5474,167 @@ test("loans and EMIs split into what is still owed and what is closed", async ()
   assert(split.closed.length === 2, `Both the paid-off and the archived loan are closed, got ${split.closed.length}.`);
 });
 
+// ---------------------------------------------------------------------------
+// A credit card's last six months. The dates are pinned, because a window that
+// ends "now" would quietly change what these cases assert every month.
+// ---------------------------------------------------------------------------
+
+/** A card of its own, so nothing else in the suite can land on these months. */
+async function cardForHistory(label: string) {
+  const suffix = `${label}-${Date.now().toString().slice(-6)}`;
+  return services.createAccount({
+    name: `QA History Card ${suffix}`,
+    type: "credit_card",
+    startingBalancePaise: 0,
+    creditLimitPaise: 2_00_000_00,
+    paymentDueDay: 9
+  });
+}
+
+test("a card's six months count what was spent on it and nothing else", async () => {
+  const card = await cardForHistory("spend");
+  const bank = state.bankId;
+  const put = async (date: string, rupees: number, kind: "expense" | "emi", accountId = card.id) =>
+    services.createTransaction({
+      date,
+      accountId,
+      method: accountId === card.id ? "credit_card" : "bank_transfer",
+      merchant: `QA ${kind} ${date}`,
+      typeId: await typeId(kind === "emi" ? "Loan" : "Expense"),
+      subcategoryId: await subcategoryId(kind === "emi" ? "Loan" : "Expense", kind === "emi" ? "Personal" : "Shopping"),
+      amountPaise: Math.round(rupees * 100),
+      direction: "outflow",
+      kind: kind === "emi" ? "expense" : "expense"
+    });
+
+  await put("2026-04-11", 12_000, "expense");
+  await put("2026-04-23", 3_500, "expense");
+  await put("2026-06-02", 9_900, "expense");
+
+  /* A payment of the card is money leaving the bank, not spending on the card. Its account is
+     the bank, so it must not reach any of these months. */
+  await services.createTransaction({
+    date: "2026-06-09",
+    accountId: bank,
+    method: "bank_transfer",
+    merchant: "QA pays the history card",
+    typeId: await typeId("Credit Card Payment"),
+    amountPaise: 15_500_00,
+    direction: "outflow",
+    kind: "card_payment",
+    transferAccountId: card.id
+  });
+
+  const history = await services.getCardSpendHistory(card.id, 6, "2026-06-20");
+  assert(history.months.length === 6, `Six months should come back, got ${history.months.length}.`);
+  assert(history.months[0].month === "2026-01", `The window should start six months back, got ${history.months[0].month}.`);
+  assert(history.months[5].month === "2026-06", `It should end with the current month, got ${history.months[5].month}.`);
+
+  const by = Object.fromEntries(history.months.map((m) => [m.month, m.spentPaise]));
+  assert(by["2026-04"] === 15_500_00, `April should hold both purchases, got ${by["2026-04"]}.`);
+  assert(by["2026-06"] === 9_900_00, `June should hold its own purchase only, got ${by["2026-06"]}.`);
+  assert(by["2026-05"] === 0, `A month with nothing on the card is zero, got ${by["2026-05"]}.`);
+  assert(by["2026-02"] === 0 && by["2026-03"] === 0, "Months before the card was used are zero.");
+
+  /* The payment was 15,500 and April was 15,500 by coincidence of the figures above -- if the
+     payment had leaked in, June would read 25,400 rather than 9,900, which is what this catches. */
+  assert(by["2026-06"] !== 25_400_00, "A card payment must never be counted as spending on the card.");
+});
+
+test("a refund on a card reduces the month it landed in", async () => {
+  const card = await cardForHistory("refund");
+  const purchase = await services.createTransaction({
+    date: "2026-05-04",
+    accountId: card.id,
+    method: "credit_card",
+    merchant: "QA returnable purchase",
+    typeId: await typeId("Expense"),
+    subcategoryId: await subcategoryId("Expense", "Shopping"),
+    amountPaise: 8_000_00,
+    direction: "outflow",
+    kind: "expense"
+  });
+  assert(purchase.transaction?.id, "The purchase should exist.");
+
+  const before = await services.getCardSpendHistory(card.id, 6, "2026-06-20");
+  assert(before.months.find((m) => m.month === "2026-05")?.spentPaise === 8_000_00, "May starts at 8,000.");
+
+  await services.createTransaction({
+    date: "2026-05-19",
+    accountId: card.id,
+    method: "credit_card",
+    merchant: "QA refund of that purchase",
+    typeId: await typeId("Refund"),
+    amountPaise: 3_000_00,
+    direction: "inflow",
+    kind: "refund",
+    linkedTransactionId: purchase.transaction?.id
+  });
+
+  const after = await services.getCardSpendHistory(card.id, 6, "2026-06-20");
+  assert(
+    after.months.find((m) => m.month === "2026-05")?.spentPaise === 5_000_00,
+    `A refund should take the month down to 5,000, got ${after.months.find((m) => m.month === "2026-05")?.spentPaise}.`
+  );
+});
+
+test("the card average covers completed months and is withheld when it would be a mean of one", async () => {
+  const card = await cardForHistory("avg");
+  const spend = async (date: string, rupees: number) =>
+    services.createTransaction({
+      date,
+      accountId: card.id,
+      method: "credit_card",
+      merchant: `QA avg ${date}`,
+      typeId: await typeId("Expense"),
+      subcategoryId: await subcategoryId("Expense", "Shopping"),
+      amountPaise: Math.round(rupees * 100),
+      direction: "outflow",
+      kind: "expense"
+    });
+
+  // One completed month used, and the current one. One month is not an average.
+  await spend("2026-05-06", 10_000);
+  await spend("2026-06-07", 40_000);
+  const one = await services.getCardSpendHistory(card.id, 6, "2026-06-20");
+  assert(one.averagePaise === null, `One completed month must not produce an average, got ${one.averagePaise}.`);
+  assert(one.averagedMonths === 0, "Nothing was averaged.");
+
+  // A second completed month, with an unused month between them that must count as a real zero.
+  await spend("2026-03-15", 20_000);
+  const many = await services.getCardSpendHistory(card.id, 6, "2026-06-20");
+  /* March, April, May are the completed months from first use onwards: 20,000 + 0 + 10,000. */
+  assert(many.averagedMonths === 3, `Three completed months should be averaged, got ${many.averagedMonths}.`);
+  assert(many.averagePaise === 10_000_00, `The average should be 10,000, got ${many.averagePaise}.`);
+
+  /* The current month is deliberately out of it: it is part-finished, and at 40,000 it would
+     have pulled the average to 17,500 and made every completed month look small. */
+  assert(many.averagePaise !== 17_500_00, "The part-finished current month must stay out of the average.");
+});
+
+test("a card with nothing on it reports six months of zero rather than no months", async () => {
+  const card = await cardForHistory("empty");
+  const history = await services.getCardSpendHistory(card.id, 6, "2026-06-20");
+  assert(history.months.length === 6, `Six months should still come back, got ${history.months.length}.`);
+  assert(history.months.every((m) => m.spentPaise === 0), "Every month should be zero.");
+  assert(history.averagePaise === null, "There is no average to draw.");
+});
+
+test("only a credit card has a spending history", async () => {
+  const bank = await services.createAccount({
+    name: `QA Not A Card ${Date.now().toString().slice(-6)}`,
+    type: "bank",
+    startingBalancePaise: 1_000_00
+  });
+  await assertRejectsWithMessage(
+    "spend history of a bank account",
+    async () => {
+      await services.getCardSpendHistory(bank.id, 6, "2026-06-20");
+    },
+    "Only a credit card has a spending history to show."
+  );
+});
+
 let failed = 0;
 let ran = 0;
 

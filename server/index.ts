@@ -43,6 +43,7 @@ import {
   createVacation,
   deleteAutopaySubscription,
   deleteLoan,
+  getCardSpendHistory,
   deleteAccount,
   deleteBudgetLine,
   deleteCategoryType,
@@ -392,6 +393,13 @@ app.get("/api/accounts", async () => (await listAccounts()).filter((account) => 
 app.post("/api/accounts", async (request, reply) => {
   const account = await createAccount(request.body as never);
   return reply.status(201).send(account);
+});
+
+/* Six calendar months of what went onto one card. Credit cards only; see the reader. */
+app.get("/api/accounts/:id/spend-history", async (request) => {
+  const params = request.params as { id: string };
+  const query = request.query as { months?: string };
+  return getCardSpendHistory(params.id, query.months ? Number(query.months) : undefined);
 });
 
 app.patch("/api/accounts/:id", async (request) => {

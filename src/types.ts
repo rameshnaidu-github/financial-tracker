@@ -416,6 +416,21 @@ export type BudgetTrendReport = {
 
 export type PaymentHistory = { source: string; id: string; year: number; months: boolean[] };
 
+/** One calendar month of what went onto a credit card. */
+export type CardSpendMonth = { month: string; spentPaise: number };
+
+/**
+ * Six months of a card's spending, oldest first, with the average of the completed months it was
+ * actually used in. `averagePaise` is null when there is no average worth drawing -- one month is
+ * not an average of anything.
+ */
+export type CardSpendHistory = {
+  accountId: string;
+  months: CardSpendMonth[];
+  averagePaise: number | null;
+  averagedMonths: number;
+};
+
 export type BudgetStatus = "safe" | "watch" | "critical" | "over";
 
 export type BudgetScope = {

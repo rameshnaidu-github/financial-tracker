@@ -3642,6 +3642,93 @@ export type PaymentHistory = {
 
 const PAYMENT_HISTORY_SOURCES = new Set<PaymentHistorySource>(["loan", "autopay", "mutual_fund"]);
 
+/**
+ * What a credit card was used for, month by month, for the last six calendar months.
+ *
+ * The owner asked for a card's history and pointed at a screen headed "Past bills". Those are two
+ * different figures here, and the one chosen is spending: what went **onto** the card in a month,
+ * not what was paid **off** it. It is the reading that moves month to month and the one the
+ * picture was showing.
+ *
+ * There is no statement cycle anywhere in this application, so a month is a calendar month. That
+ * is a real limitation rather than a simplification, and the panel says so rather than letting a
+ * reader assume their bank's cycle.
+ *
+ * What counts, decided from the data and not from the picture:
+ *
+ *   - Anything booked to the card and going out: purchases, charges, EMI instalments.
+ *   - Less anything credited back to it, so a refund reduces the month it landed in.
+ *   - Never a card payment. Its `account_id` is the bank it was paid from and the card is only
+ *     its `transfer_account_id`, so the filter excludes it by construction; the kind is named
+ *     as well, so a future payment written the other way round still cannot inflate a month.
+ *   - Never a balance adjustment. This application already holds that an adjustment is neither
+ *     spending nor income -- it corrects a figure rather than describing a month.
+ *
+ * The average is of **completed** months, so the part-finished current one cannot drag a line
+ * that exists to be compared against. It starts at the first month the card was actually used:
+ * months before that are not months you spent nothing on it, they are months it was not yours
+ * yet, and averaging them in says the card is quieter than it is. A single month is not an
+ * average and is returned as null.
+ */
+export type CardSpendMonth = { month: string; spentPaise: number };
+
+export type CardSpendHistory = {
+  accountId: string;
+  months: CardSpendMonth[];
+  averagePaise: number | null;
+  averagedMonths: number;
+};
+
+export async function getCardSpendHistory(
+  accountId: string,
+  monthCount = 6,
+  asOf = currentIsoDate()
+): Promise<CardSpendHistory> {
+  const account = await getAccountRow(accountId);
+  if (!account) throw notFound("Account not found.");
+  if (account.type !== "credit_card") {
+    throw badRequest("Only a credit card has a spending history to show.");
+  }
+
+  const span = Math.min(Math.max(Math.trunc(monthCount) || 0, 1), 24);
+  const currentMonth = asOf.slice(0, 7);
+  const firstMonth = addMonths(currentMonth, -(span - 1));
+
+  const rows = asRecords<{ month: string; spent: string | number }>(
+    (await db
+      .prepare(
+        `SELECT substr(date, 1, 7) AS month,
+                SUM(CASE WHEN direction = 'outflow' THEN amount_paise ELSE -amount_paise END) AS spent
+         FROM transactions
+         WHERE user_id = ?
+           AND account_id = ?
+           AND kind NOT IN ('adjustment', 'card_payment')
+           AND substr(date, 1, 7) >= ?
+           AND substr(date, 1, 7) <= ?
+         GROUP BY substr(date, 1, 7)`
+      )
+      .all(currentUserId(), accountId, firstMonth, currentMonth))
+  );
+
+  const found = new Map(rows.map((row) => [row.month, Number(row.spent) || 0]));
+  const months: CardSpendMonth[] = [];
+  for (let index = 0; index < span; index += 1) {
+    const month = addMonths(firstMonth, index);
+    /* A month the card was not used is zero, not missing: the panel has to be able to draw it. */
+    months.push({ month, spentPaise: Math.max(found.get(month) ?? 0, 0) });
+  }
+
+  const completed = months.slice(0, -1);
+  const firstUsed = completed.findIndex((entry) => entry.spentPaise > 0);
+  const averaged = firstUsed === -1 ? [] : completed.slice(firstUsed);
+  const averagePaise =
+    averaged.length >= 2
+      ? Math.round(averaged.reduce((sum, entry) => sum + entry.spentPaise, 0) / averaged.length)
+      : null;
+
+  return { accountId, months, averagePaise, averagedMonths: averaged.length >= 2 ? averaged.length : 0 };
+}
+
 export async function getPaymentHistory(
   source: PaymentHistorySource,
   id: string,

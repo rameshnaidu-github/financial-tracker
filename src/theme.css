@@ -6141,3 +6141,202 @@ button.budget-hint-chip:focus-visible {
     margin-left: 8px;
   }
 }
+
+
+/* ---------- A credit card's last six months ---------- */
+
+/*
+ * The disclosure and the chart behind it.
+ *
+ * The plot is a fixed height rather than an aspect ratio: six bars want a shape, and a card that
+ * is wide on a laptop and narrow on a phone would otherwise draw the same figures as a long
+ * strip in one and a tall column in the other. 132px reads as a chart at both.
+ */
+.card-history-fold {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  min-width: 0;
+}
+
+.card-history-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.card-history-toggle:hover {
+  color: var(--text);
+}
+
+.card-history-toggle .ui-icon {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.card-history-toggle .ui-icon.is-open {
+  transform: rotate(180deg);
+}
+
+.card-history {
+  margin-top: 12px;
+}
+
+.card-history-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.card-history-title {
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+/* Said rather than assumed: this application has no statement cycle. */
+.card-history-note {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.card-history-plot {
+  display: grid;
+  /* The figure, the bars, the months. The bars take what is left, which is what the average is
+     then measured against. */
+  grid-template-rows: 16px minmax(0, 1fr) 16px;
+  gap: 4px;
+  height: 132px;
+}
+
+/* All three rows are the same six columns, so a bar, its figure and its month stay in one line
+   down the chart without any of them knowing about the others. */
+.card-history-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.card-history-values > span,
+.card-history-labels > span {
+  min-width: 0;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.card-history-values > span {
+  color: var(--text);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.card-history-labels > span {
+  color: var(--muted);
+  font-size: 0.6875rem;
+}
+
+/* The box the bars grow in, and the one the average is drawn against. */
+.card-history-tracks {
+  position: relative;
+  align-items: end;
+  min-height: 0;
+}
+
+/*
+ * The average, at its own height within the bars' own box.
+ *
+ * Behind the bars, so a bar at the average still reads as the taller thing. The label sits on a
+ * dashed rule, which is the one dashed line on this card and means a level rather than a
+ * quantity.
+ */
+.card-history-average {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 0;
+  /*
+   * No height, so the rule lands where the arithmetic says.
+   *
+   * This was a flex box holding its own label, which gave it the label's height -- and since the
+   * dashed rule is its top border, the line drew a whole label above its own `bottom`. Measured
+   * in a 92px plot: the average of 42,086 against a 58,900 peak belongs 66px up, and the line
+   * was at 82. The box is a line now, and the label hangs off it.
+   */
+  height: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--muted) 55%, transparent);
+  pointer-events: none;
+}
+
+.card-history-average > span {
+  position: absolute;
+  left: 0;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: var(--panel);
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.card-history-track {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+  height: 100%;
+}
+
+.card-history-bar {
+  width: 100%;
+  border-radius: 6px 6px 2px 2px;
+  background: color-mix(in srgb, var(--muted) 24%, transparent);
+  transition: height var(--dur-slow) var(--ease-out);
+}
+
+/* One month leads: the one you are in. Everything else is the comparison. */
+.card-history-bar.is-latest {
+  background: var(--accent);
+}
+
+.card-history-empty {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+@media (max-width: 720px) {
+  /* A phone shows the same six months in less width, so the labels shed their year. */
+  .card-history-plot {
+    height: 116px;
+  }
+
+  /* A thumb opens this one, so it takes the 44px every other target on a phone takes. At a
+     pointer it stays 36 -- the same split this stylesheet already makes for icon buttons. */
+  .card-history-toggle {
+    min-height: 44px;
+  }
+
+  .card-history-row {
+    gap: 6px;
+  }
+
+  .card-history-values > span,
+  .card-history-labels > span {
+    font-size: 0.625rem;
+  }
+}
