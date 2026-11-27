@@ -190,35 +190,24 @@ body {
   min-height: 100dvh;
   color: var(--text);
   font-variant-numeric: tabular-nums;
-  background:
-    radial-gradient(1200px 520px at 12% -10%, rgba(16, 121, 78, 0.07), transparent 60%),
-    radial-gradient(900px 480px at 110% 8%, rgba(31, 138, 91, 0.045), transparent 60%),
-    var(--bg);
+  /*
+   * One flat ground.
+   *
+   * Two green radial washes used to sit here and three more on a fixed layer above them, with a
+   * film grain over the lot. Each was quiet on its own -- 7%, 4.5%, 3% -- and together they made
+   * the page a soft green field that every panel had to be lifted off. It showed worst where
+   * there was least content: a half-empty Budget Planner read as a green arc with cards on it.
+   *
+   * The colour belongs to the figures and the donut, not to the paper they are printed on.
+   */
+  background: var(--bg);
 }
 
 :root[data-theme="dark"] body {
-  background:
-    /* The wash over the ground, now that the ground itself is neutral: a quarter of what it was.
-       At 8% over a surface already tinted green it was the loudest green on the page. */
-    radial-gradient(1200px 520px at 12% -10%, rgba(125, 226, 175, 0.022), transparent 60%),
-    radial-gradient(900px 480px at 110% 8%, rgba(76, 195, 138, 0.012), transparent 60%),
-    var(--bg);
+  background: var(--bg);
 }
 
-/* Fine film grain over everything, fixed so it never repaints on scroll. */
-body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-grain);
-  pointer-events: none;
-  opacity: 0.03;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
-}
-
-:root[data-theme="dark"] body::after {
-  opacity: 0.045;
-}
+/* The film grain that used to sit over everything is gone; see the note on `body` above. */
 
 /* Phosphor icons inherit the text colour; one weight (regular) across the app. */
 .ui-icon {
@@ -276,8 +265,8 @@ p {
 }
 
 .brand strong {
-  font-weight: 650;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 .brand-mark {
@@ -297,7 +286,7 @@ p {
   position: relative;
   border-radius: var(--radius-control);
   padding: 10px 12px;
-  font-weight: 520;
+  font-weight: 500;
   transition:
     background-color var(--dur) var(--ease-spring),
     color var(--dur) var(--ease-spring),
@@ -314,7 +303,7 @@ p {
    (0,3,0), so the current page came out near-black text on a navy block, about 1.3:1 and hard to
    pick out of the sidebar at all. The weight stays; the colour belongs to the one rule. */
 .nav-item.active {
-  font-weight: 620;
+  font-weight: 600;
 }
 
 .nav-item.active .ui-icon {
@@ -353,7 +342,7 @@ p {
 
 .topbar h1 {
   font-size: clamp(1.9rem, 3vw, 2.6rem);
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.02;
   letter-spacing: -0.035em;
 }
@@ -389,8 +378,10 @@ p {
 .panel-header h2,
 .panel h2 {
   font-size: 1.02rem;
-  font-weight: 640;
-  letter-spacing: -0.015em;
+  font-weight: 600;
+  /* Tight tracking belongs to display sizes. At 16px it closes the counters and the panel
+     titles -- which name every section of this app -- read worse for it. */
+  letter-spacing: 0;
 }
 
 /* The icon carries the accent, not a wash behind the whole card. `background-clip` only; the
@@ -406,6 +397,24 @@ p {
   padding: 18px 18px 20px;
 }
 
+/*
+ * A stat tile is a label, a figure and what it compares to. The disc goes.
+ *
+ * Every one of these carried a 42px tinted disc with an icon in it -- a wallet beside "Available
+ * cash", a card beside "Credit card outstanding", an arrow beside "Outflow". None of them tells
+ * you anything the label has not already said, and five of them across the top of the Overview
+ * spread the page's colour evenly over its chrome, which is exactly where colour does least
+ * work. The screen has one thing worth looking at, the spending donut, and it reads better with
+ * nothing competing.
+ *
+ * Icons that identify a thing stay: the bank or card glyph on an account card, the icons in the
+ * navigation, the icon inside a button that names an action. This is the one that decorated a
+ * number.
+ */
+.summary-card > span:first-child {
+  display: none;
+}
+
 .summary-card > span {
   border-radius: 12px;
   background: var(--accent-soft);
@@ -419,7 +428,7 @@ p {
 }
 
 .summary-card strong {
-  font-weight: 640;
+  font-weight: 600;
   letter-spacing: -0.025em;
 }
 
@@ -501,10 +510,18 @@ a.secondary-action:active {
      for it; this rule used to set 42 and win on specificity, so every button in the application
      was two pixels short of the thing it was measured against. */
   min-height: 44px;
-  border-radius: 999px;
+  /*
+   * A control radius, not a pill.
+   *
+   * Every button in the application was a 44px lozenge, which is the one shape a cleaned-up
+   * template always ends up wearing. The radius scale here has three steps -- 12 for controls,
+   * 16 for cards, 22 for panels -- and a button is a control. The pill is kept where a pill is
+   * what the thing is: a status chip, a round icon button, an avatar, the cap on a progress bar.
+   */
+  border-radius: var(--radius-control);
   padding: 0 18px;
   font-weight: 600;
-  letter-spacing: -0.005em;
+  letter-spacing: 0;
 }
 
 .primary-action {
@@ -532,7 +549,7 @@ a.secondary-action:active {
   height: 16px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.14);
-  padding: 7px;
+  padding: 8px;
   transition: transform var(--dur) var(--ease-spring);
 }
 
@@ -634,7 +651,7 @@ textarea:focus {
 }
 
 .control-label {
-  font-weight: 560;
+  font-weight: 500;
   letter-spacing: 0.01em;
 }
 
@@ -980,7 +997,7 @@ textarea:focus {
 
   .mobile-nav button {
     border-radius: 16px;
-    font-weight: 560;
+    font-weight: 500;
   }
 
   .mobile-nav button.active {
@@ -1043,7 +1060,7 @@ textarea:focus {
 
 .net-worth-breakdown strong {
   font-size: clamp(0.92rem, 1.2vw, 1.05rem);
-  letter-spacing: -0.015em;
+  letter-spacing: 0;
 }
 
 /* Tone variants keep the icon island tinted, in their own semantic colour. */
@@ -1130,7 +1147,7 @@ textarea:focus {
   border-radius: 999px;
   background: transparent;
   color: var(--warning);
-  padding: 5px 14px;
+  padding: 4px 14px;
   font-weight: 600;
 }
 
@@ -1279,7 +1296,7 @@ select option {
 .budget-add-form label {
   color: var(--muted);
   font-size: 0.8rem;
-  font-weight: 560;
+  font-weight: 500;
 }
 
 .stack-form label > input,
@@ -1467,7 +1484,7 @@ select:not([multiple]):not([size]) {
 .investment-group-count {
   background: var(--accent-soft);
   color: var(--accent);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 /* The group row reflows by the width of its panel, so the Net gain column is never clipped. */
@@ -1604,17 +1621,24 @@ select:not([multiple]):not([size]) {
   color: var(--muted);
 }
 
-/* Headline figures: one clear scale step above body numbers, tight tracking. */
+/*
+ * Headline figures: one clear scale step above body numbers, tight tracking.
+ *
+ * 700, which is the one weight in this interface reserved for an amount of money. Labels are
+ * 500 and headings are 600, so a figure is the only thing on a screen set heavier than its own
+ * heading -- which is the right order of importance for a page whose job is to show what is
+ * left. These five sat at 600 while every other figure on the page was already 700.
+ */
 .summary-card strong {
   font-size: clamp(1.35rem, 1.1rem + 0.6vw, 1.7rem);
-  font-weight: 640;
+  font-weight: 700;
   line-height: 1.1;
   letter-spacing: -0.03em;
 }
 
 .summary-card p,
 .summary-card > div > span:first-child {
-  font-weight: 560;
+  font-weight: 500;
 }
 
 /* Explanatory copy keeps a comfortable reading measure. */
@@ -2118,8 +2142,10 @@ body::after {
 .overview-band-head h2 {
   margin: 0;
   font-size: 1.12rem;
-  font-weight: 650;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  /* Tight tracking is for display sizes; at this size it closes the counters and costs
+     readability more than it buys. */
+  letter-spacing: 0;
 }
 
 .overview-band-head span {
@@ -2171,7 +2197,7 @@ body::after {
   color: var(--text);
   padding: 6px 16px;
   font-size: 0.9rem;
-  font-weight: 560;
+  font-weight: 500;
   list-style: none;
   cursor: pointer;
   transition: border-color var(--dur-fast) var(--ease-out);
@@ -2207,7 +2233,7 @@ body::after {
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent);
-  padding: 1px 9px;
+  padding: 1px 8px;
   font-size: 0.8rem;
   font-weight: 600;
 }
@@ -2263,14 +2289,14 @@ body::after {
 .donut-figure .donut-center-label {
   fill: var(--muted);
   font-size: 12px;
-  font-weight: 560;
+  font-weight: 500;
 }
 
 .donut-figure .donut-center-value {
   fill: var(--text);
   font-size: 19px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 /* A 240px basis pushed the legend underneath the larger ring, which made the card taller
@@ -2356,7 +2382,7 @@ button.donut-legend-item:hover {
 .donut-legend-name {
   overflow: visible;
   font-size: 0.9rem;
-  font-weight: 540;
+  font-weight: 500;
   text-overflow: clip;
   white-space: normal;
   line-height: 1.25;
@@ -2369,7 +2395,7 @@ button.donut-legend-item:hover {
 
 .donut-legend-amount {
   font-size: 0.9rem;
-  font-weight: 620;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -2499,17 +2525,7 @@ body,
   background: transparent;
 }
 
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(1100px 620px at 6% -10%, var(--wash-1), transparent 62%),
-    radial-gradient(900px 560px at 102% 2%, var(--wash-2), transparent 60%),
-    radial-gradient(1300px 720px at 58% 112%, var(--wash-3), transparent 64%);
-}
+/* The three-wash layer that used to paint this page is gone; see the note on `body`. */
 
 /* The sidebar lets the wash run behind it; nothing scrolls under it, so no blur is needed. */
 .sidebar,
@@ -2525,14 +2541,14 @@ body::before {
   color: #ffffff;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 8px 18px -10px color-mix(in srgb, var(--accent) 70%, transparent);
+    0 8px 18px -12px rgba(17, 33, 26, 0.3);
 }
 
 .primary-action:not(:disabled):hover {
   background: var(--accent-strong);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 14px 26px -12px color-mix(in srgb, var(--accent) 75%, transparent);
+    0 14px 26px -14px rgba(17, 33, 26, 0.34);
 }
 
 .primary-action > .ui-icon {
@@ -2665,7 +2681,7 @@ body::before {
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel-soft);
-  padding: 3px;
+  padding: 4px;
 }
 
 .mix-switch button {
@@ -2673,9 +2689,9 @@ body::before {
   border-radius: 999px;
   background: transparent;
   color: var(--muted);
-  padding: 5px 14px;
+  padding: 4px 14px;
   font-size: 0.84rem;
-  font-weight: 560;
+  font-weight: 500;
   transition:
     background-color var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out);
@@ -2718,7 +2734,7 @@ body::before {
 
 .mix-bar-head > span {
   overflow: hidden;
-  font-weight: 540;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2781,9 +2797,9 @@ button.mix-bar-head:hover > span {
 .chart-scope select {
   min-height: 38px;
   border-radius: 999px;
-  padding: 0 34px 0 14px;
+  padding: 0 32px 0 14px;
   font-size: 0.86rem;
-  font-weight: 560;
+  font-weight: 500;
 }
 
 /* ---------- Budget planner: what this category actually cost last month ---------- */
@@ -2799,7 +2815,7 @@ button.mix-bar-head:hover > span {
 
 .budget-last-month strong {
   color: var(--text);
-  font-weight: 620;
+  font-weight: 600;
 }
 
 .budget-last-month .text-action {
@@ -2827,7 +2843,7 @@ button.mix-bar-head:hover > span {
 .profile-save-button.is-dirty {
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent),
-    0 10px 20px -12px color-mix(in srgb, var(--accent) 70%, transparent);
+    0 10px 20px -14px rgba(17, 33, 26, 0.3);
 }
 
 .profile-fields input[readonly] {
@@ -3315,7 +3331,7 @@ button.mix-bar-head:hover > span {
    */
   .donut-legend-item {
     gap: 8px;
-    padding: 3px 6px;
+    padding: 4px 6px;
   }
 
   /*
@@ -3405,7 +3421,7 @@ button.mix-bar-head:hover > span {
    */
   :root[data-simple-mode="on"] .transaction-tag {
     gap: 4px;
-    padding: 3px 7px;
+    padding: 4px 8px;
     font-size: 0.68rem;
   }
 
@@ -3954,7 +3970,7 @@ button.mix-bar-head:hover > span {
 .budget-copy-copy strong {
   color: var(--text);
   font-size: 0.88rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .budget-copy-copy span {
@@ -3976,7 +3992,7 @@ button.mix-bar-head:hover > span {
   border-radius: 10px;
   background: var(--panel-soft);
   box-shadow: inset 0 0 0 1px var(--line);
-  padding: 5px 10px;
+  padding: 4px 10px;
   color: var(--muted);
   font: inherit;
   text-align: left;
@@ -3988,7 +4004,7 @@ button.mix-bar-head:hover > span {
 
 .budget-hint-chip > span {
   font-size: 0.68rem;
-  font-weight: 620;
+  font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
@@ -3996,7 +4012,7 @@ button.mix-bar-head:hover > span {
 .budget-hint-chip > strong {
   color: var(--text);
   font-size: 0.82rem;
-  font-weight: 650;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -4029,13 +4045,13 @@ button.budget-hint-chip:focus-visible {
 
 .budget-hint-chip.is-empty > strong {
   color: var(--muted);
-  font-weight: 560;
+  font-weight: 500;
 }
 
 .budget-last-month-label {
   color: var(--muted);
   font-size: 0.72rem;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
@@ -4077,9 +4093,9 @@ button.budget-hint-chip:focus-visible {
   gap: 6px;
   margin: 0 0 6px;
   border-radius: 999px;
-  padding: 2px 9px;
+  padding: 2px 8px;
   font-size: 0.68rem;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -4131,13 +4147,13 @@ button.budget-hint-chip:focus-visible {
   justify-content: space-between;
   gap: var(--space-3);
   background: var(--panel-soft);
-  padding: 11px 14px;
+  padding: 12px 14px;
 }
 
 .profile-facts dt {
   color: var(--muted);
   font-size: 0.79rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .profile-facts dd {
@@ -4145,7 +4161,7 @@ button.budget-hint-chip:focus-visible {
   margin: 0;
   color: var(--text);
   font-size: 0.86rem;
-  font-weight: 560;
+  font-weight: 500;
   text-align: right;
   overflow-wrap: anywhere;
 }
@@ -4159,7 +4175,7 @@ button.budget-hint-chip:focus-visible {
   gap: 6px;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 /* What is wrong with this field, under this field, instead of inside a tooltip nobody on a
@@ -4167,7 +4183,7 @@ button.budget-hint-chip:focus-visible {
 .field-problem {
   color: var(--danger);
   font-size: 0.74rem;
-  font-weight: 560;
+  font-weight: 500;
   line-height: 1.35;
 }
 
@@ -4190,7 +4206,7 @@ button.budget-hint-chip:focus-visible {
   margin: 0 0 var(--space-3);
   color: var(--muted);
   font-size: 0.72rem;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -4204,7 +4220,7 @@ button.budget-hint-chip:focus-visible {
 .settings-row-label {
   color: var(--muted);
   font-size: 0.82rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .settings-row-control {
@@ -4219,7 +4235,7 @@ button.budget-hint-chip:focus-visible {
 .settings-row-control strong {
   color: var(--text);
   font-size: 0.86rem;
-  font-weight: 560;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
@@ -4322,7 +4338,7 @@ button.budget-hint-chip:focus-visible {
 }
 
 .nav-item.active {
-  box-shadow: 0 6px 18px -10px color-mix(in srgb, var(--accent) 70%, transparent);
+  box-shadow: 0 6px 18px -12px rgba(17, 33, 26, 0.28);
 }
 
 /* Content arrives out of a blur rather than only out of a slide. The stagger is
@@ -4424,7 +4440,7 @@ button.budget-hint-chip:focus-visible {
 .page-header h1 {
   margin: 0;
   font-size: clamp(1.9rem, 1.3rem + 2vw, 2.6rem);
-  font-weight: 620;
+  font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 1.05;
 }
@@ -4496,7 +4512,7 @@ button.budget-hint-chip:focus-visible {
   display: block;
   color: var(--text);
   font-size: 0.88rem;
-  font-weight: 620;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -4514,9 +4530,9 @@ button.budget-hint-chip:focus-visible {
   gap: 6px;
   flex: 0 0 auto;
   border-radius: 999px;
-  padding: 3px 9px 3px 7px;
+  padding: 4px 8px 4px 8px;
   font-size: 0.7rem;
-  font-weight: 620;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -4546,14 +4562,14 @@ button.budget-hint-chip:focus-visible {
 .budget-card-figure {
   display: flex;
   align-items: baseline;
-  gap: 7px;
+  gap: 8px;
   margin: 2px 0 0;
 }
 
 .budget-card-figure strong {
   color: var(--text);
   font-size: 1.65rem;
-  font-weight: 560;
+  font-weight: 500;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
@@ -4615,14 +4631,14 @@ button.budget-hint-chip:focus-visible {
   gap: 6px;
   min-height: 32px;
   border: 0;
-  border-radius: 9px;
+  border-radius: 10px;
   background-color: var(--panel-soft);
   box-shadow: inset 0 0 0 1px var(--line);
-  padding: 0 11px;
+  padding: 0 12px;
   color: var(--text);
   font: inherit;
   font-size: 0.76rem;
-  font-weight: 560;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -4634,7 +4650,7 @@ button.budget-hint-chip:focus-visible {
 /* The way to start another, at the end of the grid rather than in a section of its own. */
 .budget-add-card {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   place-content: center;
   justify-items: center;
   min-height: 150px;
@@ -4652,7 +4668,7 @@ button.budget-hint-chip:focus-visible {
 .budget-add-card strong {
   color: var(--text);
   font-size: 0.86rem;
-  font-weight: 620;
+  font-weight: 600;
 }
 
 .budget-add-card span {
@@ -4711,6 +4727,33 @@ button.budget-hint-chip:focus-visible {
   .summary-grid.budget-tiles .summary-card,
   .summary-grid.overview-summary .summary-card {
     padding: 10px;
+  }
+
+  /*
+   * Below 360px the Overview's five figures take two columns, not three.
+   *
+   * The row packs 2 + 3 at this width, which leaves the last three cards 95px each and 67px of
+   * that inside their own padding. A figure in lakhs -- "1,05,370" -- is 82px once it is set at
+   * the weight this interface reserves for money, so it ran 2px past its card. It fitted before
+   * only because it was set lighter than every other figure on the page, which was the thing
+   * worth fixing.
+   *
+   * Two columns give each card 142px, and the fifth takes the last line to itself. That is the
+   * same arrangement the ledger's own totals use one screen over, and for the same reason: a
+   * phone this narrow can show two figures a line honestly, or three badly.
+   */
+  @media (max-width: 360px) {
+    .summary-grid.overview-summary {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .summary-grid.overview-summary > .summary-card {
+      grid-column: auto;
+    }
+
+    .summary-grid.overview-summary > .summary-card:last-child:nth-child(odd) {
+      grid-column: 1 / -1;
+    }
   }
 
   .summary-grid.budget-tiles .summary-card > span:first-child,
@@ -5163,13 +5206,21 @@ button.budget-hint-chip:focus-visible {
   margin-top: var(--space-5);
 }
 
+/*
+ * "Bank accounts" and "Cards", not "BANK ACCOUNTS" and "CARDS".
+ *
+ * Uppercase with letters pushed apart is the house style of every dashboard template, and it is
+ * the one thing on this page you cannot read at a glance: measured at 11.5px with 0.69px of
+ * extra tracking, which is small type made harder on purpose. Sentence case at 13px, in the
+ * muted role, says the same thing and reads as a heading rather than as a system label.
+ */
 .account-group-title {
   margin: 0 0 var(--space-3);
   color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 /* What is owed, cut two ways. Two segments side by side rather than one over the other, so the
@@ -5207,7 +5258,7 @@ button.budget-hint-chip:focus-visible {
 .outstanding-split-legend span {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -5272,7 +5323,7 @@ button.budget-hint-chip:focus-visible {
   background: var(--accent-soft);
   color: var(--accent-strong);
   font-size: 0.72rem;
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
@@ -5295,7 +5346,7 @@ button.budget-hint-chip:focus-visible {
   background: var(--accent-soft);
   color: var(--accent-strong);
   font-size: 0.74rem;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.02em;
 }
 
@@ -5308,7 +5359,7 @@ button.budget-hint-chip:focus-visible {
 
 .sidebar-person strong {
   font-size: 0.86rem;
-  font-weight: 620;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5352,9 +5403,9 @@ button.budget-hint-chip:focus-visible {
 .topbar-actions .account-filter {
   min-width: 0;
   width: min(260px, 32vw);
-  padding: 0 34px 0 12px;
+  padding: 0 32px 0 12px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 10px;
   background: var(--panel-soft);
   box-shadow: none;
   align-content: center;
@@ -5432,7 +5483,7 @@ button.budget-hint-chip:focus-visible {
   background: var(--warning);
   color: var(--on-accent);
   font-size: 0.66rem;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 16px;
   text-align: center;
 }
@@ -5475,7 +5526,7 @@ button.budget-hint-chip:focus-visible {
   padding: 10px 12px 10px 20px;
   position: relative;
   border: 0;
-  border-radius: 9px;
+  border-radius: 10px;
   background: transparent;
   color: inherit;
   text-align: left;
@@ -5507,7 +5558,7 @@ button.budget-hint-chip:focus-visible {
 
 .attention-item strong {
   font-size: 0.88rem;
-  font-weight: 620;
+  font-weight: 600;
 }
 
 .attention-item small {
@@ -5607,7 +5658,7 @@ button.budget-hint-chip:focus-visible {
 
   .topbar-actions .account-filter select {
     font-size: 0.86rem;
-    font-weight: 620;
+    font-weight: 600;
   }
 
   .topbar-theme {
@@ -5708,7 +5759,7 @@ button.budget-hint-chip:focus-visible {
   margin-left: 18px;
   color: var(--muted);
   font-size: 0.8rem;
-  font-weight: 560;
+  font-weight: 500;
 }
 
 .news-more > summary:hover {
@@ -5716,7 +5767,7 @@ button.budget-hint-chip:focus-visible {
 }
 
 .news-more > ul {
-  margin-top: 7px;
+  margin-top: 8px;
 }
 
 .news-past > summary {
@@ -5733,7 +5784,7 @@ button.budget-hint-chip:focus-visible {
 
 .news-past-date {
   font-size: 0.88rem;
-  font-weight: 620;
+  font-weight: 600;
   color: var(--text);
   letter-spacing: 0.01em;
 }
@@ -6030,7 +6081,7 @@ button.budget-hint-chip:focus-visible {
 
 .panel-error strong {
   font-size: 0.92rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .panel-error small {
@@ -6061,9 +6112,9 @@ button.budget-hint-chip:focus-visible {
   border-radius: 999px;
   background: var(--panel-soft);
   color: var(--muted);
-  padding: 3px 9px;
+  padding: 4px 8px;
   font-size: 0.7rem;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.01em;
   white-space: nowrap;
 }

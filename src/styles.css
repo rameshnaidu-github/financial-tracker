@@ -93,10 +93,10 @@ select {
 
 label {
   display: grid;
-  gap: 7px;
+  gap: 8px;
   color: var(--muted);
   font-size: 0.82rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 a {
@@ -146,7 +146,7 @@ a {
   background: var(--accent);
   color: white;
   font-size: 1.2rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .nav-list {
@@ -154,17 +154,17 @@ a {
   min-height: calc(100dvh - 118px);
   flex-direction: column;
   gap: 6px;
-  margin-top: 34px;
+  margin-top: 32px;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 12px;
   border-radius: 8px;
   background: transparent;
   color: var(--muted);
-  padding: 11px 12px;
+  padding: 12px 12px;
   text-align: left;
   transition:
     background 160ms ease,
@@ -260,7 +260,7 @@ a {
   background: var(--accent);
   color: #ffffff;
   font-size: 1.05rem;
-  font-weight: 900;
+  font-weight: 500;
 }
 
 .profile-card-header h2,
@@ -273,10 +273,10 @@ a {
 }
 
 .profile-card-header p {
-  margin-top: 3px;
+  margin-top: 4px;
   color: var(--muted);
   font-size: 0.8rem;
-  font-weight: 750;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -296,12 +296,12 @@ a {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 9px;
+  gap: 8px;
   border-radius: 8px;
   background: var(--accent);
   color: #ffffff;
   padding: 10px 16px;
-  font-weight: 850;
+  font-weight: 500;
 }
 
 .profile-menu .profile-save-button,
@@ -313,7 +313,7 @@ a {
 .settings-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 5px 12px;
+  gap: 4px 12px;
   align-items: center;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -333,13 +333,13 @@ a {
 .switch-control {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   border: 0;
   background: none;
   padding: 4px 2px;
   color: var(--text);
   font-size: 0.82rem;
-  font-weight: 800;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -351,7 +351,7 @@ a {
   flex: 0 0 auto;
   border-radius: 999px;
   background: var(--line-strong);
-  padding: 3px;
+  padding: 4px;
   transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -388,25 +388,25 @@ a {
 .card-alert-controls {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
 }
 
 .card-alert-controls input {
   width: 64px;
   min-height: 34px;
   text-align: right;
-  font-weight: 850;
+  font-weight: 500;
 }
 
 .card-alert-suffix {
   color: var(--muted);
-  font-weight: 850;
+  font-weight: 500;
 }
 
 .settings-row span {
   color: var(--muted);
   font-size: 0.79rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .settings-row strong {
@@ -425,7 +425,7 @@ a {
 .control-field {
   position: relative;
   display: grid;
-  gap: 7px;
+  gap: 8px;
   min-width: 260px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -437,7 +437,7 @@ a {
 .control-label {
   color: var(--muted);
   font-size: 0.72rem;
-  font-weight: 850;
+  font-weight: 500;
   line-height: 1;
 }
 
@@ -451,7 +451,7 @@ a {
   background: transparent;
   color: var(--text);
   padding: 0;
-  font-weight: 850;
+  font-weight: 500;
   box-shadow: none;
 }
 
@@ -507,7 +507,7 @@ a {
 
 .summary-card {
   display: flex;
-  gap: 13px;
+  gap: 12px;
   align-items: center;
   min-height: 116px;
   padding: 18px;
@@ -547,10 +547,10 @@ a {
 }
 
 .summary-card p {
-  margin: 0 0 7px;
+  margin: 0 0 8px;
   color: var(--muted);
   font-size: 0.82rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .summary-card strong {
@@ -583,7 +583,7 @@ a {
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
-  margin-bottom: 15px;
+  margin-bottom: 16px;
 }
 
 .loan-header-actions {
@@ -613,8 +613,8 @@ a {
   border-radius: 8px;
   background: var(--panel);
   color: var(--accent-strong);
-  padding: 9px 12px;
-  font-weight: 800;
+  padding: 8px 12px;
+  font-weight: 500;
 }
 
 .transaction-table {
@@ -635,7 +635,7 @@ a {
   color: var(--muted);
   padding: 0 0 10px;
   font-size: 0.76rem;
-  font-weight: 900;
+  font-weight: 500;
   text-transform: uppercase;
 }
 
@@ -674,9 +674,9 @@ a {
   max-width: 100%;
   min-width: 0;
   border-radius: 999px;
-  padding: 6px 9px;
+  padding: 6px 8px;
   font-size: 0.78rem;
-  font-weight: 900;
+  font-weight: 500;
   white-space: nowrap;
   /* Not the raw category colour. These are chosen to read as icons, and at 12px on a 9% tint of
      themselves the lighter ones land at 2.8:1 -- Expense, Income, Investment, Refund and Credit
@@ -697,7 +697,7 @@ a {
   max-width: 148px;
   border: 1px solid currentColor;
   border-color: color-mix(in srgb, currentColor 24%, transparent);
-  padding: 5px 8px;
+  padding: 4px 8px;
   font-size: 0.74rem;
 }
 
@@ -745,7 +745,7 @@ a {
 
 .net-worth-headline span {
   color: var(--muted);
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .net-worth-headline strong {
@@ -764,7 +764,7 @@ a {
   display: block;
   color: var(--muted);
   font-size: 0.76rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .net-worth-breakdown strong {
@@ -786,7 +786,7 @@ a {
   display: block;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .cashflow-metrics strong {
@@ -797,7 +797,7 @@ a {
 
 .cashflow-runway {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   margin-top: 14px;
   border-top: 1px solid var(--line);
   padding-top: 12px;
@@ -805,7 +805,7 @@ a {
 
 .cashflow-runway span {
   color: var(--muted);
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .cashflow-runway strong {
@@ -879,7 +879,7 @@ a {
 
 .cashflow-summary-head span {
   color: var(--muted);
-  font-weight: 800;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-size: 0.72rem;
@@ -897,7 +897,7 @@ a {
   width: var(--cashflow-equals-width);
   text-align: center;
   font-size: 1.4rem;
-  font-weight: 800;
+  font-weight: 500;
   color: var(--muted);
 }
 
@@ -927,7 +927,7 @@ a {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-soft);
-  padding: 7px 11px;
+  padding: 8px 12px;
 }
 
 .cashflow-equation-part {
@@ -938,7 +938,7 @@ a {
 .cashflow-equation-total-card span {
   color: var(--muted);
   font-size: 0.72rem;
-  font-weight: 850;
+  font-weight: 500;
   letter-spacing: 0.02em;
   text-transform: uppercase;
   overflow-wrap: anywhere;
@@ -947,7 +947,7 @@ a {
 .cashflow-equation-amount,
 .cashflow-equation-total-card strong {
   color: var(--text);
-  font-weight: 800;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 
@@ -956,12 +956,12 @@ a {
   width: var(--cashflow-equals-width);
   text-align: center;
   color: var(--muted);
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .cashflow-equation-plus {
   color: var(--muted);
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .cashflow-equation-empty {
@@ -1036,7 +1036,7 @@ a {
 .investments-asof {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   margin: -4px 0 0;
 }
 
@@ -1052,7 +1052,7 @@ a {
 
 .vacation-budget {
   display: grid;
-  gap: 5px;
+  gap: 4px;
   margin-top: 4px;
 }
 
@@ -1065,7 +1065,7 @@ a {
 
 .vacation-budget-head span {
   color: var(--muted);
-  font-weight: 800;
+  font-weight: 500;
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -1107,7 +1107,7 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-weight: 800;
+  font-weight: 500;
   font-size: 0.85rem;
 }
 
@@ -1176,9 +1176,9 @@ a {
 .investment-group-name {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   font-size: 0.95rem;
-  font-weight: 900;
+  font-weight: 500;
   min-width: 0;
   /* Gold, Mutual funds and Fixed deposit were 2.9-3.7:1 as the raw type colour. Same treatment
      as a category badge, through the same property, so the two cannot drift apart again. */
@@ -1200,7 +1200,7 @@ a {
   background: currentColor;
   color: var(--surface, #fff);
   font-size: 0.72rem;
-  font-weight: 900;
+  font-weight: 500;
 }
 
 /* The wrapper dissolves so its three cells become columns of the header grid,
@@ -1219,7 +1219,7 @@ a {
 .investment-group-metrics span {
   color: var(--muted);
   font-size: 0.7rem;
-  font-weight: 800;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
@@ -1281,7 +1281,7 @@ a {
   display: block;
   color: var(--muted);
   font-size: 0.74rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .investment-values strong {
@@ -1291,9 +1291,9 @@ a {
 
 .investment-gain-badge {
   border-radius: 999px;
-  padding: 5px 9px;
+  padding: 4px 8px;
   font-size: 0.72rem;
-  font-weight: 950;
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -1399,13 +1399,13 @@ a {
 .trend-value {
   fill: var(--text);
   font-size: 12px;
-  font-weight: 850;
+  font-weight: 500;
 }
 
 .trend-label {
   fill: var(--muted);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .trend-value.over {
@@ -1429,13 +1429,13 @@ a {
 .budget-axis-label {
   fill: #d97706;
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 500;
 }
 
 .trend-axis-zero {
   fill: var(--muted);
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .budget-trend-legend {
@@ -1448,10 +1448,10 @@ a {
 .budget-trend-legend-item {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   color: var(--muted);
   font-size: 0.8rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .budget-trend-swatch {
@@ -1507,7 +1507,7 @@ a {
   text-align: left;
   padding: 14px 16px;
   font-size: 0.94rem;
-  font-weight: 850;
+  font-weight: 500;
 }
 
 .faq-chevron {
@@ -1522,7 +1522,7 @@ a {
 
 .faq-answer {
   margin: 0;
-  padding: 0 16px 15px;
+  padding: 0 16px 16px;
   color: var(--muted);
   font-size: 0.9rem;
   font-weight: 600;
@@ -1609,7 +1609,7 @@ a {
 .budget-pace-copy {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 3px 10px;
+  gap: 4px 10px;
   align-items: baseline;
 }
 
@@ -1617,7 +1617,7 @@ a {
 .budget-pace-copy small {
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 500;
 }
 
 .budget-pace-copy strong {
@@ -1670,7 +1670,7 @@ a {
 
 .budget-health {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-soft);
@@ -1680,7 +1680,7 @@ a {
 .budget-health span {
   color: var(--muted);
   font-size: 0.72rem;
-  font-weight: 850;
+  font-weight: 500;
 }
 
 .budget-health strong {
@@ -1740,11 +1740,11 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 9px;
+  gap: 8px;
   min-height: 44px;
   border-radius: 8px;
-  padding: 0 15px;
-  font-weight: 900;
+  padding: 0 16px;
+  font-weight: 500;
   text-decoration: none;
 }
 
@@ -1859,7 +1859,7 @@ a {
 .card-emi-settle-pick small {
   color: var(--muted);
   font-size: 0.72rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /* The instalment, in the column the editable field used to hold: right-aligned so a column of
@@ -1884,7 +1884,7 @@ a {
 .card-emi-settle-part small {
   color: var(--muted);
   font-size: 0.68rem;
-  font-weight: 800;
+  font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -1900,7 +1900,7 @@ a {
   margin: 0;
   color: var(--muted);
   font-size: 0.74rem;
-  font-weight: 850;
+  font-weight: 500;
 }
 
 /* On an edit the installments are stated, not offered: changing which EMIs a payment covered
@@ -1910,7 +1910,7 @@ a {
   margin: 0;
   color: var(--muted);
   font-size: 0.74rem;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.5;
 }
 
@@ -1973,7 +1973,7 @@ a {
   margin: 0 0 8px;
   color: var(--muted);
   font-size: 0.76rem;
-  font-weight: 950;
+  font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -2000,7 +2000,7 @@ a {
 
 .metric span {
   color: var(--muted);
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .metric.warning strong {
@@ -2034,9 +2034,8 @@ a {
   border: 1px solid var(--line);
   border-radius: 8px;
   background:
-    radial-gradient(circle at top right, rgba(15, 118, 110, 0.12), transparent 34%),
-    linear-gradient(135deg, var(--panel) 0%, var(--panel-soft) 100%);
-  padding: 15px;
+    var(--panel);
+  padding: 16px;
   box-shadow: var(--shadow-soft);
 }
 
@@ -2057,7 +2056,7 @@ a {
 .loan-card-quick {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 3px 12px;
+  gap: 4px 12px;
   align-items: baseline;
   border-top: 1px solid var(--line);
   padding-top: 12px;
@@ -2067,7 +2066,7 @@ a {
 .loan-card-quick small {
   color: var(--muted);
   font-size: 0.76rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .loan-card-quick strong {
@@ -2124,7 +2123,7 @@ a {
 .loan-detail-grid span {
   color: var(--muted);
   font-size: 0.76rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .loan-icon {
@@ -2143,9 +2142,9 @@ a {
   /* --accent on its own tint measured 4.43:1 at 11.5px -- under the floor by a hair, which is
      still under it. The stronger step is the same hue. */
   color: var(--accent-strong);
-  padding: 5px 9px;
+  padding: 4px 8px;
   font-size: 0.72rem;
-  font-weight: 950;
+  font-weight: 500;
 }
 
 /* The card an EMI runs on. The status chip's shape exactly -- same pill, same padding, same
@@ -2156,9 +2155,9 @@ a {
   border-radius: 999px;
   background: var(--panel-soft);
   color: var(--muted);
-  padding: 5px 9px;
+  padding: 4px 8px;
   font-size: 0.72rem;
-  font-weight: 950;
+  font-weight: 500;
 }
 
 .loan-status.closed {
@@ -2175,9 +2174,9 @@ a {
 
 .subscription-status {
   border-radius: 999px;
-  padding: 5px 9px;
+  padding: 4px 8px;
   font-size: 0.72rem;
-  font-weight: 950;
+  font-weight: 500;
   border: 1px solid rgba(79, 70, 229, 0.28);
   background: rgba(79, 70, 229, 0.12);
   color: #4f46e5;
@@ -2209,7 +2208,7 @@ a {
 .subscription-meta span {
   color: var(--muted);
   font-size: 0.76rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .loan-progress {
@@ -2220,7 +2219,7 @@ a {
 .loan-progress span {
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 500;
 }
 
 .loan-progress-bar {
@@ -2257,10 +2256,10 @@ a {
 
 .budget-add-form label {
   display: grid;
-  gap: 7px;
+  gap: 8px;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 500;
 }
 
 .budget-add-form select,
@@ -2273,7 +2272,7 @@ a {
   color: var(--text);
   padding: 0 12px;
   font: inherit;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .danger-action {
@@ -2295,7 +2294,7 @@ a {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.58);
-  padding: 9px;
+  padding: 8px;
 }
 
 :root[data-theme="dark"] .loan-detail-grid div {
@@ -2303,7 +2302,7 @@ a {
 }
 
 .loan-detail-grid strong {
-  margin-top: 3px;
+  margin-top: 4px;
   font-size: 0.86rem;
 }
 
@@ -2376,7 +2375,7 @@ a {
 .search-box input {
   border: 0;
   background: transparent;
-  padding-left: 38px;
+  padding-left: 40px;
   box-shadow: none;
 }
 
@@ -2394,7 +2393,7 @@ a {
   margin-bottom: 12px;
   color: var(--muted);
   font-size: 0.82rem;
-  font-weight: 850;
+  font-weight: 500;
 }
 
 .ledger-result-summary small {
@@ -2416,13 +2415,13 @@ a {
 .ledger-totals-label {
   margin-right: auto;
   color: var(--text);
-  font-weight: 850;
+  font-weight: 500;
 }
 
 .ledger-total {
   color: var(--muted);
   font-size: 0.82rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .ledger-total strong {
@@ -2484,14 +2483,14 @@ a {
 
 .ledger-day-date {
   color: var(--text);
-  font-weight: 900;
+  font-weight: 500;
   letter-spacing: 0.01em;
 }
 
 .ledger-day-count {
   margin-right: auto;
   color: var(--muted);
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .ledger-day-net {
@@ -2502,7 +2501,7 @@ a {
 .transaction-primary-cell {
   display: grid;
   min-width: 0;
-  gap: 5px;
+  gap: 4px;
 }
 
 .transaction-primary-cell strong,
@@ -2515,7 +2514,7 @@ a {
 .transaction-primary-cell span {
   color: var(--muted);
   font-size: 0.8rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .transaction-tag-strip {
@@ -2575,7 +2574,7 @@ a {
 
 .transaction-tag {
   flex: 0 1 auto;
-  gap: 5px;
+  gap: 4px;
   max-width: 180px;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -2583,7 +2582,7 @@ a {
   color: var(--muted);
   padding: 4px 8px;
   font-size: 0.72rem;
-  font-weight: 850;
+  font-weight: 500;
   line-height: 1;
 }
 
@@ -2747,7 +2746,7 @@ a {
 }
 
 .setup-brand {
-  margin-bottom: 38px;
+  margin-bottom: 40px;
 }
 
 .setup-copy h1 {
@@ -2772,7 +2771,7 @@ a {
 .category-cloud {
   display: flex;
   flex-wrap: wrap;
-  gap: 9px;
+  gap: 8px;
   max-width: 680px;
   margin-top: 24px;
 }
@@ -2786,7 +2785,7 @@ a {
   margin: 0;
   color: var(--danger);
   font-size: 0.9rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .field-label {
@@ -2794,7 +2793,7 @@ a {
   margin-bottom: 8px;
   color: var(--muted);
   font-size: 0.82rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .icon-grid,
@@ -2828,7 +2827,7 @@ a {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-soft);
-  padding: 5px;
+  padding: 4px;
 }
 
 .segmented-control button {
@@ -2836,7 +2835,7 @@ a {
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
-  font-weight: 900;
+  font-weight: 500;
 }
 
 .segmented-control button.active {
@@ -2863,7 +2862,7 @@ a {
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
   align-items: center;
-  padding: 11px;
+  padding: 12px;
 }
 
 .taxonomy-type-row {
@@ -2895,7 +2894,7 @@ a {
 .taxonomy-subtypes {
   display: grid;
   gap: 6px;
-  padding: 9px 11px 11px 24px;
+  padding: 8px 12px 12px 24px;
 }
 
 .taxonomy-subtype-row {
@@ -2903,17 +2902,17 @@ a {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
-  padding: 9px;
+  padding: 8px;
 }
 
 .dynamic-subtype-note {
-  padding: 11px;
+  padding: 12px;
 }
 
 .category-flags {
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 500;
 }
 
 /* The outflow mix and the type breakdown read the same month, so they sit side by side
@@ -2989,7 +2988,7 @@ a {
    too now, and a grid would stack its chips one per line. */
 .report-chart-header > div:first-child {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -3001,7 +3000,7 @@ a {
 .report-chart-header span {
   color: var(--muted);
   font-size: 0.74rem;
-  font-weight: 850;
+  font-weight: 500;
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
@@ -3011,7 +3010,7 @@ a {
   /* The card's headline figure, so it reads before the label above it rather than
      alongside it. Weight and size carry the hierarchy; the colour stays the body colour. */
   font-size: 1.55rem;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1.15;
 }
@@ -3026,7 +3025,7 @@ a {
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel);
-  padding: 5px;
+  padding: 4px;
 }
 
 .type-filter-chips button.active {
@@ -3119,7 +3118,7 @@ a {
 .donut-center-label,
 .donut-center-value {
   fill: var(--text);
-  font-weight: 900;
+  font-weight: 500;
   pointer-events: none;
 }
 
@@ -3155,7 +3154,7 @@ a {
   border-radius: 8px;
   color: var(--muted);
   text-align: center;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .stacked-empty-state {
@@ -3191,9 +3190,9 @@ a {
   border-radius: 8px;
   background: #10201f;
   color: white;
-  padding: 13px 15px;
+  padding: 12px 16px;
   box-shadow: var(--shadow);
-  font-weight: 800;
+  font-weight: 500;
   display: flex;
   align-items: center;
   gap: 16px;
@@ -3207,7 +3206,7 @@ a {
   color: #7dd3fc;
   padding: 6px 12px;
   font: inherit;
-  font-weight: 900;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -3240,7 +3239,7 @@ a {
 
 .import-modal {
   display: grid;
-  gap: 15px;
+  gap: 16px;
   width: min(560px, 100%);
   max-height: min(760px, calc(100dvh - 36px));
   overflow: auto;
@@ -3278,7 +3277,7 @@ a {
   background: var(--panel-soft);
   color: var(--accent-strong);
   text-align: center;
-  font-weight: 900;
+  font-weight: 500;
 }
 
 .file-upload input {
@@ -3297,11 +3296,11 @@ a {
 
 .import-errors div {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   border: 1px solid rgba(220, 38, 38, 0.2);
   border-radius: 8px;
   background: rgba(220, 38, 38, 0.06);
-  padding: 9px 10px;
+  padding: 8px 10px;
 }
 
 .import-errors strong {
@@ -3333,7 +3332,7 @@ a {
 }
 
 .confirm-modal p {
-  margin: 7px 0 0;
+  margin: 8px 0 0;
   color: var(--muted);
   line-height: 1.5;
 }
@@ -3381,7 +3380,7 @@ a {
      The control grows to a real 44px, and the field's own padding and gap give some of that back,
      so the box goes from 56px to about 70 rather than to 79. Desktop keeps the tighter original. */
   .control-field {
-    gap: 3px;
+    gap: 4px;
     padding-block: 6px;
   }
 
@@ -3452,9 +3451,9 @@ a {
     border-radius: 8px;
     background: transparent;
     color: var(--muted);
-    padding: 7px 2px;
+    padding: 8px 2px;
     font-size: 0.7rem;
-    font-weight: 850;
+    font-weight: 500;
   }
 
   .mobile-nav button.active {
@@ -3486,7 +3485,7 @@ a {
 
   .mobile-nav button.mobile-nav-record span {
     font-size: 0.68rem;
-    font-weight: 850;
+    font-weight: 500;
   }
 
   .mobile-nav button.mobile-nav-record:active {
@@ -3541,15 +3540,41 @@ a {
     padding: 14px;
   }
 
+  /*
+   * A panel header stays a row on a phone: title on the left, its action on the right.
+   *
+   * Stacked and stretched, a one-word action became a full-width button on a line of its own --
+   * measured at 412px, "Manage" was a 346px bar under "Card utilisation", with the Pie/Bar
+   * switch stranded on a third line below it. Three lines of chrome before the panel says
+   * anything. A header is a title and at most one action, and that fits a phone's width.
+   *
+   * The action keeps its intrinsic size rather than stretching, and the title takes the rest and
+   * wraps if it must. This is the same correction the foldable panel headers already carry
+   * further down this file, for the same reason.
+   */
   .panel-header,
   .toolbar-header {
-    align-items: stretch;
-    flex-direction: column;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .panel-header > h2,
+  .panel-header > h3,
+  .toolbar-header > h2,
+  .toolbar-header > h3 {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .panel-header > :not(h2):not(h3),
+  .toolbar-header > :not(h2):not(h3) {
+    flex: 0 0 auto;
   }
 
   .bar-row {
     grid-template-columns: 1fr;
-    gap: 7px;
+    gap: 8px;
   }
 
   .report-chart-grid,
@@ -3707,7 +3732,7 @@ a {
   margin-top: 4px;
   color: var(--muted);
   font-size: 0.74rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .summary-change.good {
@@ -3787,7 +3812,7 @@ a {
   color: var(--accent);
   padding: 6px 12px;
   font-size: 0.82rem;
-  font-weight: 850;
+  font-weight: 500;
 }
 
 /* Refund: a small inline form under the purchase it belongs to. */
@@ -3854,7 +3879,7 @@ a {
   color: var(--text);
   padding: 12px 4px;
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .mobile-more-sheet button.active {
@@ -4018,7 +4043,7 @@ a {
   display: block;
   color: var(--muted);
   font-size: 0.74rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 @media (max-width: 720px) {
@@ -4050,9 +4075,9 @@ a {
   border-radius: 8px;
   background: var(--accent-soft);
   color: var(--accent);
-  padding: 7px 10px;
+  padding: 8px 10px;
   font-size: 0.8rem;
-  font-weight: 750;
+  font-weight: 600;
 }
 
 .investment-form-hint {
@@ -4072,7 +4097,7 @@ a {
   min-height: 100dvh;
   padding: 24px 16px;
   /* The same quiet depth the app's own surfaces sit on. */
-  background: radial-gradient(120% 80% at 50% 0%, var(--bg-deep) 0%, var(--bg) 60%);
+  background: var(--bg);
 }
 
 .sign-in-panel {
@@ -4086,7 +4111,7 @@ a {
 .sign-in-panel h1 {
   margin: 0;
   font-size: 1.35rem;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 .sign-in-lead {
@@ -4115,13 +4140,13 @@ a {
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 0.85rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .sign-in-submit {
   margin-top: 4px;
   min-height: 44px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /* Changing your own password, inside the profile settings list. */
@@ -4162,7 +4187,7 @@ a {
    The button sits inside the field's own box -- the field is already position: relative for its
    chevron -- so the input keeps its width and the row keeps its shape. */
 .control-field.password-field input {
-  padding-right: 46px;
+  padding-right: 48px;
 }
 
 .password-reveal {
@@ -4328,7 +4353,7 @@ a {
   justify-content: space-between;
   gap: 12px;
   border-bottom: 1px solid var(--line);
-  padding: 15px 18px;
+  padding: 16px 18px;
 }
 
 .form-dialog-header h2 {
@@ -4384,7 +4409,7 @@ a {
 
 .news-entry ul {
   display: grid;
-  gap: 7px;
+  gap: 8px;
   margin: 0;
   padding-left: 18px;
   color: var(--text);
