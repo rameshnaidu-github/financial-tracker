@@ -42,7 +42,7 @@ import {
   createTransaction,
   createVacation,
   deleteAutopaySubscription,
-  archiveLoan,
+  deleteLoan,
   deleteAccount,
   deleteBudgetLine,
   deleteCategoryType,
@@ -445,7 +445,7 @@ app.patch("/api/loans/:id", async (request) => {
 
 app.delete("/api/loans/:id", async (request) => {
   const params = request.params as { id: string };
-  return archiveLoan(params.id);
+  return deleteLoan(params.id);
 });
 
 app.get("/api/subscriptions", async (request) => {

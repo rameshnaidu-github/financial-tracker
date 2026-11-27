@@ -293,3 +293,27 @@ export function formatDayHeading(date: string, today = new Date()) {
     ...(parsed.getFullYear() === today.getFullYear() ? {} : { year: "numeric" })
   });
 }
+
+
+/**
+ * Is this loan or card EMI finished with?
+ *
+ * Two things close a loan. It is paid off -- nothing is outstanding -- or the owner had already
+ * filed it away under the Archive button that used to exist. The second is deliberate: archiving
+ * was how "I am done with this" was said before there was anywhere to say it, so anything
+ * archived belongs under Closed whatever its balance reads, rather than reappearing among the
+ * loans that still want paying.
+ *
+ * The stored flag therefore survives the button that set it. Nothing new can set it.
+ */
+export function loanIsClosed(loan: { outstandingPaise: number; isArchived?: boolean }) {
+  return Boolean(loan.isArchived) || loan.outstandingPaise <= 0;
+}
+
+/** Loans still wanting money, and loans finished with, in that order. */
+export function splitLoansByStanding<T extends { outstandingPaise: number; isArchived?: boolean }>(loans: T[]) {
+  return {
+    active: loans.filter((loan) => !loanIsClosed(loan)),
+    closed: loans.filter((loan) => loanIsClosed(loan))
+  };
+}

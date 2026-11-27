@@ -631,13 +631,30 @@ export async function updateLoan(id: string, input: UpdateLoanInput): Promise<Lo
   return requireLoanSummary(id);
 }
 
-export async function archiveLoan(id: string) {
+/**
+ * Delete a loan or a card EMI, and leave its money alone.
+ *
+ * This used to set `is_archived` and call itself archiving, which is how the only Archive button
+ * in the application came to exist. The owner asked for one Delete instead, and for deleting a
+ * thing never to delete the transactions attached to it.
+ *
+ * Both hold here without touching a constraint. `loan_payments` is the only table that references
+ * `loans`, and it cascades, so removing the loan removes the per-payment amortisation records --
+ * how each instalment divided into principal and interest, and what was outstanding either side
+ * of it. Those describe a loan, and there is no longer a loan for them to describe.
+ *
+ * The transactions themselves are rows in their own right and are not touched. What was an EMI
+ * stays in the ledger as what it always also was: money that left a named account on a date.
+ */
+export async function deleteLoan(id: string) {
   await requireLoanRow(id);
-  (await db.prepare("UPDATE loans SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?").run(
-    id,
-    currentUserId()
-  ));
-  return { ok: true, mode: "archived" as const };
+  const linked = asRecord<{ count: number }>(
+    (await db
+      .prepare("SELECT COUNT(*) AS count FROM loan_payments WHERE user_id = ? AND loan_id = ?")
+      .get(currentUserId(), id))
+  );
+  (await db.prepare("DELETE FROM loans WHERE id = ? AND user_id = ?").run(id, currentUserId()));
+  return { ok: true, mode: "deleted" as const, paymentsUnlinked: linked.count };
 }
 
 export type AutopaySubscriptionRow = {
