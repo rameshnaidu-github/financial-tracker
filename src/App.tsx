@@ -3445,7 +3445,11 @@ function TransactionsPage({
           <label className="search-box">
             <Search size={17} />
             <input
-              placeholder="Search merchant or amount"
+              /* A field with a magnifier in it does not need four words to say what it is, and
+                 at 375px those four words were cut to "Search merchant or amou". What the field
+                 will actually match -- merchant, note, SubType, amount -- stays in the label a
+                 screen reader reads, which is where a sentence of guidance belongs. */
+              placeholder="Search"
               aria-label="Search merchant, note, SubType or amount"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
