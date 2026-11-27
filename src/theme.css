@@ -591,6 +591,21 @@ a.secondary-action:active {
   background: var(--panel);
 }
 
+/*
+ * A round icon button is 44px once a thumb has to find it.
+ *
+ * These are 36px, which is fine beside a pointer and two sizes too small on a phone: the month
+ * arrows on Reports measured 36x36 at 375px, and they are the only way to move between months on
+ * that screen. 44px is the figure the rest of this application already uses, and the one the
+ * sweep holds every other section to -- Reports had simply never been swept.
+ */
+@media (max-width: 720px) {
+  .icon-button {
+    width: 44px;
+    height: 44px;
+  }
+}
+
 .icon-button:not(:disabled):hover {
   border-color: var(--line-strong);
   color: var(--text);
@@ -4003,10 +4018,10 @@ button.mix-bar-head:hover > span {
 }
 
 .budget-hint-chip > span {
-  font-size: 0.68rem;
+  font-size: 0.8125rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .budget-hint-chip > strong {
@@ -4050,10 +4065,10 @@ button.budget-hint-chip:focus-visible {
 
 .budget-last-month-label {
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 /* The dialog stacks label, figure chips, then actions. */
@@ -4094,10 +4109,10 @@ button.budget-hint-chip:focus-visible {
   margin: 0 0 6px;
   border-radius: 999px;
   padding: 2px 8px;
-  font-size: 0.68rem;
+  font-size: 0.8125rem;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .news-group-heading.is-new {
@@ -4205,10 +4220,10 @@ button.budget-hint-chip:focus-visible {
 .profile-section h3 {
   margin: 0 0 var(--space-3);
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .profile-section-rows {
