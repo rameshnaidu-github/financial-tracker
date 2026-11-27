@@ -70,6 +70,7 @@ import {
   todayISO,
   yearChoices,
   splitLoansByStanding,
+  formatMonthShort,
 } from "./format";
 import { IconGlyph } from "./icons";
 import { WHATS_NEW, hasUnreadNews, newestNewsDate, type NewsEntry } from "./whats-new";
@@ -97,6 +98,7 @@ import type {
   LoanPaymentType,
   MonthlyReport,
   Overview,
+  CardSpendHistory,
   PaymentHistory,
   PaymentMethod,
   Subcategory,
@@ -5191,6 +5193,122 @@ const PAYMENT_HISTORY_MONTHS = [
   "DEC"
 ];
 
+/**
+ * What went onto one credit card, month by month.
+ *
+ * The owner asked for a card's history and pointed at a screen of bars under month labels, the
+ * newest picked out with its figure and a dashed average behind them. This is that, built from
+ * the card's own spending: purchases, charges and EMIs booked to it, less anything refunded back.
+ *
+ * Two things are said on the panel rather than assumed. The months are **calendar** months,
+ * because this application has no statement cycle and a reader whose bank bills on the 18th
+ * would otherwise read these as their bills. And the average covers the **completed** months
+ * only, because the current one is part-finished and would drag a line that exists to be
+ * compared against -- the figure itself says so when you hover it.
+ *
+ * It fetches only once opened. A closed card costs nothing, which is the point of a disclosure
+ * on a page that can hold several of them.
+ */
+function CardSpendChart({ accountId, accountName }: { accountId: string; accountName: string }) {
+  const [history, setHistory] = useState<CardSpendHistory | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
+
+  useEffect(() => {
+    let active = true;
+    setState("loading");
+    Api.cardSpendHistory(accountId)
+      .then((data) => {
+        if (!active) return;
+        setHistory(data);
+        setState("ready");
+      })
+      .catch(() => {
+        if (active) setState("failed");
+      });
+    return () => {
+      active = false;
+    };
+  }, [accountId]);
+
+  if (state === "loading") return <PanelLoader label={`Loading ${accountName} history`} />;
+  if (state === "failed" || !history) {
+    return <p className="card-history-empty">That history could not be loaded just now.</p>;
+  }
+
+  const months = history.months;
+  const peak = Math.max(...months.map((month) => month.spentPaise), history.averagePaise ?? 0);
+  if (peak <= 0) {
+    return (
+      <p className="card-history-empty">
+        Nothing has gone onto {accountName} in the last {months.length} months.
+      </p>
+    );
+  }
+
+  /* Bars are measured against the tallest thing on the plot, the average line included, so the
+     line can never sit above the frame it is drawn in. */
+  const height = (paise: number) => `${Math.max((paise / peak) * 100, paise > 0 ? 2 : 0)}%`;
+  const latest = months.length - 1;
+
+  return (
+    <div className="card-history">
+      <div className="card-history-head">
+        <span className="card-history-title">Spent on this card</span>
+        <span className="card-history-note">By calendar month</span>
+      </div>
+
+      {/*
+        * Three rows that share one six-column grid: the figure, the bars, the months.
+        *
+        * They are separate elements rather than three rows inside each column because the
+        * average has to be drawn against the bars and nothing else. Positioned over the whole
+        * plot, its percentage was measured against a box that also held the value row and the
+        * month row -- so a line at the average height landed among the month labels, 40px below
+        * where the bars said it should be. Giving the bars their own box makes the line and the
+        * bars agree by construction rather than by arithmetic.
+        */}
+      <div className="card-history-plot">
+        <div className="card-history-row card-history-values">
+          {months.map((month, index) => (
+            <span key={month.month}>
+              {index === latest && month.spentPaise > 0 ? formatINRWhole(month.spentPaise) : ""}
+            </span>
+          ))}
+        </div>
+
+        <div className="card-history-row card-history-tracks">
+          {history.averagePaise !== null && (
+            <div
+              className="card-history-average"
+              style={{ bottom: height(history.averagePaise) }}
+              title={`The average of the ${history.averagedMonths} completed months since you started using this card. This month is still running, so it is left out.`}
+            >
+              <span>Avg. {formatINRWhole(history.averagePaise)}</span>
+            </div>
+          )}
+          {months.map((month, index) => (
+            <div className="card-history-track" key={month.month}>
+              <div
+                className={`card-history-bar${index === latest ? " is-latest" : ""}`}
+                style={{ height: height(month.spentPaise) }}
+                role="img"
+                aria-label={`${formatMonthShort(month.month)}: ${formatINRWhole(month.spentPaise)}`}
+                title={`${formatMonthShort(month.month)}: ${formatINRWhole(month.spentPaise)}`}
+              />
+            </div>
+          ))}
+        </div>
+
+        <div className="card-history-row card-history-labels">
+          {months.map((month) => (
+            <span key={month.month}>{formatMonthShort(month.month)}</span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PaymentHistoryGrid({
   source,
   id
@@ -6071,6 +6189,7 @@ export function AccountCard({
   onStartEdit: () => void;
 }) {
   const isCard = account.type === "credit_card";
+  const [historyOpen, setHistoryOpen] = useState(false);
   const standing = accountStanding(account, alertPercent);
   const limit = account.creditLimitPaise ?? 0;
   const usage = cardUsagePercent(account);
@@ -6167,6 +6286,29 @@ export function AccountCard({
             </span>
           </p>
         </>
+      )}
+
+      {/*
+        * A credit card opens to show what has gone onto it.
+        *
+        * Only a credit card: a bank account's history is its own ledger, and a food card is a
+        * prepaid balance rather than something you run up and settle. Closed by default, because
+        * four cards each carrying six months of chart would be most of the page before anyone
+        * asked for any of it, and nothing is fetched until it is opened.
+        */}
+      {isCard && (
+        <div className="card-history-fold">
+          <button
+            type="button"
+            className="card-history-toggle"
+            aria-expanded={historyOpen}
+            onClick={() => setHistoryOpen((open) => !open)}
+          >
+            <ChevronDown size={16} className={historyOpen ? "is-open" : undefined} />
+            {historyOpen ? "Hide spending history" : "Spending history"}
+          </button>
+          {historyOpen && <CardSpendChart accountId={account.id} accountName={account.name} />}
+        </div>
       )}
 
       {/* The word is wrapped so a phone can hide it and keep the button square -- eight
@@ -7067,8 +7209,16 @@ function LoanCard({
               one thing telling two EMIs of the same kind apart, and it reads as a fact about the
               EMI rather than as part of its type. An ordinary loan has no card and shows none. */}
           {loan.accountName && <span className="loan-bank">{loan.accountName}</span>}
-          <span className={`loan-status ${closed ? "closed" : loan.isArchived ? "archived" : ""}`}>
-            {loan.isArchived ? "Archived" : closed ? "Paid off" : "Active"}
+          {/*
+            * The pill agrees with the section the card is sitting in.
+            *
+            * It said "Archived" for a loan carrying the old flag, while the heading above it had
+            * already called that loan Closed -- two words for one state, on one card, since the
+            * Archive button was removed. A loan with nothing outstanding is paid off; one that
+            * was filed away with a balance is closed; everything else is active.
+            */}
+          <span className={`loan-status ${closed || loan.isArchived ? "closed" : ""}`}>
+            {closed ? "Paid off" : loan.isArchived ? "Closed" : "Active"}
           </span>
           <button
             type="button"

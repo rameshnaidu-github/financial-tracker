@@ -1,5 +1,6 @@
 import type { HoldingGrouping } from "../shared/finance.ts";
 import type {
+  CardSpendHistory,
   Account,
   AutopaySubscription,
   BackupStatus,
@@ -157,6 +158,8 @@ export const Api = {
   categoryTypes: () => api<CategoryType[]>("/api/category-types"),
   createCategoryType: (body: { name: string; behavior: string; icon: string; color: string }) =>
     api<CategoryType>("/api/category-types", { method: "POST", body }),
+  /* Six calendar months of what went onto one credit card. */
+  cardSpendHistory: (id: string) => api<CardSpendHistory>(`/api/accounts/${id}/spend-history`),
   deleteCategoryType: (id: string) => api<{ ok: true }>(`/api/category-types/${id}`, { method: "DELETE" }),
   createSubcategory: (body: { typeId: string; name: string; icon: string; color: string }) =>
     api<Subcategory>("/api/subcategories", { method: "POST", body }),

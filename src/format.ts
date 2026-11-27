@@ -317,3 +317,13 @@ export function splitLoansByStanding<T extends { outstandingPaise: number; isArc
     closed: loans.filter((loan) => loanIsClosed(loan))
   };
 }
+
+
+/** "2026-06" as "Jun 26", for an axis where the year matters but the room does not. */
+export function formatMonthShort(month: string) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  /* en-IN abbreviates September as "Sept", four letters where every other month gives three,
+     which makes one column of an axis wider than the rest. Cut to three. */
+  const name = new Date(year, monthNumber - 1, 1).toLocaleDateString("en-IN", { month: "short" }).slice(0, 3);
+  return `${name} ${String(year).slice(-2)}`;
+}
