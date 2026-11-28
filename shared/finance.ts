@@ -130,6 +130,23 @@ export function cadenceMonths(cadence: string) {
   return PAYMENT_CADENCES.find((item) => item.id === cadence)?.months ?? 0;
 }
 
+/**
+ * Whether a schedule that started on `startDate` debits in the month `month` ("YYYY-MM").
+ *
+ * The bell and the upcoming-payments list both worked out the next debit as "the start day, this
+ * month or next", which is right only for a monthly schedule -- a yearly subscription was
+ * announced as debiting in three days every single month. This is the month half of the
+ * question, which is all either of them was missing; the day half they already had.
+ */
+export function debitsInMonth(startDate: string, month: string, cadence: string) {
+  const step = cadenceMonths(cadence);
+  if (step <= 0) return false;
+  const [startYear, startMonth] = startDate.split("-").map(Number);
+  const [year, monthIndex] = month.split("-").map(Number);
+  const elapsed = (year - startYear) * 12 + (monthIndex - startMonth);
+  return elapsed >= 0 && elapsed % step === 0;
+}
+
 export function cadenceLabel(cadence: string) {
   return PAYMENT_CADENCES.find((item) => item.id === cadence)?.label ?? "Monthly";
 }

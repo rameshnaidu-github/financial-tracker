@@ -7,6 +7,7 @@ import {
   AUTOPAY_SUBCATEGORY_ID,
   INSURANCE_SUBCATEGORY_ID,
   cadenceMonths,
+  debitsInMonth,
   INCOME_TYPE_ID,
   INFLOW_BEHAVIORS,
   EMI_SUBCATEGORY_IDS,
@@ -3543,7 +3544,11 @@ export async function getUpcomingPayments(windowDays = 14, today = currentIsoDat
       today,
       windowDays,
       paidMonths,
-      (dueDate) => dueDate >= subscription.startDate && dueDate < subscription.endDate
+      (dueDate) =>
+        dueDate >= subscription.startDate &&
+        dueDate < subscription.endDate &&
+        // A quarterly or yearly subscription is on the start day only in its own months.
+        debitsInMonth(subscription.startDate, dueDate.slice(0, 7), subscription.cadence)
     );
     // A subscription that pays itself may have fallen due and been held back for want of money.
     // That one is shown ahead of whatever comes next, and named: nothing was written, so this

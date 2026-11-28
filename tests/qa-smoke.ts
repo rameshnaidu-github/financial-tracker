@@ -6292,6 +6292,41 @@ test("a preference left in the shared table moves to the owner and leaves the sh
   await services.updateAppSettings({ simpleMode: false });
 });
 
+/* ---------- review fix 6: a yearly AutoPay is announced once a year ---------- */
+
+test("the bell announces a yearly or quarterly AutoPay only in the months it debits", () => {
+  const sub = (cadence: string) => ({
+    id: cadence, name: `QA ${cadence}`, amountPaise: 149900, startDate: "2026-01-10",
+    endDate: "2030-01-10", cadence, paymentCount: 1, status: "active" as const,
+    accountId: "a", accountName: "HDFC", isArchived: false
+  });
+  const bell = (cadence: string, today: string) =>
+    attentionItems({ accounts: [], loans: [], subscriptions: [sub(cadence)], uncategorizedCount: 0, cardAlertPercent: 30, today })
+      .filter((item) => item.id.startsWith("autopay-")).length;
+
+  // Debits on the 10th; each "today" below is three days before a 10th.
+  assert(bell("yearly", "2026-05-07") === 0, "a yearly AutoPay was announced in May, which it does not debit in");
+  assert(bell("yearly", "2026-11-07") === 0, "a yearly AutoPay was announced in November");
+  assert(bell("yearly", "2027-01-07") === 1, "a yearly AutoPay was not announced in its own month");
+  assert(bell("quarterly", "2026-04-07") === 1, "a quarterly AutoPay was not announced in April, a quarter on");
+  assert(bell("quarterly", "2026-05-07") === 0, "a quarterly AutoPay was announced in May, between quarters");
+  assert(bell("monthly", "2026-05-07") === 1, "a monthly AutoPay stopped being announced");
+});
+
+test("upcoming payments list a yearly AutoPay only in the month it debits", async () => {
+  const suffix = Math.random().toString(36).slice(2, 7);
+  // Created directly so its start date can sit in the past without anything being debited.
+  const id = `qa-up-${suffix}`;
+  await dbModule.db.prepare(
+    `INSERT INTO autopay_subscriptions (id, name, amount_paise, start_date, duration_months, end_date, cadence, user_id)
+     VALUES (?, ?, 149900, '2026-01-10', 48, '2030-01-10', 'yearly', ?)`
+  ).run(id, `QA Upcoming yearly ${suffix}`, dbModule.currentUserId());
+  const listed = async (today: string) =>
+    (await services.getUpcomingPayments(14, today)).items.some((item: { id?: string; name?: string }) => (item.id ?? "").includes(id) || item.name === `QA Upcoming yearly ${suffix}`);
+  assert(!(await listed("2026-05-07")), "a yearly AutoPay was listed as upcoming in May");
+  assert(await listed("2027-01-07"), "a yearly AutoPay was not listed as upcoming in its own month");
+});
+
 let failed = 0;
 let ran = 0;
 
