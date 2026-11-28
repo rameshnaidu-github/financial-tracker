@@ -506,6 +506,7 @@ export async function initDatabase() {
   // database. They are inserts that do nothing on conflict, taking row locks rather than the
   // ACCESS EXCLUSIVE locks that deadlocked, so running them on every start is safe.
   await ensureOwner();
+  await movePerPersonSettingsToOwner();
 
   // Every account, not just the owner's.
   //
@@ -526,7 +527,10 @@ export async function initDatabase() {
 }
 
 
-const PER_PERSON_SETTINGS = new Set([
+/** Settings that used to be shared and are now per person. See movePerPersonSettingsToOwner. */
+const MOVED_TO_PER_PERSON = ["simple_mode", "holding_grouping", "insurance_reminder_days"] as const;
+
+const PER_PERSON_SETTINGS = new Set<string>([
   "profile_name",
   "profile_email",
   "profile_age",
@@ -537,6 +541,9 @@ const PER_PERSON_SETTINGS = new Set([
   // A person's taxonomy is their own (D1), so the ledger of which defaults they have already
   // been given is theirs too.
   "seeded_default_taxonomy_ids",
+  // Preferences, which were missing from this list and so were written to app_settings, where
+  // every account reads them: one person turning simple mode on turned it on for everybody.
+  ...MOVED_TO_PER_PERSON,
 ]);
 
 /**
@@ -899,6 +906,32 @@ async function setSetting(key: string, value: string) {
      VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
   ).run(key, value));
+}
+
+/**
+ * Moves preferences out of the shared table, to the owner.
+ *
+ * Until these keys were per person, setting one wrote app_settings, and getSettings reads that
+ * table for everyone. Left there, the old value would go on leaking -- and worse, getSettings
+ * merges the two tables with "the later row wins" over an ORDER BY that does not order ties, so
+ * a key present in both would resolve to whichever Postgres returned last.
+ *
+ * Who set a shared value is not recorded, so it goes to the owner: before there was a second
+ * account it can only have been them, and the owner is who this codebase already resolves
+ * "nobody in particular" to. Safe on every start -- once moved there is nothing left to move.
+ */
+export async function movePerPersonSettingsToOwner() {
+  const owner = await ownerId();
+  const keys = [...MOVED_TO_PER_PERSON];
+  const marks = keys.map(() => "?").join(", ");
+  await db
+    .prepare(
+      `INSERT INTO user_settings (user_id, key, value)
+       SELECT ?, key, value FROM app_settings WHERE key IN (${marks})
+       ON CONFLICT(user_id, key) DO NOTHING`,
+    )
+    .run(owner, ...keys);
+  await db.prepare(`DELETE FROM app_settings WHERE key IN (${marks})`).run(...keys);
 }
 
 /** The split in D2, as one list the server can ask about rather than two tables to remember. */

@@ -1,3 +1,4 @@
+import "./timezone.ts";
 import { existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -6,6 +7,7 @@ import {
   AUTOPAY_SUBCATEGORY_ID,
   INSURANCE_SUBCATEGORY_ID,
   cadenceMonths,
+  debitsInMonth,
   INCOME_TYPE_ID,
   INFLOW_BEHAVIORS,
   EMI_SUBCATEGORY_IDS,
@@ -931,7 +933,24 @@ export async function catchUpAutopayDebits(today = currentIsoDate()) {
         skipped.push({ id: row.id, dueDate: date, reason: "short" });
         break;
       }
-      await transaction(async () => {
+      /*
+       * Claim the date before paying it, in the same transaction.
+       *
+       * Two page loads at once -- a phone and a laptop, two tabs -- both read this date as due
+       * before either wrote it down, and both paid it: measured, two 499 debits for one due date.
+       * The claim only succeeds while the marker is still behind this date, so the second run's
+       * claim matches nothing and it pays nothing. Under Postgres the second UPDATE waits on the
+       * first's row lock and re-reads the marker once it commits; in-process the transactions
+       * are queued, so it sees the moved marker outright.
+       */
+      const claimed = await transaction(async () => {
+        const claim = await db
+          .prepare(
+            `UPDATE autopay_subscriptions SET debited_through = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND user_id = ? AND (debited_through IS NULL OR debited_through < ?)`
+          )
+          .run(date, row.id, currentUserId(), date);
+        if (Number(claim.changes) === 0) return false;
         const transactionId = await insertValidatedTransaction(
           createTransactionSchema.parse({
             date,
@@ -947,17 +966,20 @@ export async function catchUpAutopayDebits(today = currentIsoDate()) {
           })
         );
         if (!transactionId) throw badRequest("The AutoPay payment could not be recorded.");
-        (await db
-          .prepare("UPDATE autopay_subscriptions SET debited_through = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?")
-          .run(date, row.id, currentUserId()));
+        return true;
       });
+      if (!claimed) break;
       through = date;
       paid += 1;
     }
     if (through && through !== row.debited_through) {
+      // Forward only: a concurrent run may already have moved it past this.
       (await db
-        .prepare("UPDATE autopay_subscriptions SET debited_through = ? WHERE id = ? AND user_id = ?")
-        .run(through, row.id, currentUserId()));
+        .prepare(
+          `UPDATE autopay_subscriptions SET debited_through = ?
+           WHERE id = ? AND user_id = ? AND (debited_through IS NULL OR debited_through < ?)`
+        )
+        .run(through, row.id, currentUserId(), through));
     }
   }
   return { paid, skipped };
@@ -1289,7 +1311,15 @@ export async function catchUpInsuranceDebits(today = currentIsoDate()) {
         skipped.push({ id: row.id, dueDate: date, reason: "short" });
         break;
       }
-      await transaction(async () => {
+      // Claimed before it is paid, for the reason given in catchUpAutopayDebits.
+      const claimed = await transaction(async () => {
+        const claim = await db
+          .prepare(
+            `UPDATE insurance_policies SET debited_through = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND user_id = ? AND (debited_through IS NULL OR debited_through < ?)`
+          )
+          .run(date, row.id, currentUserId(), date);
+        if (Number(claim.changes) === 0) return false;
         const transactionId = await insertValidatedTransaction(
           createTransactionSchema.parse({
             date,
@@ -1306,17 +1336,19 @@ export async function catchUpInsuranceDebits(today = currentIsoDate()) {
         (await db
           .prepare("INSERT INTO insurance_payments (id, user_id, policy_id, transaction_id) VALUES (?, ?, ?, ?)")
           .run(randomUUID(), currentUserId(), row.id, transactionId));
-        (await db
-          .prepare("UPDATE insurance_policies SET debited_through = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?")
-          .run(date, row.id, currentUserId()));
+        return true;
       });
+      if (!claimed) break;
       through = date;
       paid += 1;
     }
     if (through && through !== row.debited_through) {
       (await db
-        .prepare("UPDATE insurance_policies SET debited_through = ? WHERE id = ? AND user_id = ?")
-        .run(through, row.id, currentUserId()));
+        .prepare(
+          `UPDATE insurance_policies SET debited_through = ?
+           WHERE id = ? AND user_id = ? AND (debited_through IS NULL OR debited_through < ?)`
+        )
+        .run(through, row.id, currentUserId(), through));
     }
   }
   return { paid, skipped };
@@ -1743,6 +1775,14 @@ export async function catchUpPayoutCredits(today = currentIsoDate()) {
       (await getSubcategoryRow(OTHER_INCOME_SUBCATEGORY_ID)) ?? (await getSubcategoryRow(INTEREST_SUBCATEGORY_ID));
     await transaction(async () => {
       for (const date of due) {
+        // Claimed before it is credited, for the reason given in catchUpAutopayDebits.
+        const claim = await db
+          .prepare(
+            `UPDATE investments SET payout_through = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND user_id = ? AND (payout_through IS NULL OR payout_through < ?)`
+          )
+          .run(date, row.id, currentUserId(), date);
+        if (Number(claim.changes) === 0) return;
         const transactionId = await insertValidatedTransaction(
           createTransactionSchema.parse({
             date,
@@ -1761,9 +1801,6 @@ export async function catchUpPayoutCredits(today = currentIsoDate()) {
         ).run(randomUUID(), row.id, transactionId, currentUserId()));
         created += 1;
       }
-      (await db
-        .prepare("UPDATE investments SET payout_through = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?")
-        .run(due[due.length - 1], row.id, currentUserId()));
     });
   }
   return { created };
@@ -1859,7 +1896,16 @@ export async function catchUpSipInstalments(today = currentIsoDate()) {
       if (balance < (row.sip_amount_paise as number)) {
         break;
       }
-      await transaction(async () => {
+      // Claimed before it is paid, for the reason given in catchUpAutopayDebits. The marker used
+      // to be written only after the whole loop, outside any transaction.
+      const claimed = await transaction(async () => {
+        const claim = await db
+          .prepare(
+            `UPDATE investments SET sip_through = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND user_id = ? AND (sip_through IS NULL OR sip_through < ?)`
+          )
+          .run(date, row.id, currentUserId(), date);
+        if (Number(claim.changes) === 0) return false;
         await insertValidatedTransaction(
           createTransactionSchema.parse({
             date,
@@ -1873,14 +1919,19 @@ export async function catchUpSipInstalments(today = currentIsoDate()) {
             investmentId: row.id
           })
         );
+        return true;
       });
+      if (!claimed) break;
       through = date;
       paid += 1;
     }
     if (through && through !== row.sip_through) {
       (await db
-        .prepare("UPDATE investments SET sip_through = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?")
-        .run(through, row.id, currentUserId()));
+        .prepare(
+          `UPDATE investments SET sip_through = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND user_id = ? AND (sip_through IS NULL OR sip_through < ?)`
+        )
+        .run(through, row.id, currentUserId(), through));
     }
   }
   return { paid };
@@ -3493,7 +3544,11 @@ export async function getUpcomingPayments(windowDays = 14, today = currentIsoDat
       today,
       windowDays,
       paidMonths,
-      (dueDate) => dueDate >= subscription.startDate && dueDate < subscription.endDate
+      (dueDate) =>
+        dueDate >= subscription.startDate &&
+        dueDate < subscription.endDate &&
+        // A quarterly or yearly subscription is on the start day only in its own months.
+        debitsInMonth(subscription.startDate, dueDate.slice(0, 7), subscription.cadence)
     );
     // A subscription that pays itself may have fallen due and been held back for want of money.
     // That one is shown ahead of whatever comes next, and named: nothing was written, so this
@@ -7144,7 +7199,7 @@ function monthEndDate(month: string) {
   return localIsoDate(new Date(year, monthIndex, 0));
 }
 
-function addMonthsToIsoDate(isoDate: string, count: number) {
+export function addMonthsToIsoDate(isoDate: string, count: number) {
   const [year, monthIndex, day] = isoDate.split("-").map(Number);
   const target = new Date(year, monthIndex - 1 + count, 1);
   const daysInTargetMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();

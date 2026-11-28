@@ -45,6 +45,28 @@ export function parseAmountToPaise(value: string) {
 }
 
 /**
+ * An amount from a field that accepts zero, read at save time: refused if it cannot be read.
+ *
+ * parseAmountToPaise turns anything unreadable into 0, which is harmless where zero is refused
+ * downstream and dangerous where it is not. A loan's opening outstanding typed as "4,54,548.5O" --
+ * a capital O for a zero -- saved as 0 and the loan read "Paid off". So the fields that accept zero
+ * read through this instead, and an unreadable figure stops the save with the field's own name
+ * and the text that was typed. Empty is still zero: those fields are optional.
+ *
+ * parseAmountToPaise stays for live previews, which run while the user is mid-way through typing
+ * and must not throw.
+ */
+export function strictAmountToPaise(value: string, field: string) {
+  const normalized = value.replace(/[₹,\s]/g, "");
+  if (!normalized) return 0;
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw new Error(`${field}: "${value.trim()}" isn't an amount. Use digits only, like 4,54,548.50.`);
+  }
+  return Math.round(amount * 100);
+}
+
+/**
  * A typed correction, as paise and a direction. `null` when it is not a usable figure.
  *
  * Separate from parseAmountToPaise, which floors a negative at zero because every other amount
@@ -82,16 +104,15 @@ export function todayISO() {
 /**
  * The same day a year or more later, for a form that has to suggest an end date.
  *
- * Built from the parts rather than by adding 365 days, so a leap year does not shift it, and
- * clamped by `Date` itself for the one case where the day does not exist in the target month --
- * there is no 29 February 2027, and the browser rolls it to 1 March, which is the ordinary
- * convention and the one the server's own month arithmetic follows.
+ * Clamped, the way the server's month arithmetic clamps: 29 February 2024 + 1 year is
+ * 28 February 2025. This used to roll it to 1 March, so the form suggested a different day from
+ * the one the server would compute for the same span.
  */
 export function addYearsToISO(isoDate: string, years: number) {
   const [year, month, day] = isoDate.split("-").map(Number);
-  const moved = new Date(year + years, month - 1, day);
+  const daysInTarget = new Date(year + years, month, 0).getDate();
   const pad = (value: number) => String(value).padStart(2, "0");
-  return `${moved.getFullYear()}-${pad(moved.getMonth() + 1)}-${pad(moved.getDate())}`;
+  return `${year + years}-${pad(month)}-${pad(Math.min(day, daysInTarget))}`;
 }
 
 export function currentMonth() {
@@ -341,4 +362,16 @@ export function formatMonthShort(month: string) {
      which makes one column of an axis wider than the rest. Cut to three. */
   const name = new Date(year, monthNumber - 1, 1).toLocaleDateString("en-IN", { month: "short" }).slice(0, 3);
   return `${name} ${String(year).slice(-2)}`;
+}
+
+/**
+ * Which formatter a counting figure animates with, so it ends on its own label.
+ *
+ * The figure that counts up and the hidden label beside it are two renderings of one amount. The
+ * rule here used to be "a decimal point in the label means paise", which a compact lakh figure
+ * like "Rs 18.50 L" breaks: it would count up to "Rs 18,50,000". So the formatter is the one whose
+ * output for this amount is the label, and the full figure is the fallback when none is.
+ */
+export function countFormatterFor(label: string, paise: number): (value: number) => string {
+  return [formatINRWhole, formatINRCompact, formatINR].find((format) => format(paise) === label) ?? formatINR;
 }

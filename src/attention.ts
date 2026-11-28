@@ -9,6 +9,7 @@
  */
 import {
   INSURANCE_REMINDER_DEFAULT_DAYS,
+  debitsInMonth,
   insuranceKindLabel,
   policyExpiry,
   policyExpiryLabel
@@ -148,6 +149,12 @@ export function attentionItems({
     const debitDay = Number(subscription.startDate.slice(8, 10));
     if (!soon(debitDay)) continue;
     const away = daysAway(debitDay);
+    // The day is right for every cadence; the month is only right for monthly. A day already
+    // past this month falls next month, which is the same wrap daysAway makes.
+    const [year, monthIndex] = today.split("-").map(Number);
+    const dueMonth = new Date(year, monthIndex - 1 + (debitDay >= day ? 0 : 1), 1);
+    const dueMonthKey = `${dueMonth.getFullYear()}-${String(dueMonth.getMonth() + 1).padStart(2, "0")}`;
+    if (!debitsInMonth(subscription.startDate, dueMonthKey, subscription.cadence)) continue;
     items.push({
       id: `autopay-${subscription.id}`,
       label: `${subscription.name} debits ${away === 0 ? "today" : away === 1 ? "tomorrow" : `in ${away} days`}`,

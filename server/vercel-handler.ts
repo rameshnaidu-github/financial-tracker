@@ -7,6 +7,7 @@
 //
 // Only /api/* reaches here. The built pages are static files, served by Vercel's CDN, which is why
 // nothing in this file knows about `dist`.
+import "./timezone.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 /**

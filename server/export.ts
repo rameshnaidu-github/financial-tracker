@@ -24,7 +24,10 @@ export const UNOWNED: Record<string, string> = {
   schema_state:
     "which version of the schema this database has. A fact about the database itself, the same " +
     "for everyone in it, and meaningless outside it.",
-  users: "the accounts themselves. A person's own row is exported separately, without its password hash."
+  users: "the accounts themselves. A person's own row is exported separately, without its password hash.",
+  sign_in_failures:
+    "failed sign-in attempts, kept only to limit guessing. Keyed by the email as typed, including " +
+    "addresses with no account, so it belongs to no person and is not part of anyone's data."
 };
 
 // Postgres' own catalogue, not SQLite's. The inventory is still derived rather than listed -- the

@@ -65,6 +65,8 @@ import {
   outstandingSpendLabel,
   outstandingSplit,
   parseAmountToPaise,
+  strictAmountToPaise,
+  countFormatterFor,
   parseSignedAmount,
   signedAmount,
   splitMonth,
@@ -80,7 +82,7 @@ import { NewsList } from "./whats-new-view";
 import { adjustmentDirection, adjustmentShiftPaise } from "./adjustment";
 import { flushSync } from "react-dom";
 import { prefersReducedMotion, useCountUp, useScrollReveal } from "./motion";
-import { cashflowPartsFromTypes, INFLOW_BEHAVIORS, type CashflowPart } from "./report-cashflow";
+import { INFLOW_BEHAVIORS } from "./report-cashflow";
 import type {
   Account,
   AutopaySubscription,
@@ -4842,20 +4844,17 @@ function ReportsPage({
   return (
     <div className="page-grid">
       <Panel
-        title="Category Report"
-        action={
-          <div className="report-filters">
-            <label>
-              From
-              <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={from} onChange={(event) => setFrom(event.target.value)} />
-            </label>
-            <label>
-              To
-              <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={to} onChange={(event) => setTo(event.target.value)} />
-            </label>
-          </div>
-        }
+        title="By category"
       >
+        {/*
+          * One period, one place to set it.
+          *
+          * There were three: a pair of date inputs in the panel header, a month stepper, and
+          * four preset pills -- all writing the same two values, stacked one above the other,
+          * and together the reason the first figure on a phone sat 600px down the page. The
+          * presets and the stepper cover what is actually asked for; the exact range is behind
+          * the last pill, one tap away, for the fortnight nobody has a preset for.
+          */}
         <ReportPeriodBar
           from={from}
           to={to}
@@ -4881,7 +4880,6 @@ function ReportsPage({
             <p className="helper-text report-range">
               {formatShortDate(report.start)} to {formatShortDate(report.end)}
             </p>
-            <CashflowSummary types={report.types} />
             <div className="report-chart-grid">
               <OutflowMixChart
                 types={report.types}
@@ -5277,9 +5275,19 @@ function TrendChart({
       <line className="trend-axis" x1={pad.left} x2={width - pad.right} y1={baseline} y2={baseline} />
 
       {variant === "bar" ? (
-        centers.map((point) => {
+        centers.map((point, index) => {
           const barWidth = Math.min(step * 0.55, 52);
           const barHeight = Math.max(baseline - point.y, point.amountPaise > 0 ? 2 : 0);
+          /*
+           * One accent, on the month being spent in now.
+           *
+           * Every bar was the accent -- counted, twenty-two of them in one shade across two
+           * charts -- and an accent on everything marks nothing. The month you are in is the
+           * one you can still do something about, so it keeps the colour and the rest step
+           * back to a neutral. The shape still carries the comparison; the colour now carries
+           * where you are in it.
+           */
+          const isLatest = index === centers.length - 1;
           return (
             <g key={point.label}>
               <title>{`${point.label}: ${formatINR(point.amountPaise)}`}</title>
@@ -5289,7 +5297,8 @@ function TrendChart({
                 width={barWidth}
                 height={barHeight}
                 rx={5}
-                fill={color}
+                className={isLatest ? "trend-bar is-latest" : "trend-bar"}
+                fill={isLatest ? color : undefined}
               />
             </g>
           );
@@ -7038,7 +7047,7 @@ function LoanForm({
         name,
         subcategoryId,
         principalAmountPaise: parseAmountToPaise(principal),
-        startingOutstandingPaise: parseAmountToPaise(outstanding),
+        startingOutstandingPaise: strictAmountToPaise(outstanding, "Opening outstanding"),
         startMonth,
         annualInterestRateBps: parseRateToBps(interestRate),
         tenureMonths: Number.parseInt(tenureMonths, 10),
@@ -7112,11 +7121,30 @@ function LoanForm({
           <input value={principal} onChange={(event) => setPrincipal(event.target.value)} placeholder="₹0" inputMode="decimal" required />
         </label>
         <label>
-          Current outstanding
+          {/*
+            * "Opening outstanding", not "Current outstanding".
+            *
+            * This field is bound to `startingOutstandingPaise` -- the balance before the
+            * earliest EMI recorded here -- while the loan card has a row called "Current
+            * outstanding" bound to `outstandingPaise`, which is that balance less every
+            * payment since. Both were called the same thing.
+            *
+            * They are equal on a loan with no payments yet, which is every loan at the moment
+            * it is entered, so the collision stays invisible until the loan has been used.
+            * Measured on a loan with three EMIs recorded: the card said Rs 4,54,548.50 and
+            * this field said Rs 5,00,000. Typing the card's figure in here -- which is what
+            * the old label invited -- moved the outstanding to Rs 4,07,719.78, added
+            * Rs 46,828.72 to principal paid and Rs 13,141.31 to interest paid, and took three
+            * months off the remaining term. All of it silent, on a record of real money.
+            */}
+          Opening outstanding
           <input value={outstanding} onChange={(event) => setOutstanding(event.target.value)} placeholder="₹0" inputMode="decimal" required />
         </label>
       </div>
-      <small className="field-hint">Planning to add past EMIs too? Enter the outstanding before the earliest one.</small>
+      <small className="field-hint">
+        The balance this loan started at, before the earliest EMI recorded here — not the
+        balance today, which the card works out for you and shows as Current outstanding.
+      </small>
       <div className="form-pair form-pair-tight">
         <label>
           Month and year taken
@@ -7779,10 +7807,10 @@ function InvestmentForm({
       const payload = {
         type,
         name: name.trim(),
-        investedPaise: parseAmountToPaise(invested),
+        investedPaise: strictAmountToPaise(invested, "Invested"),
         // A paying holding's current value is its principal plus what it has credited, which the
         // server works out from the credits themselves; sending a figure would only fight it.
-        currentValuePaise: pays ? undefined : parseAmountToPaise(currentValue),
+        currentValuePaise: pays ? undefined : strictAmountToPaise(currentValue, "Current value"),
         shares: shares ?? off,
         purchaseDate: purchaseDate || off,
         payoutFrequency: pays ? payoutFrequency : off,
@@ -9326,12 +9354,12 @@ function AccountForm({ onCreated, onCancel }: { onCreated: () => Promise<void>; 
       await Api.createAccount({
         name,
         type,
-        startingBalancePaise: parseAmountToPaise(starting),
-        creditLimitPaise: type === "credit_card" ? parseAmountToPaise(limit) : undefined,
+        startingBalancePaise: strictAmountToPaise(starting, "Starting balance"),
+        creditLimitPaise: type === "credit_card" ? strictAmountToPaise(limit, "Credit limit") : undefined,
         paymentDueDay: type === "credit_card" && dueDay.trim() ? Number.parseInt(dueDay, 10) : null,
         // A card has an outstanding rather than a balance, so it never carries a minimum.
         minimumBalancePaise:
-          type === "credit_card" || !minimumBalance.trim() ? undefined : parseAmountToPaise(minimumBalance)
+          type === "credit_card" || !minimumBalance.trim() ? undefined : strictAmountToPaise(minimumBalance, "Minimum balance")
       });
       setName("");
       setStarting("");
@@ -9501,85 +9529,6 @@ function isDrillableId(id: string | undefined) {
   return Boolean(id) && !id!.includes(":") && id !== "uncategorized" && id !== "other-chart-segments";
 }
 
-function CashflowSummary({ types }: { types: MonthlyReport["types"] }) {
-  const inflowParts = cashflowPartsFromTypes(types, "in");
-  const outflowParts = cashflowPartsFromTypes(types, "out");
-  const inflowPaise = inflowParts.reduce((sum, part) => sum + part.amountPaise, 0);
-  const outflowPaise = outflowParts.reduce((sum, part) => sum + part.amountPaise, 0);
-  const savingsPaise = inflowPaise - outflowPaise;
-
-  return (
-    <div className="cashflow-summary" aria-label="Inflow, outflow and savings breakdown">
-      <div className="cashflow-summary-row cashflow-section">
-        <div className="cashflow-formula-left" aria-label="Inflow minus outflow">
-          <div className="cashflow-summary-line inflow">
-            <div className="cashflow-summary-head">
-              <span>Inflow</span>
-              <strong className="amount-in">{formatINR(inflowPaise)}</strong>
-            </div>
-          </div>
-          <span className="cashflow-summary-operator">−</span>
-          <div className="cashflow-summary-line outflow">
-            <div className="cashflow-summary-head">
-              <span>Outflow</span>
-              <strong className="amount-out">{formatINR(outflowPaise)}</strong>
-            </div>
-          </div>
-        </div>
-        <span className="cashflow-summary-operator">=</span>
-        <div className="cashflow-summary-line savings">
-          <div className="cashflow-summary-head">
-            <span>Savings</span>
-            <strong className={savingsPaise >= 0 ? "amount-in" : "amount-out"}>
-              {signedImpact(savingsPaise)}
-            </strong>
-          </div>
-        </div>
-      </div>
-
-      <CashflowEquation label="Inflow" total={inflowPaise} parts={inflowParts} tone="in" />
-      <CashflowEquation label="Outflow" total={outflowPaise} parts={outflowParts} tone="out" />
-    </div>
-  );
-}
-
-function CashflowEquation({
-  label,
-  total,
-  parts,
-  tone
-}: {
-  label: string;
-  total: number;
-  parts: CashflowPart[];
-  tone: "in" | "out";
-}) {
-  return (
-    <div className={`cashflow-equation-row cashflow-section ${tone}`}>
-      <div className="cashflow-equation-parts" aria-label={`${label} components`}>
-        {parts.length === 0 ? (
-          <span className="cashflow-equation-empty">Nothing yet</span>
-        ) : (
-          parts.map((part, index) => (
-            <span className="cashflow-equation-piece" key={part.id}>
-              {index > 0 && <span className="cashflow-equation-plus">+</span>}
-              <span className="cashflow-equation-part" style={{ "--cat-color": part.color } as React.CSSProperties}>
-                <span className="cashflow-equation-name">{part.name}</span>
-                <span className="cashflow-equation-amount">{formatINR(part.amountPaise)}</span>
-              </span>
-            </span>
-          ))
-        )}
-      </div>
-      <span className="cashflow-equation-eq">=</span>
-      <div className="cashflow-equation-total-card">
-        <span>{label}</span>
-        <strong className={tone === "in" ? "amount-in" : "amount-out"}>{formatINR(total)}</strong>
-      </div>
-    </div>
-  );
-}
-
 function OutflowMixChart({
   types,
   onTypeClick
@@ -9602,6 +9551,10 @@ function OutflowMixChart({
 
   return (
     <div className="report-analytics outflow-mix-analytics">
+      {/* The total stays in the header as well as in the ring. Dropping it as a duplicate
+          left the outflow heading alone above the chart while SubType mix beside it kept its
+          figure, and the pair stopped matching -- which on this page is worse than printing a
+          number twice. */}
       <div className="report-chart-header">
         <div>
           <span>Outflow mix</span>
@@ -9679,6 +9632,15 @@ function ReportTypeAnalytics({
           ))}
         </div>
       </div>
+      {/*
+        * A ring, like the outflow beside it.
+        *
+        * This was briefly a ranked list, on the argument that two rings of identical size
+        * answer the same kind of question twice and so neither leads. The owner looked at it
+        * and said no: on this page the two mixes are read together, and a list beside a ring
+        * reads as two different kinds of thing rather than as one comparison. The symmetry is
+        * the point here, and that is theirs to decide.
+        */}
       <div className="pie-panel">
         <div className="pie-chart">
           <DonutChart
@@ -10918,8 +10880,17 @@ export function AccountEditDialog({
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    const openingPaise = parseAmountToPaise(draft.opening || "0");
-    const limitPaise = isCard ? parseAmountToPaise(draft.limit || "0") : undefined;
+    let openingPaise: number;
+    let limitPaise: number | undefined;
+    let minimumPaise: number | undefined;
+    try {
+      openingPaise = strictAmountToPaise(draft.opening, isCard ? "Outstanding" : "Opening balance");
+      limitPaise = isCard ? strictAmountToPaise(draft.limit, "Credit limit") : undefined;
+      minimumPaise = isCard ? undefined : strictAmountToPaise(draft.minimum, "Minimum balance");
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "That amount could not be read.");
+      return;
+    }
     if (draft.name.trim().length < 2) {
       onError("Give the account a name of at least 2 characters.");
       return;
@@ -10934,7 +10905,6 @@ export function AccountEditDialog({
       onError("Payment due day must be a day of the month, 1 to 31.");
       return;
     }
-    const minimumPaise = isCard ? undefined : parseAmountToPaise(draft.minimum || "0");
     if (minimumPaise !== undefined && minimumPaise < 0) {
       onError("A minimum balance can't be negative.");
       return;
@@ -11429,7 +11399,7 @@ function CountUp({ paise, label }: { paise: number; label: string }) {
    * The precision now comes from the label: no decimal point in it, no decimals in the count.
    * Whatever the caller formatted is what the tile ends on, which is what was always promised.
    */
-  useCountUp(ref, paise, label.includes(".") ? formatINR : formatINRWhole);
+  useCountUp(ref, paise, countFormatterFor(label, paise));
   return (
     <>
       <span className="visually-hidden">{label}</span>
@@ -11722,6 +11692,7 @@ function ReportPeriodBar({
   to: string;
   onChange: (from: string, to: string) => void;
 }) {
+  const [customOpen, setCustomOpen] = useState(false);
   const thisMonth = todayISO().slice(0, 7);
   const anchorMonth = (from || `${thisMonth}-01`).slice(0, 7);
   const isWholeMonth = from === `${anchorMonth}-01` && to === monthEndForInput(anchorMonth);
@@ -11732,6 +11703,8 @@ function ReportPeriodBar({
     { label: "Last 3 months", from: `${shiftMonth(thisMonth, -2)}-01`, to: monthEndForInput(thisMonth) },
     { label: "This year", from: `${thisMonth.slice(0, 4)}-01-01`, to: monthEndForInput(thisMonth) }
   ];
+
+  const matchesAPreset = presets.some((preset) => preset.from === from && preset.to === to) || isWholeMonth;
 
   return (
     <div className="report-period-bar">
@@ -11769,7 +11742,47 @@ function ReportPeriodBar({
             </button>
           );
         })}
+        {/*
+          * The exact range, as the last pill rather than as two date fields above everything.
+          *
+          * It lights up on its own when the dates match no preset, so a range arrived at from
+          * a link or a back button is not silently unlabelled -- and opening it is one tap,
+          * which is the right cost for the thing asked for least.
+          */}
+        <button
+          type="button"
+          className={`filter-chip${customOpen || !matchesAPreset ? " active" : ""}`}
+          aria-pressed={customOpen || !matchesAPreset}
+          aria-expanded={customOpen}
+          onClick={() => setCustomOpen((open) => !open)}
+        >
+          Custom range
+        </button>
       </div>
+      {(customOpen || !matchesAPreset) && (
+        <div className="report-custom-range">
+          <label>
+            From
+            <input
+              type="date"
+              min={EARLIEST_DATE}
+              max={LATEST_DATE}
+              value={from}
+              onChange={(event) => onChange(event.target.value, to)}
+            />
+          </label>
+          <label>
+            To
+            <input
+              type="date"
+              min={EARLIEST_DATE}
+              max={LATEST_DATE}
+              value={to}
+              onChange={(event) => onChange(from, event.target.value)}
+            />
+          </label>
+        </div>
+      )}
     </div>
   );
 }

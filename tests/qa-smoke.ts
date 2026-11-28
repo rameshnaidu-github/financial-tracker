@@ -6015,6 +6015,379 @@ test("the insurance reminder window is a setting, and a bad one falls back to th
   );
 });
 
+/* ---------- loanfields-19: two figures must not share one name ---------- */
+
+test("the loan form does not call the opening balance what the card calls the current one", () => {
+  /*
+   * A label check, because the fault was a label.
+   *
+   * The edit form's balance field is bound to startingOutstandingPaise and the loan card's row
+   * is bound to outstandingPaise. Those are different figures on any loan with a recorded EMI,
+   * and they were both called "Current outstanding". Typing the card's number into the form --
+   * which is what one name for two things invites -- silently moves the loan's baseline and
+   * re-splits every payment behind it.
+   *
+   * Read out of the source because that is where a label lives; the suite cannot mount React.
+   */
+  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const form = app.slice(app.indexOf("function LoanForm("), app.indexOf("function LoanCard("));
+  const card = app.slice(app.indexOf("function LoanCard("));
+
+  assert(/setOutstanding\(event\.target\.value\)/.test(form), "the loan form's balance field was not found; this guard is checking nothing");
+  assert(/loan\.outstandingPaise/.test(card), "the loan card's current-outstanding figure was not found; this guard is checking nothing");
+
+  /* The exact words the card uses for the live balance must not appear as the form's label.
+     Comments are stripped first: this file explains the collision, and explaining it is not
+     committing it. */
+  const withoutComments = form.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  assert(
+    !/>\s*Current outstanding/.test(withoutComments) && !/\n\s*Current outstanding\s*\n/.test(withoutComments),
+    "the loan form labels its opening-balance field \"Current outstanding\", which is what the card calls a different figure."
+  );
+  assert(
+    /Opening outstanding/.test(withoutComments),
+    "the loan form's balance field lost its label; it should say what it holds."
+  );
+});
+
+/* ---------- review fix 1: an AutoPay's end date is the one the app always computed ---------- */
+
+test("the end-date backfill uses the app's own month arithmetic, which clamps a month end", async () => {
+  /*
+   * The oracle is the application's own addMonthsToIsoDate, imported, not a re-implementation.
+   * A re-implementation is exactly how this went wrong: a helper written for the check rolled
+   * 31 January + 1 month to 3 March, the app clamps it to 28 February, and the check certified a
+   * migration that gave month-end subscriptions one extra debit.
+   */
+  const { SCHEMA_SQL } = await import("../server/schema.ts");
+  const backfill = /UPDATE autopay_subscriptions\s+SET end_date[\s\S]*?WHERE end_date IS NULL;/.exec(SCHEMA_SQL);
+  assert(backfill, "no end_date backfill found in schema.ts");
+  const owner = dbModule.currentUserId();
+  const cases = [["2026-01-31", 1], ["2026-01-31", 3], ["2024-02-29", 12], ["2026-08-31", 6], ["2026-12-31", 2], ["2026-07-01", 36]] as const;
+  for (const [index, [start, months]] of cases.entries()) {
+    await dbModule.db.prepare(
+      `INSERT INTO autopay_subscriptions (id, name, amount_paise, start_date, duration_months, end_date, cadence, user_id)
+       VALUES (?, ?, 100, ?, ?, NULL, 'monthly', ?)`
+    ).run(`qa-fix1-${index}`, `QA fix1 ${index}`, start, months, owner);
+  }
+  await dbModule.db.exec(backfill![0]);
+  for (const [index, [start, months]] of cases.entries()) {
+    const row = (await dbModule.db.prepare("SELECT end_date FROM autopay_subscriptions WHERE id = ? AND user_id = ?").get(`qa-fix1-${index}`, owner)) as { end_date: string };
+    const want = services.addMonthsToIsoDate(start, months);
+    assert(row.end_date === want, `${start} + ${months} months: the app says ${want}, the backfill wrote ${row.end_date}.`);
+  }
+});
+
+test("rows the rolling backfill already moved are put back, and nothing else is touched", async () => {
+  /*
+   * Production ran the rolling version once. Those rows carry end_date = start + duration
+   * ROLLED, where the clamped date differs. The repair moves exactly those back. A row whose end
+   * date was chosen by hand after the deploy never matches that pattern -- its duration_months
+   * is computed from its own end date -- so it is left as it is.
+   */
+  const { SCHEMA_SQL } = await import("../server/schema.ts");
+  const repair = /-- repair:start([\s\S]*?)-- repair:end/.exec(SCHEMA_SQL);
+  assert(repair, "no repair statement found in schema.ts");
+  const statement = repair![1];
+  const owner = dbModule.currentUserId();
+  const moved = [["2026-01-31", 1, "2026-03-03"], ["2024-02-29", 12, "2025-03-01"], ["2026-08-31", 6, "2027-03-03"]] as const;
+  for (const [index, [start, months, rolled]] of moved.entries()) {
+    await dbModule.db.prepare(
+      `INSERT INTO autopay_subscriptions (id, name, amount_paise, start_date, duration_months, end_date, cadence, user_id)
+       VALUES (?, ?, 100, ?, ?, ?, 'monthly', ?)`
+    ).run(`qa-fix1r-${index}`, `QA fix1r ${index}`, start, months, rolled, owner);
+  }
+  // Chosen by hand after the deploy: 31 Jan to 3 Mar is two months by the app's own count.
+  await dbModule.db.prepare(
+    `INSERT INTO autopay_subscriptions (id, name, amount_paise, start_date, duration_months, end_date, cadence, user_id)
+     VALUES ('qa-fix1r-hand', 'QA fix1r hand', 100, '2026-01-31', 2, '2026-03-03', 'monthly', ?)`
+  ).run(owner);
+
+  await dbModule.db.exec(statement);
+  await dbModule.db.exec(statement); // and again: it must be safe to run on every start
+
+  for (const [index, [start, months]] of moved.entries()) {
+    const row = (await dbModule.db.prepare("SELECT end_date FROM autopay_subscriptions WHERE id = ? AND user_id = ?").get(`qa-fix1r-${index}`, owner)) as { end_date: string };
+    const want = services.addMonthsToIsoDate(start, months);
+    assert(row.end_date === want, `${start} + ${months}: repaired to ${row.end_date}, the app says ${want}.`);
+  }
+  const hand = (await dbModule.db.prepare("SELECT end_date FROM autopay_subscriptions WHERE id = 'qa-fix1r-hand' AND user_id = ?").get(owner)) as { end_date: string };
+  assert(hand.end_date === "2026-03-03", `A hand-chosen end date was rewritten to ${hand.end_date}.`);
+});
+
+/* ---------- review fix 2: two page loads at once must not pay one instalment twice ---------- */
+/*
+ * Every automatic money run fires on page load, and two loads at the same moment -- a phone and
+ * a laptop, two tabs -- each read the same instalment as due before either wrote it down. Each
+ * case below makes exactly one instalment due, starts two runs together, and counts the money.
+ */
+const dayBeforeForTests = (iso: string) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  const moved = new Date(y, m - 1, d - 1);
+  return `${moved.getFullYear()}-${String(moved.getMonth() + 1).padStart(2, "0")}-${String(moved.getDate()).padStart(2, "0")}`;
+};
+
+test("two AutoPay runs at once take one instalment, not two", async () => {
+  const suffix = Math.random().toString(36).slice(2, 7);
+  const today = currentIsoDateForTests();
+  const bank = await services.createAccount({ name: `QA Race AP ${suffix}`, type: "bank", startingBalancePaise: 10_000_00 });
+  const sub = await services.createAutopaySubscription({
+    name: `QA Race AP ${suffix}`, amountPaise: 499_00, startDate: today,
+    endDate: addYearsForTests(today, 1), cadence: "monthly"
+  });
+  await dbModule.db.prepare("UPDATE autopay_subscriptions SET account_id = ?, debited_through = NULL WHERE id = ? AND user_id = ?")
+    .run(bank.id, sub.id, dbModule.currentUserId());
+  await Promise.all([services.catchUpAutopayDebits(), services.catchUpAutopayDebits()]);
+  const count = (await services.listAutopaySubscriptions(true)).find((item) => item.id === sub.id)?.paymentCount;
+  const balance = (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise;
+  assert(count === 1, `One due instalment was paid ${count} times.`);
+  assert(balance === 10_000_00 - 499_00, `The bank should be down 499 once, it is at ${balance}.`);
+});
+
+test("two insurance runs at once take one premium, not two", async () => {
+  const suffix = Math.random().toString(36).slice(2, 7);
+  const today = currentIsoDateForTests();
+  const bank = await services.createAccount({ name: `QA Race INS ${suffix}`, type: "bank", startingBalancePaise: 1_00_000_00 });
+  const policy = await services.createInsurancePolicy({
+    kind: "health", name: `QA Race INS ${suffix}`, policyNumber: `R-${suffix}`,
+    startDate: today, endDate: addYearsForTests(today, 2), cadence: "yearly", premiumPaise: 20_000_00
+  });
+  await dbModule.db.prepare("UPDATE insurance_policies SET account_id = ?, debited_through = NULL WHERE id = ? AND user_id = ?")
+    .run(bank.id, policy.id, dbModule.currentUserId());
+  await Promise.all([services.catchUpInsuranceDebits(), services.catchUpInsuranceDebits()]);
+  const count = (await services.listInsurancePolicies()).find((item) => item.id === policy.id)?.paymentCount;
+  assert(count === 1, `One due premium was paid ${count} times.`);
+});
+
+test("two SIP runs at once take one instalment, not two", async () => {
+  const suffix = Math.random().toString(36).slice(2, 7);
+  const today = currentIsoDateForTests();
+  const poor = await services.createAccount({ name: `QA Race SIP poor ${suffix}`, type: "bank", startingBalancePaise: 1_00 });
+  const rich = await services.createAccount({ name: `QA Race SIP rich ${suffix}`, type: "bank", startingBalancePaise: 10_000_00 });
+  // Set up on a bank that cannot cover it, so nothing is taken at creation, then moved.
+  const fund = await services.createInvestment({
+    type: "mutual_funds", name: `QA Race SIP ${suffix}`, investedPaise: 1_000_00, currentValuePaise: 1_000_00,
+    purchaseDate: today, sipAmountPaise: 2_000_00, sipDay: Number(today.slice(8, 10)), sipAccountId: poor.id
+  });
+  await dbModule.db.prepare("UPDATE investments SET sip_account_id = ?, sip_through = ? WHERE id = ? AND user_id = ?")
+    .run(rich.id, dayBeforeForTests(today), fund.id, dbModule.currentUserId());
+  await Promise.all([services.catchUpSipInstalments(), services.catchUpSipInstalments()]);
+  const balance = (await services.listAccounts(true)).find((item) => item.id === rich.id)?.balancePaise;
+  assert(balance === 10_000_00 - 2_000_00, `The bank should be down one 2,000 instalment, it is at ${balance}.`);
+});
+
+test("two payout runs at once credit one payout, not two", async () => {
+  const suffix = Math.random().toString(36).slice(2, 7);
+  const today = currentIsoDateForTests();
+  const bank = await services.createAccount({ name: `QA Race PO ${suffix}`, type: "bank", startingBalancePaise: 0 });
+  const deposit = await services.createInvestment({
+    type: "fd", name: `QA Race PO ${suffix}`, investedPaise: 1_00_000_00,
+    purchaseDate: services.addMonthsToIsoDate(today, -1),
+    payoutFrequency: "monthly", payoutAmountPaise: 1_000_00, payoutDay: Number(today.slice(8, 10)),
+    payoutAccountId: bank.id, payoutEndDate: addYearsForTests(today, 2)
+  });
+  await dbModule.db.prepare("UPDATE investments SET payout_through = ? WHERE id = ? AND user_id = ?")
+    .run(dayBeforeForTests(today), deposit.id, dbModule.currentUserId());
+  await Promise.all([services.catchUpPayoutCredits(), services.catchUpPayoutCredits()]);
+  const balance = (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise;
+  assert(balance === 1_000_00, `The bank should have one 1,000 payout, it has ${balance}.`);
+});
+
+/* ---------- review fix 3: the server's "today" is the owner's today ---------- */
+
+test("a server on a UTC host still dates the day in India", () => {
+  /*
+   * Vercel runs functions in UTC, and nothing pinned the time zone, so between midnight and
+   * 5:30 am in India the server's today was still yesterday. A phone defaulting a new entry to
+   * today was then refused with "cannot be dated in the future", and the debits ran a day late.
+   *
+   * A child process started with TZ=UTC -- the host Vercel gives -- loads the server and is asked
+   * which day 20:00 UTC on 30 November is. In India that is 1:30 am on 1 December.
+   */
+  const probe = `
+    await import(${JSON.stringify(new URL("../server/services.ts", import.meta.url).href)});
+    const instant = new Date("2026-11-30T20:00:00Z");
+    console.log(instant.getFullYear() + "-" + String(instant.getMonth() + 1).padStart(2, "0") + "-" + String(instant.getDate()).padStart(2, "0"));
+  `;
+  const run = spawnSync(process.execPath, ["--no-warnings", "--input-type=module", "-e", probe], {
+    env: { ...process.env, TZ: "UTC" },
+    encoding: "utf8"
+  });
+  const day = (run.stdout || "").trim().split("\n").pop();
+  assert(run.status === 0, `the probe did not run: ${run.stderr}`);
+  assert(day === "2026-12-01", `On a UTC host the server dated 1:30 am IST as ${day}, not 2026-12-01.`);
+});
+
+/* ---------- review fix 4: an unreadable amount is an error, not a zero ---------- */
+
+test("an amount that cannot be read is refused with its own text, never saved as zero", async () => {
+  const { strictAmountToPaise } = await import("../src/format.ts");
+  // The one that started this: a capital O for a zero.
+  for (const typo of ["4,54,548.5O", "5l", "5 lakh", "abc", "-200"]) {
+    let message = "";
+    try { strictAmountToPaise(typo, "Opening outstanding"); } catch (error) { message = (error as Error).message; }
+    assert(message.includes("Opening outstanding"), `"${typo}" was not refused, or the refusal did not name the field: "${message}"`);
+    assert(message.includes(typo), `the refusal for "${typo}" did not quote what was typed: "${message}"`);
+  }
+  assert(strictAmountToPaise("4,54,548.50", "x") === 45454850, "a well-formed lakh figure should still read");
+  assert(strictAmountToPaise("₹ 1,000", "x") === 100000, "a rupee sign and spaces should still be accepted");
+  assert(strictAmountToPaise("", "x") === 0, "an empty optional field should still be zero");
+
+  /* And the fields that accept zero use it at save time. These are the ones where a silent zero
+     went straight into the record: a loan's opening balance, an account's balance and limit and
+     minimum, a holding's invested and current value. */
+  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  for (const field of [
+    "strictAmountToPaise(outstanding", "strictAmountToPaise(invested", "strictAmountToPaise(currentValue",
+    "strictAmountToPaise(starting", "strictAmountToPaise(limit", "strictAmountToPaise(minimumBalance",
+    "strictAmountToPaise(draft.opening", "strictAmountToPaise(draft.limit", "strictAmountToPaise(draft.minimum"
+  ]) {
+    assert(app.includes(field), `a zero-accepting field still saves without the strict parser: ${field}`);
+  }
+});
+
+/* ---------- review fix 5: one person's preferences are not everyone's ---------- */
+
+test("simple mode, holding grouping and the policy reminder belong to the person who set them", async () => {
+  const owner = dbModule.currentUserId();
+  const other = randomUUID();
+  const later = new Date(Date.now() + 2 * 86_400_000).toISOString().replace("T", " ").slice(0, 19);
+  await dbModule.db
+    .prepare("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)")
+    .run(other, `prefs-${other.slice(0, 8)}@example.test`, "x", later);
+  await dbModule.seedPerson(other);
+
+  // The owner changes all three.
+  await services.updateAppSettings({ simpleMode: true, holdingGrouping: "month", insuranceReminderDays: 45 });
+  const mine = await services.getSettings();
+  assert(mine.simple_mode === "1" && mine.holding_grouping === "month" && mine.insurance_reminder_days === "45",
+    `the owner's own changes did not stick: ${JSON.stringify(mine)}`);
+
+  // The other person sees none of them.
+  const theirs = await dbModule.runAsUserAsync(other, () => services.getSettings());
+  for (const key of ["simple_mode", "holding_grouping", "insurance_reminder_days"]) {
+    assert(theirs[key] === undefined, `${key} leaked to another account: it reads ${JSON.stringify(theirs[key])}.`);
+  }
+
+  // Put the owner back, so later tests see the default.
+  await services.updateAppSettings({ simpleMode: false, holdingGrouping: "year", insuranceReminderDays: 30 });
+  assert(dbModule.currentUserId() === owner, "the test left the wrong person in scope");
+});
+
+test("a preference left in the shared table moves to the owner and leaves the shared table", async () => {
+  /* What a database from before this fix holds: the value in app_settings, read by everyone. */
+  const owner = await dbModule.ownerId();
+  await dbModule.db.prepare("DELETE FROM user_settings WHERE user_id = ? AND key = 'simple_mode'").run(owner);
+  await dbModule.db.prepare(
+    "INSERT INTO app_settings (key, value) VALUES ('simple_mode', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+  ).run();
+  await dbModule.movePerPersonSettingsToOwner();
+  await dbModule.movePerPersonSettingsToOwner(); // safe twice
+
+  const shared = await dbModule.db.prepare("SELECT value FROM app_settings WHERE key = 'simple_mode'").get();
+  assert(shared === undefined, "the shared copy is still there for everyone to read");
+  const owned = (await dbModule.db
+    .prepare("SELECT value FROM user_settings WHERE user_id = ? AND key = 'simple_mode'").get(owner)) as { value: string } | undefined;
+  assert(owned?.value === "1", `the owner lost their setting in the move: ${JSON.stringify(owned)}`);
+  await services.updateAppSettings({ simpleMode: false });
+});
+
+/* ---------- review fix 6: a yearly AutoPay is announced once a year ---------- */
+
+test("the bell announces a yearly or quarterly AutoPay only in the months it debits", () => {
+  const sub = (cadence: string) => ({
+    id: cadence, name: `QA ${cadence}`, amountPaise: 149900, startDate: "2026-01-10",
+    endDate: "2030-01-10", cadence, paymentCount: 1, status: "active" as const,
+    accountId: "a", accountName: "HDFC", isArchived: false
+  });
+  const bell = (cadence: string, today: string) =>
+    attentionItems({ accounts: [], loans: [], subscriptions: [sub(cadence)], uncategorizedCount: 0, cardAlertPercent: 30, today })
+      .filter((item) => item.id.startsWith("autopay-")).length;
+
+  // Debits on the 10th; each "today" below is three days before a 10th.
+  assert(bell("yearly", "2026-05-07") === 0, "a yearly AutoPay was announced in May, which it does not debit in");
+  assert(bell("yearly", "2026-11-07") === 0, "a yearly AutoPay was announced in November");
+  assert(bell("yearly", "2027-01-07") === 1, "a yearly AutoPay was not announced in its own month");
+  assert(bell("quarterly", "2026-04-07") === 1, "a quarterly AutoPay was not announced in April, a quarter on");
+  assert(bell("quarterly", "2026-05-07") === 0, "a quarterly AutoPay was announced in May, between quarters");
+  assert(bell("monthly", "2026-05-07") === 1, "a monthly AutoPay stopped being announced");
+});
+
+test("upcoming payments list a yearly AutoPay only in the month it debits", async () => {
+  const suffix = Math.random().toString(36).slice(2, 7);
+  // Created directly so its start date can sit in the past without anything being debited.
+  const id = `qa-up-${suffix}`;
+  await dbModule.db.prepare(
+    `INSERT INTO autopay_subscriptions (id, name, amount_paise, start_date, duration_months, end_date, cadence, user_id)
+     VALUES (?, ?, 149900, '2026-01-10', 48, '2030-01-10', 'yearly', ?)`
+  ).run(id, `QA Upcoming yearly ${suffix}`, dbModule.currentUserId());
+  const listed = async (today: string) =>
+    (await services.getUpcomingPayments(14, today)).items.some((item: { id?: string; name?: string }) => (item.id ?? "").includes(id) || item.name === `QA Upcoming yearly ${suffix}`);
+  assert(!(await listed("2026-05-07")), "a yearly AutoPay was listed as upcoming in May");
+  assert(await listed("2027-01-07"), "a yearly AutoPay was not listed as upcoming in its own month");
+});
+
+/* ---------- review fix 7: the sign-in limit holds across server instances ---------- */
+
+test("ten failed sign-ins lock that email for a while, wherever the attempts land", async () => {
+  /*
+   * The limit used to be counted in memory, and on Vercel every function instance keeps its own
+   * count and loses it on a cold start, so ten tries became ten per instance. Counted in the
+   * database instead, it is one count however many instances the attempts are spread over.
+   */
+  const auth = await import("../server/auth.ts");
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const email = `lockout-${suffix}@example.test`;
+  const later = new Date(Date.now() + 3 * 86_400_000).toISOString().replace("T", " ").slice(0, 19);
+  await dbModule.db.prepare("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)")
+    .run(randomUUID(), email, await auth.hashPassword("right-horse-battery"), later);
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    assert((await auth.signIn(email, `wrong-${attempt}`)) === undefined, "a wrong password signed in");
+  }
+  let status = 0;
+  try { await auth.signIn(email, "right-horse-battery"); } catch (error) { status = (error as { statusCode?: number }).statusCode ?? -1; }
+  assert(status === 429, `after ten failures the right password should be refused with 429, got ${status || "a session"}`);
+
+  // Case and spaces do not make it a different account.
+  status = 0;
+  try { await auth.signIn(`  ${email.toUpperCase()} `, "right-horse-battery"); } catch (error) { status = (error as { statusCode?: number }).statusCode ?? -1; }
+  assert(status === 429, "the lock was sidestepped by changing the email's case");
+
+  // Another account is not affected.
+  const otherEmail = `lockout-other-${suffix}@example.test`;
+  await dbModule.db.prepare("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)")
+    .run(randomUUID(), otherEmail, await auth.hashPassword("other-horse"), later);
+  assert((await auth.signIn(otherEmail, "other-horse")) !== undefined, "one locked account locked out another");
+
+  // Failures older than the window no longer count.
+  await dbModule.db.prepare("UPDATE sign_in_failures SET failed_at = '2000-01-01T00:00:00.000Z' WHERE email = ?").run(email);
+  assert((await auth.signIn(email, "right-horse-battery")) !== undefined, "old failures still locked the account");
+});
+
+/* ---------- review fix 8: a counting figure lands on its own label ---------- */
+
+test("a counting tile ends on exactly the text its label carries, in every format", async () => {
+  const { countFormatterFor, formatINR, formatINRWhole, formatINRCompact } = await import("../src/format.ts");
+  const paise = 1_85_00_000; // Rs 1,85,000
+  for (const label of [formatINRWhole(paise), formatINR(paise + 37), formatINRCompact(paise * 10)]) {
+    const amount = label === formatINR(paise + 37) ? paise + 37 : label === formatINRCompact(paise * 10) ? paise * 10 : paise;
+    const landed = countFormatterFor(label, amount)(amount);
+    assert(landed === label, `a tile labelled "${label}" would count up to "${landed}"`);
+  }
+});
+
+/* ---------- review fix 9: the form's default end date is the date the server would compute ---------- */
+
+test("a year on from a leap day is the day the server says, in the form as on the server", async () => {
+  const { addYearsToISO } = await import("../src/format.ts");
+  // The oracle is the server's own month arithmetic, not a re-implementation of it.
+  for (const [start, years] of [["2024-02-29", 1], ["2024-02-29", 4], ["2026-01-31", 1], ["2026-11-28", 1]] as const) {
+    const server = services.addMonthsToIsoDate(start, years * 12);
+    assert(addYearsToISO(start, years) === server, `${start} + ${years} year: the form says ${addYearsToISO(start, years)}, the server ${server}.`);
+  }
+});
+
 let failed = 0;
 let ran = 0;
 

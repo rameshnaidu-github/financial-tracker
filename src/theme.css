@@ -1429,20 +1429,7 @@ select:not([multiple]):not([size]) {
 }
 
 /* Reports equation: soft tiles instead of boxed-in grey rectangles. */
-.cashflow-summary-line,
-.cashflow-equation-part,
-.cashflow-equation-total-card {
-  border-color: transparent;
-  border-radius: 14px;
-  background: var(--panel-soft);
-  box-shadow: inset 0 0 0 1px var(--line);
-}
 
-.cashflow-summary-line.savings,
-.cashflow-equation-total-card {
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
-}
 
 /* Progress and budget bars: solid semantic colour on a quiet track. */
 .loan-progress-bar,
@@ -1609,12 +1596,6 @@ select:not([multiple]):not([size]) {
 .payment-history-title,
 .payment-history-header,
 .report-chart-header span,
-.cashflow-summary-head,
-.cashflow-summary-head span,
-.cashflow-equation-part,
-.cashflow-equation-part span,
-.cashflow-equation-total-card span,
-.cashflow-summary-line span,
 .vacation-budget-head,
 .vacation-budget-head span,
 .danger-action {
@@ -1622,9 +1603,6 @@ select:not([multiple]):not([size]) {
   letter-spacing: 0;
 }
 
-.cashflow-equation-part span,
-.cashflow-equation-total-card span,
-.cashflow-summary-line span,
 .vacation-budget-head span,
 .payment-history-title {
   font-size: 0.78rem;
@@ -6439,3 +6417,17 @@ button.budget-hint-chip:focus-visible {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: color-mix(in srgb, var(--danger) 72%, var(--text));
 }
+
+/* ---------- The trend chart's one accent ---------- */
+/*
+ * Every bar used to be the accent. Twenty-two bars in one green across two charts, which is an
+ * accent spent on everything and therefore on nothing. The months that have been and gone are
+ * a neutral step -- still readable, still comparable, because the comparison is carried by the
+ * height -- and the colour is kept for the month still in progress.
+ */
+.trend-bar:not(.is-latest) {
+  fill: color-mix(in srgb, var(--muted) 46%, transparent);
+}
+
+
+

@@ -160,16 +160,48 @@ export async function endSession(token: string | undefined): Promise<void> {
  * It costs the same whether the account exists or not: without the second hash, how long this
  * takes would tell an attacker which email addresses have accounts here.
  */
+/*
+ * Ten failures in fifteen minutes locks that email until they age out.
+ *
+ * Counted in the database because the route's own limit is counted in memory, and on Vercel
+ * every function instance keeps its own count and loses it on a cold start: ten tries became ten
+ * per instance. Keyed by email, not IP, because behind Vercel's proxy the address Fastify sees is
+ * not reliably the visitor's. The cost of keying by email is that someone who knows an address
+ * can lock it for fifteen minutes; for an invite-only application that is the right trade.
+ */
+const FAILURE_LIMIT = 10;
+const FAILURE_WINDOW_MS = 15 * 60 * 1000;
+
+function signInKey(email: string) {
+  return String(email ?? "").trim().toLowerCase();
+}
+
 export async function signIn(email: string, password: string): Promise<Session | undefined> {
+  const key = signInKey(email);
+  const since = new Date(Date.now() - FAILURE_WINDOW_MS).toISOString();
+  const recent = (await db
+    .prepare("SELECT COUNT(*) AS n FROM sign_in_failures WHERE email = ? AND failed_at > ?")
+    .get(key, since)) as { n: number | string };
+  // Checked before the hash, so a locked address costs nothing to keep knocking on.
+  if (Number(recent.n) >= FAILURE_LIMIT) {
+    throw Object.assign(new Error("Too many attempts for this email. Try again in 15 minutes."), {
+      statusCode: 429
+    });
+  }
+
   const person = (await db
     .prepare("SELECT id, password_hash FROM users WHERE email = ?")
     .get(String(email ?? "").trim())) as { id: string; password_hash: string | null } | undefined;
 
-  if (!person?.password_hash) {
-    await verifyPassword(String(password ?? ""), DECOY_HASH);
-    return undefined;
-  }
-  if (!(await verifyPassword(String(password ?? ""), person.password_hash))) {
+  const ok = person?.password_hash
+    ? await verifyPassword(String(password ?? ""), person.password_hash)
+    : (await verifyPassword(String(password ?? ""), DECOY_HASH), false);
+  if (!ok || !person) {
+    // Rows past the window no longer count, so they go -- otherwise this table only ever grows.
+    await db.prepare("DELETE FROM sign_in_failures WHERE failed_at <= ?").run(since);
+    await db
+      .prepare("INSERT INTO sign_in_failures (email, failed_at) VALUES (?, ?)")
+      .run(key, new Date().toISOString());
     return undefined;
   }
   return startSession(person.id);
