@@ -154,6 +154,70 @@ export function insuranceKindLabel(kind: string) {
   return INSURANCE_KINDS.find((item) => item.id === kind)?.label ?? "Other";
 }
 
+/**
+ * How long before a policy lapses it starts saying so.
+ *
+ * Thirty days is the usual renewal window for health and motor cover here, and it is a setting
+ * rather than a constant for the same reason the card-utilisation alert is one: the right
+ * number depends on the person, not on the application.
+ */
+export const INSURANCE_REMINDER_DEFAULT_DAYS = 30;
+
+export function insuranceReminderDaysFromSettings(settings: Record<string, string> | undefined) {
+  const parsed = Number(settings?.insurance_reminder_days ?? INSURANCE_REMINDER_DEFAULT_DAYS);
+  /* Anything the application did not write -- a hand-edited row, a blank, a word -- falls back
+     rather than producing NaN days, which compares false against everything and would turn the
+     reminder off without saying so. */
+  return Number.isFinite(parsed) && parsed >= 1 && parsed <= 365 ? Math.round(parsed) : INSURANCE_REMINDER_DEFAULT_DAYS;
+}
+
+/**
+ * Whole days from one calendar day to another.
+ *
+ * Counted in UTC from the date parts. Built from local `Date`s instead, the clocks going
+ * forward inside the span would make it 29.96 days and `Math.round` would have to paper over
+ * it; in UTC every day is 24 hours and the division is exact.
+ */
+export function daysBetweenIsoDates(from: string, to: string) {
+  const [fromYear, fromMonth, fromDay] = from.split("-").map(Number);
+  const [toYear, toMonth, toDay] = to.split("-").map(Number);
+  return Math.round(
+    (Date.UTC(toYear, toMonth - 1, toDay) - Date.UTC(fromYear, fromMonth - 1, fromDay)) / 86_400_000
+  );
+}
+
+export type PolicyExpiry = {
+  /** "fine" is out of the window, "soon" is inside it, "lapsed" is cover already ended. */
+  state: "fine" | "soon" | "lapsed";
+  /** Days until cover ends. Zero on the day it ends, negative once it has. */
+  daysLeft: number;
+};
+
+/**
+ * Where a policy stands against its end date.
+ *
+ * `endDate` is exclusive throughout this application -- cover ends on that day, no premium
+ * falls on it, and the policy reads expired from it. So a policy whose end date is today has
+ * lapsed; it does not have one day left. That is the boundary this is written for, and the one
+ * a reminder gets wrong if it gets anything wrong.
+ */
+export function policyExpiry(endDate: string, today: string, windowDays: number): PolicyExpiry {
+  const daysLeft = daysBetweenIsoDates(today, endDate);
+  if (daysLeft <= 0) return { state: "lapsed", daysLeft };
+  return { state: daysLeft <= windowDays ? "soon" : "fine", daysLeft };
+}
+
+/** What the card and the bell both say, so they cannot word it differently. */
+export function policyExpiryLabel(expiry: PolicyExpiry) {
+  if (expiry.state === "lapsed") {
+    const over = Math.abs(expiry.daysLeft);
+    if (over === 0) return "Cover ended today";
+    return `Cover ended ${over} day${over === 1 ? "" : "s"} ago`;
+  }
+  if (expiry.daysLeft === 1) return "Last day of cover";
+  return `${expiry.daysLeft} days of cover left`;
+}
+
 export function insuranceKindIcon(kind: string) {
   return INSURANCE_KINDS.find((item) => item.id === kind)?.icon ?? "receipt";
 }
@@ -856,6 +920,8 @@ export const DEFAULT_HOLDING_GROUPING = "year";
 export const updateSettingsSchema = z
   .object({
     cardUtilizationAlertPercent: z.number().int().min(1).max(100).optional(),
+    /** How many days before a policy lapses it starts warning. */
+    insuranceReminderDays: z.number().int().min(1).max(365).optional(),
     holdingGrouping: z.enum(HOLDING_GROUPING_IDS).optional(),
     /** Simple mode: the application cut down to a handful of sections, on every screen. */
     simpleMode: z.boolean().optional(),

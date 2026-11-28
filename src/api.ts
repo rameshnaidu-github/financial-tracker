@@ -120,6 +120,7 @@ export const Api = {
     api<UserProfile>("/api/profile", { method: "PATCH", body }),
   updateSettings: (body: {
     cardUtilizationAlertPercent?: number;
+    insuranceReminderDays?: number;
     holdingGrouping?: HoldingGrouping;
     simpleMode?: boolean;
   }) =>

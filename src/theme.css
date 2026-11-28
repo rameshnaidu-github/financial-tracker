@@ -6405,3 +6405,37 @@ button.budget-hint-chip:focus-visible {
     font-size: 0.625rem;
   }
 }
+
+/* ---------- A policy saying it is about to lapse ---------- */
+/*
+ * Two states, two weights. "Expires in three weeks" is a thing to plan; "it has lapsed" is a
+ * thing to stop and fix, and on motor cover a legal one. So the first is the warning tint the
+ * rest of the application uses for something due, and the second is the danger tint it uses
+ * for something wrong -- the same two colours a card bill and an overdue EMI already speak in,
+ * rather than a third vocabulary invented for this page.
+ */
+.policy-expiry-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--radius-control);
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.policy-expiry-note .ui-icon {
+  flex: 0 0 auto;
+}
+
+.policy-expiry-note.is-soon {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: color-mix(in srgb, var(--warning) 72%, var(--text));
+}
+
+.policy-expiry-note.is-lapsed {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: color-mix(in srgb, var(--danger) 72%, var(--text));
+}
