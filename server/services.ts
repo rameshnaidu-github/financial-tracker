@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import ExcelJS from "exceljs";
 import {
   AUTOPAY_SUBCATEGORY_ID,
+  INSURANCE_SUBCATEGORY_ID,
+  cadenceMonths,
   INCOME_TYPE_ID,
   INFLOW_BEHAVIORS,
   EMI_SUBCATEGORY_IDS,
@@ -18,6 +20,8 @@ import {
   SELF_TRANSFER_SUBCATEGORY_ID,
   createAccountSchema,
   createAutopaySubscriptionSchema,
+  createInsurancePolicySchema,
+  updateInsurancePolicySchema,
   createBudgetLineSchema,
   createBatchSchema,
   createCategoryTypeSchema,
@@ -41,6 +45,8 @@ import {
   type BudgetScopeType,
   type CreateAccountInput,
   type CreateAutopaySubscriptionInput,
+  type CreateInsurancePolicyInput,
+  type UpdateInsurancePolicyInput,
   type CreateBudgetLineInput,
   type CreateCategoryTypeInput,
   type CreateInvestmentInput,
@@ -662,7 +668,11 @@ export type AutopaySubscriptionRow = {
   name: string;
   amount_paise: number;
   start_date: string;
+  /* Kept in step with `end_date` but never read. See the migration note in schema.ts: the
+     column stays so a rollback to the previous build finds the number it expects. */
   duration_months: number;
+  end_date: string;
+  cadence: string;
   account_id: string | null;
   debited_through: string | null;
   is_archived: number;
@@ -675,8 +685,9 @@ export type AutopaySubscriptionSummary = {
   name: string;
   amountPaise: number;
   startDate: string;
-  durationMonths: number;
-  expiryDate: string;
+  /** Exclusive: nothing is taken on this day or after it. */
+  endDate: string;
+  cadence: string;
   paymentCount: number;
   status: "active" | "expired";
   /** The bank it is taken from. Without one it only reminds; with one it pays itself. */
@@ -689,7 +700,7 @@ export async function listAutopaySubscriptions(includeArchived = false): Promise
   const rows = asRecords<AutopaySubscriptionRow>(
     (await db
       .prepare(
-        `SELECT id, name, amount_paise, start_date, duration_months, account_id, debited_through,
+        `SELECT id, name, amount_paise, start_date, duration_months, end_date, cadence, account_id, debited_through,
                 is_archived, created_at, updated_at
          FROM autopay_subscriptions
          WHERE user_id = ?${includeArchived ? "" : " AND is_archived = 0"}
@@ -710,10 +721,13 @@ export async function createAutopaySubscription(input: CreateAutopaySubscription
   }
   (await db.prepare(
     `INSERT INTO autopay_subscriptions
-      (id, name, amount_paise, start_date, duration_months, account_id, debited_through, user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, name, amount_paise, start_date, duration_months, end_date, cadence, account_id,
+       debited_through, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
-    id, parsed.name, parsed.amountPaise, parsed.startDate, parsed.durationMonths,
+    id, parsed.name, parsed.amountPaise, parsed.startDate,
+    monthsBetween(parsed.startDate, parsed.endDate),
+    parsed.endDate, parsed.cadence,
     parsed.accountId ?? null,
     // Counted from the later of the subscription's start and today: attaching a bank to a
     // subscription that began two years ago must not drain the account with two years of
@@ -738,7 +752,8 @@ export async function updateAutopaySubscription(
     name: patch.name ??(await existing).name,
     amountPaise: patch.amountPaise ??(await existing).amount_paise,
     startDate: patch.startDate ??(await existing).start_date,
-    durationMonths: patch.durationMonths ??(await existing).duration_months,
+    endDate: patch.endDate ??(await existing).end_date,
+    cadence: patch.cadence ??(await existing).cadence,
     accountId: patched(patch, "accountId",(await existing).account_id),
     isArchived: patch.isArchived ?? Boolean((await existing).is_archived)
   };
@@ -753,23 +768,30 @@ export async function updateAutopaySubscription(
       ?(await existing).debited_through
       : previousDay(laterOf(merged.startDate, currentIsoDate()));
 
+  /* The whole merged row back through the create schema, so a patch setting only one of the
+     two dates is still checked against the stored other -- which the update schema cannot do,
+     because it never sees the stored one. */
   createAutopaySubscriptionSchema.parse({
     name: merged.name,
     amountPaise: merged.amountPaise,
     startDate: merged.startDate,
-    durationMonths: merged.durationMonths
+    endDate: merged.endDate,
+    cadence: merged.cadence
   });
 
   (await db.prepare(
     `UPDATE autopay_subscriptions
-     SET name = ?, amount_paise = ?, start_date = ?, duration_months = ?, account_id = ?,
-         debited_through = ?, is_archived = ?, updated_at = CURRENT_TIMESTAMP
+     SET name = ?, amount_paise = ?, start_date = ?, duration_months = ?, end_date = ?,
+         cadence = ?, account_id = ?, debited_through = ?, is_archived = ?,
+         updated_at = CURRENT_TIMESTAMP
      WHERE id = ? AND user_id = ?`
   ).run(
     merged.name,
     merged.amountPaise,
     merged.startDate,
-    merged.durationMonths,
+    monthsBetween(merged.startDate, merged.endDate),
+    merged.endDate,
+    merged.cadence,
     merged.accountId ?? null,
     debitedThrough,
     merged.isArchived ? 1 : 0,
@@ -791,6 +813,20 @@ function previousDay(isoDate: string) {
   const [year, month, day] = isoDate.split("-").map(Number);
   const date = new Date(year, month - 1, day - 1);
   return localIsoDate(date);
+}
+
+/** An AutoPay row, described to the shared engine in the terms it understands. */
+function autopayPlan(row: AutopaySubscriptionRow): ScheduledDebit {
+  return {
+    id: row.id,
+    name: row.name,
+    amountPaise: row.amount_paise,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    cadence: row.cadence,
+    accountId: row.account_id,
+    debitedThrough: row.debited_through
+  };
 }
 
 /**
@@ -840,7 +876,7 @@ export async function catchUpAutopayDebits(today = currentIsoDate()) {
   const skipped: Array<{ id: string; dueDate: string; reason: "short" | "archived" }> = [];
   for (const subscription of subscriptions) {
     const row = await requireAutopayRow(subscription.id);
-    const due = autopayDueDates(row, autopayDebitedThrough(row, today), today);
+    const due = scheduledDueDates(autopayPlan(row), autopayDebitedThrough(row, today), today);
     if (!due.length) continue;
 
     /* A bank that has been archived cannot be taken from, and saying nothing about it is how a
@@ -924,17 +960,53 @@ export async function catchUpAutopayDebits(today = currentIsoDate()) {
   return { paid, skipped };
 }
 
-/** The days this subscription comes out on, after `afterDate` and up to `through`. */
-function autopayDueDates(row: AutopaySubscriptionRow, afterDate: string, through: string) {
-  const expiry = addMonthsToIsoDate(row.start_date, row.duration_months);
+/**
+ * Anything that pays itself on a schedule: a subscription, a policy.
+ *
+ * The two differ in what they are called and where the money is filed, and in nothing about
+ * when it comes out. So the dates are worked out once, here, and both kinds are described to it
+ * in the same five fields.
+ */
+export type ScheduledDebit = {
+  id: string;
+  name: string;
+  amountPaise: number;
+  startDate: string;
+  /** Exclusive. Nothing falls on this day or after it. */
+  endDate: string;
+  cadence: string;
+  accountId: string | null;
+  debitedThrough: string | null;
+};
+
+/**
+ * The days a schedule comes out on, after `afterDate` and up to `through`.
+ *
+ * The step is the cadence's months -- one, three or twelve -- counted from the start date, so a
+ * quarterly schedule starting on the 7th of January falls on the 7th of April and not on the
+ * first of the quarter. An unknown cadence yields nothing rather than falling back to monthly:
+ * taking money every month because a stored value was not recognised is the worst of the
+ * available mistakes.
+ */
+export function scheduledDueDates(plan: ScheduledDebit, afterDate: string, through: string) {
+  const step = cadenceMonths(plan.cadence);
+  if (step <= 0) return [];
   const dates: string[] = [];
-  for (let month = 0; month <= 1200; month += 1) {
-    const due = addMonthsToIsoDate(row.start_date, month);
+  for (let index = 0; index <= 1200; index += 1) {
+    const due = addMonthsToIsoDate(plan.startDate, index * step);
     if (due > through) break;
-    if (due >= expiry) break;
+    if (due >= plan.endDate) break;
     if (due > afterDate) dates.push(due);
   }
   return dates;
+}
+
+/** Whole months from one date to the next, rounded up, for the legacy `duration_months`. */
+function monthsBetween(startDate: string, endDate: string) {
+  for (let months = 1; months <= 1200; months += 1) {
+    if (addMonthsToIsoDate(startDate, months) >= endDate) return months;
+  }
+  return 1200;
 }
 
 /**
@@ -951,6 +1023,300 @@ export async function deleteAutopaySubscription(id: string) {
   await requireAutopayRow(id);
   (await db.prepare("DELETE FROM autopay_subscriptions WHERE id = ? AND user_id = ?").run(id, currentUserId()));
   return { ok: true, mode: "deleted" as const };
+}
+
+/* ---------- Insurance ----------
+ *
+ * A policy pays itself exactly the way an AutoPay does, which is the owner's instruction and
+ * also the right answer: there is one routine in this application that spends money without
+ * being asked, and a second one written beside it would be a second place for the three guards
+ * to be got wrong. So the schedule comes from `scheduledDueDates`, the room check and the
+ * never-back-date rule are the same code, and what differs is the name on the transaction and
+ * the SubType it is filed under.
+ */
+
+export type InsurancePolicyRow = {
+  id: string;
+  kind: string;
+  name: string;
+  policy_number: string;
+  start_date: string;
+  end_date: string;
+  cadence: string;
+  premium_paise: number;
+  account_id: string | null;
+  debited_through: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InsurancePolicySummary = {
+  id: string;
+  kind: string;
+  name: string;
+  policyNumber: string;
+  startDate: string;
+  /** Exclusive: cover ends on this day, and no premium falls on it. */
+  endDate: string;
+  cadence: string;
+  premiumPaise: number;
+  paymentCount: number;
+  status: "active" | "expired";
+  accountId: string | null;
+  accountName: string | null;
+};
+
+const INSURANCE_COLUMNS = `id, kind, name, policy_number, start_date, end_date, cadence,
+                           premium_paise, account_id, debited_through, created_at, updated_at`;
+
+function insurancePlan(row: InsurancePolicyRow): ScheduledDebit {
+  return {
+    id: row.id,
+    name: row.name,
+    amountPaise: row.premium_paise,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    cadence: row.cadence,
+    accountId: row.account_id,
+    debitedThrough: row.debited_through
+  };
+}
+
+async function mapInsurancePolicy(row: InsurancePolicyRow): Promise<InsurancePolicySummary> {
+  const paymentCount = asRecord<{ count: number }>(
+    (await db
+      .prepare("SELECT COUNT(*) AS count FROM insurance_payments WHERE policy_id = ? AND user_id = ?")
+      .get(row.id, currentUserId()))
+  ).count;
+  const account = row.account_id ? await getAccountRow(row.account_id) : undefined;
+  return {
+    id: row.id,
+    kind: row.kind,
+    name: row.name,
+    policyNumber: row.policy_number,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    cadence: row.cadence,
+    premiumPaise: row.premium_paise,
+    paymentCount,
+    /* Expired the day cover ends, not the day after: the end date is exclusive everywhere in
+       this scope, and a policy that reads "active" on the morning it lapses is a lie you only
+       find out about at a hospital desk. */
+    status: currentIsoDate() >= row.end_date ? "expired" : "active",
+    accountId: row.account_id,
+    accountName: account?.name ?? null
+  };
+}
+
+async function requireInsuranceRow(id: string) {
+  const row = asRecord<InsurancePolicyRow | undefined>(
+    (await db
+      .prepare(`SELECT ${INSURANCE_COLUMNS} FROM insurance_policies WHERE id = ? AND user_id = ?`)
+      .get(id, currentUserId()))
+  );
+  if (!row) throw notFound("That policy does not exist.");
+  return row;
+}
+
+async function requireInsuranceSummary(id: string) {
+  return mapInsurancePolicy(await requireInsuranceRow(id));
+}
+
+export async function listInsurancePolicies(): Promise<InsurancePolicySummary[]> {
+  const rows = asRecords<InsurancePolicyRow>(
+    (await db
+      .prepare(
+        `SELECT ${INSURANCE_COLUMNS} FROM insurance_policies WHERE user_id = ?
+         ORDER BY end_date DESC, name ASC`
+      )
+      .all(currentUserId()))
+  );
+  return Promise.all(rows.map(mapInsurancePolicy));
+}
+
+export async function createInsurancePolicy(input: CreateInsurancePolicyInput): Promise<InsurancePolicySummary> {
+  const parsed = createInsurancePolicySchema.parse(input);
+  const id = randomUUID();
+  if (parsed.accountId) await requireDebitAccount(parsed.accountId);
+
+  (await db.prepare(
+    `INSERT INTO insurance_policies
+      (id, kind, name, policy_number, start_date, end_date, cadence, premium_paise, account_id,
+       debited_through, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id, parsed.kind, parsed.name, parsed.policyNumber, parsed.startDate, parsed.endDate,
+    parsed.cadence, parsed.premiumPaise, parsed.accountId ?? null,
+    // The same rule AutoPay has: a policy taken out two years ago and only now given an account
+    // starts paying from today, not from two years of back-dated premiums.
+    parsed.accountId ? previousDay(laterOf(parsed.startDate, currentIsoDate())) : null,
+    currentUserId()
+  ));
+  if (parsed.accountId) await catchUpInsuranceDebits();
+  return requireInsuranceSummary(id);
+}
+
+export async function updateInsurancePolicy(
+  id: string,
+  input: UpdateInsurancePolicyInput
+): Promise<InsurancePolicySummary> {
+  const existing = await requireInsuranceRow(id);
+  const patch = updateInsurancePolicySchema.parse(input);
+  const merged = {
+    kind: patch.kind ?? existing.kind,
+    name: patch.name ?? existing.name,
+    policyNumber: patch.policyNumber ?? existing.policy_number,
+    startDate: patch.startDate ?? existing.start_date,
+    endDate: patch.endDate ?? existing.end_date,
+    cadence: patch.cadence ?? existing.cadence,
+    premiumPaise: patch.premiumPaise ?? existing.premium_paise,
+    accountId: patched(patch, "accountId", existing.account_id)
+  };
+  if (merged.accountId) await requireDebitAccount(merged.accountId);
+  const debitedThrough = !merged.accountId
+    ? null
+    : existing.account_id
+      ? existing.debited_through
+      : previousDay(laterOf(merged.startDate, currentIsoDate()));
+
+  /* The merged row back through the create schema, so a patch that moves only one of the two
+     dates is still checked against the stored other. */
+  createInsurancePolicySchema.parse({
+    kind: merged.kind,
+    name: merged.name,
+    policyNumber: merged.policyNumber,
+    startDate: merged.startDate,
+    endDate: merged.endDate,
+    cadence: merged.cadence,
+    premiumPaise: merged.premiumPaise
+  });
+
+  (await db.prepare(
+    `UPDATE insurance_policies
+     SET kind = ?, name = ?, policy_number = ?, start_date = ?, end_date = ?, cadence = ?,
+         premium_paise = ?, account_id = ?, debited_through = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_id = ?`
+  ).run(
+    merged.kind, merged.name, merged.policyNumber, merged.startDate, merged.endDate,
+    merged.cadence, merged.premiumPaise, merged.accountId ?? null, debitedThrough,
+    id, currentUserId()
+  ));
+  if (merged.accountId) await catchUpInsuranceDebits();
+  return requireInsuranceSummary(id);
+}
+
+/**
+ * Deletes a policy and leaves every premium it ever paid.
+ *
+ * The same argument as deleting a subscription: the transactions are money that actually left
+ * the account, and a policy being wrong about the future says nothing about the past. The link
+ * rows in `insurance_payments` cascade away because they point at something that no longer
+ * exists; the transactions they pointed at are untouched by that cascade, which is the whole
+ * reason the link lives in a table of its own.
+ */
+export async function deleteInsurancePolicy(id: string) {
+  await requireInsuranceRow(id);
+  const linked = asRecord<{ count: number }>(
+    (await db
+      .prepare("SELECT COUNT(*) AS count FROM insurance_payments WHERE user_id = ? AND policy_id = ?")
+      .get(currentUserId(), id))
+  );
+  (await db.prepare("DELETE FROM insurance_policies WHERE id = ? AND user_id = ?").run(id, currentUserId()));
+  return { ok: true, mode: "deleted" as const, paymentsUnlinked: linked.count };
+}
+
+/**
+ * Take every premium that has fallen due, from the account the policy is set to come out of.
+ *
+ * Deliberately timid, in the same three ways the AutoPay run is, and for the same reasons:
+ * it pays only what the account covers at the moment it runs, it never back-dates, and it
+ * leaves alone any period already recorded by hand. A premium is a larger single amount than a
+ * subscription -- a yearly policy takes a year at once -- so "the balance did not cover it" is
+ * a more ordinary outcome here, and it is reported as a visible skip rather than passed over.
+ */
+export async function catchUpInsuranceDebits(today = currentIsoDate()) {
+  const rows = asRecords<InsurancePolicyRow>(
+    (await db
+      .prepare(`SELECT ${INSURANCE_COLUMNS} FROM insurance_policies WHERE user_id = ? AND account_id IS NOT NULL`)
+      .all(currentUserId()))
+  );
+
+  let paid = 0;
+  const skipped: Array<{ id: string; dueDate: string; reason: "short" | "archived" }> = [];
+  for (const row of rows) {
+    const plan = insurancePlan(row);
+    const from = row.debited_through ?? previousDay(laterOf(row.start_date, today));
+    const due = scheduledDueDates(plan, from, today);
+    if (!due.length) continue;
+
+    const fundingAccount = await getAccountRow(row.account_id as string);
+    if (!fundingAccount || fundingAccount.is_archived) {
+      skipped.push({ id: row.id, dueDate: due[0], reason: "archived" });
+      continue;
+    }
+
+    /* Already-paid periods, keyed by month. One premium falls in any given month whatever the
+       cadence, so the month is enough to tell "already entered by hand" from "due again". */
+    const paidMonths = new Set(
+      asRecords<{ month: string }>(
+        (await db
+          .prepare(
+            `SELECT DISTINCT substr(t.date, 1, 7) AS month
+             FROM insurance_payments ip JOIN transactions t ON t.id = ip.transaction_id AND t.user_id = ip.user_id
+             WHERE ip.policy_id = ? AND ip.user_id = ?`
+          )
+          .all(row.id, currentUserId()))
+      ).map((item) => item.month)
+    );
+
+    let through = row.debited_through;
+    for (const date of due) {
+      if (paidMonths.has(date.slice(0, 7))) {
+        through = date;
+        continue;
+      }
+      const account = await mapAccountWithBalance(await requireAccount(row.account_id as string));
+      const room =
+        account.type === "credit_card"
+          ? account.creditLimitPaise === null
+            ? Number.MAX_SAFE_INTEGER
+            : (account.availableLimitPaise ?? Math.max(account.creditLimitPaise - account.outstandingPaise, 0))
+          : account.balancePaise;
+      if (room < row.premium_paise) {
+        skipped.push({ id: row.id, dueDate: date, reason: "short" });
+        break;
+      }
+      await transaction(async () => {
+        const transactionId = await insertValidatedTransaction(
+          createTransactionSchema.parse({
+            date,
+            accountId: row.account_id,
+            method: account.type === "credit_card" ? "credit_card" : "bank_transfer",
+            merchant: row.name,
+            subcategoryId: INSURANCE_SUBCATEGORY_ID,
+            amountPaise: row.premium_paise,
+            direction: "outflow",
+            kind: "expense"
+          })
+        );
+        if (!transactionId) throw badRequest("The premium could not be recorded.");
+        (await db
+          .prepare("INSERT INTO insurance_payments (id, user_id, policy_id, transaction_id) VALUES (?, ?, ?, ?)")
+          .run(randomUUID(), currentUserId(), row.id, transactionId));
+        (await db
+          .prepare("UPDATE insurance_policies SET debited_through = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?")
+          .run(date, row.id, currentUserId()));
+      });
+      through = date;
+      paid += 1;
+    }
+    if (through && through !== row.debited_through) {
+      (await db
+        .prepare("UPDATE insurance_policies SET debited_through = ? WHERE id = ? AND user_id = ?")
+        .run(through, row.id, currentUserId()));
+    }
+  }
+  return { paid, skipped };
 }
 
 type InvestmentRow = {
@@ -3061,7 +3427,7 @@ async function heldBackAutopay(
 ) {
   if (!subscription.accountId) return null;
   const row = await requireAutopayRow(subscription.id);
-  const due = autopayDueDates(row, autopayDebitedThrough(row, today), today)
+  const due = scheduledDueDates(autopayPlan(row), autopayDebitedThrough(row, today), today)
     .filter((date) => !paidMonths.has(date.slice(0, 7)));
   if (!due.length) return null;
   const account = await getAccountRow(subscription.accountId);
@@ -3124,7 +3490,7 @@ export async function getUpcomingPayments(windowDays = 14, today = currentIsoDat
       today,
       windowDays,
       paidMonths,
-      (dueDate) => dueDate >= subscription.startDate && dueDate < subscription.expiryDate
+      (dueDate) => dueDate >= subscription.startDate && dueDate < subscription.endDate
     );
     // A subscription that pays itself may have fallen due and been held back for want of money.
     // That one is shown ahead of whatever comes next, and named: nothing was written, so this
@@ -5286,8 +5652,7 @@ async function mapAutopaySubscription(row: AutopaySubscriptionRow): Promise<Auto
       .prepare("SELECT COUNT(*) AS count FROM autopay_payments WHERE subscription_id = ? AND user_id = ?")
       .get(row.id, currentUserId()))
   ).count;
-  const expiryDate = addMonthsToIsoDate(row.start_date, row.duration_months);
-  const status: "active" | "expired" = currentIsoDate() >= expiryDate ? "expired" : "active";
+  const status: "active" | "expired" = currentIsoDate() >= row.end_date ? "expired" : "active";
   const account = row.account_id ? await getAccountRow(row.account_id) : undefined;
 
   return {
@@ -5295,8 +5660,8 @@ async function mapAutopaySubscription(row: AutopaySubscriptionRow): Promise<Auto
     name: row.name,
     amountPaise: row.amount_paise,
     startDate: row.start_date,
-    durationMonths: row.duration_months,
-    expiryDate,
+    endDate: row.end_date,
+    cadence: row.cadence,
     paymentCount,
     status,
     accountId: row.account_id,
@@ -5309,7 +5674,7 @@ async function requireAutopayRow(id: string) {
   const row = asRecord<AutopaySubscriptionRow | undefined>(
     (await db
       .prepare(
-        `SELECT id, name, amount_paise, start_date, duration_months, account_id, debited_through,
+        `SELECT id, name, amount_paise, start_date, duration_months, end_date, cadence, account_id, debited_through,
                 is_archived, created_at, updated_at
          FROM autopay_subscriptions
          WHERE id = ? AND user_id = ?`

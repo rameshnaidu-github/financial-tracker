@@ -71,6 +71,11 @@ import {
   listAutopaySubscriptions,
   listCategoryTypes,
   catchUpAutopayDebits,
+  catchUpInsuranceDebits,
+  createInsurancePolicy,
+  deleteInsurancePolicy,
+  listInsurancePolicies,
+  updateInsurancePolicy,
   catchUpPayoutCredits,
   catchUpSipInstalments,
   listInvestments,
@@ -359,7 +364,8 @@ app.get("/api/auth/me", async (request) => {
 // holding has paid in, AutoPay taken out -- so everything below describes what has really
 // happened rather than what was due.
 app.get("/api/bootstrap", async () => (
-  await catchUpPayoutCredits(), await catchUpAutopayDebits(), await catchUpSipInstalments(), {
+  await catchUpPayoutCredits(), await catchUpAutopayDebits(), await catchUpInsuranceDebits(),
+  await catchUpSipInstalments(), {
   settings: await getSettings(),
   profile: await getProfile(),
   accounts: (await listAccounts()).filter((account) => !account.isArchived),
@@ -367,6 +373,7 @@ app.get("/api/bootstrap", async () => (
   loans: await listLoans(true),
   cardEmis: await listLoans(true, "card-emi"),
   subscriptions: await listAutopaySubscriptions(true),
+  insurancePolicies: await listInsurancePolicies(),
   investments: await listInvestments(),
   vacations: await listVacations(true)
 }));
@@ -474,6 +481,23 @@ app.patch("/api/subscriptions/:id", async (request) => {
 app.delete("/api/subscriptions/:id", async (request) => {
   const params = request.params as { id: string };
   return deleteAutopaySubscription(params.id);
+});
+
+app.get("/api/insurance", async () => listInsurancePolicies());
+
+app.post("/api/insurance", async (request, reply) => {
+  const policy = await createInsurancePolicy(request.body as never);
+  return reply.status(201).send(policy);
+});
+
+app.patch("/api/insurance/:id", async (request) => {
+  const params = request.params as { id: string };
+  return updateInsurancePolicy(params.id, request.body as never);
+});
+
+app.delete("/api/insurance/:id", async (request) => {
+  const params = request.params as { id: string };
+  return deleteInsurancePolicy(params.id);
 });
 
 app.get("/api/batches/current", async (request) => {

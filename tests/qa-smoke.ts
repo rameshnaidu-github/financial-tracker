@@ -814,7 +814,8 @@ test("preserves archived AutoPay links when editing historical transactions", as
     name: "QA Archived AutoPay",
     amountPaise: 49_900,
     startDate: "2026-07-01",
-    durationMonths: 12
+    endDate: "2027-07-01",
+    cadence: "monthly"
   });
   const payment = await services.createTransaction({
     date: "2026-07-15",
@@ -2309,8 +2310,9 @@ test("upcoming payments list AutoPay and EMIs due soon, skipping months already 
     amountPaise: 649_00,
     startDate: "2007-01-15",
     // The whole scenario is read as of a date in 2007, but whether a subscription has expired is
-    // judged against today, so it needs a run long enough to still be going.
-    durationMonths: 600
+    // judged against today, so it needs to run long enough to still be going.
+    endDate: "2057-01-15",
+    cadence: "monthly"
   });
   const loan = await services.createLoan({
     name: `QA Upcoming Loan ${suffix}`,
@@ -4064,6 +4066,22 @@ async function removeSecondPerson(userId: string) {
   (await dbModule.db.prepare("DELETE FROM users WHERE id = ?").run(userId));
 }
 
+/** The same day, N months on, clamped by Date the way every other month step here is. */
+function addMonthsForTests(isoDate: string, months: number) {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const moved = new Date(year, month - 1 + months, day);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${moved.getFullYear()}-${pad(moved.getMonth() + 1)}-${pad(moved.getDate())}`;
+}
+
+/** The same day, N years on. Used where a test needs an end date rather than a month count. */
+function addYearsForTests(isoDate: string, years: number) {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const moved = new Date(year + years, month - 1, day);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${moved.getFullYear()}-${pad(moved.getMonth() + 1)}-${pad(moved.getDate())}`;
+}
+
 function currentIsoDateForTests() {
   const now = new Date();
   return [
@@ -4898,7 +4916,7 @@ test("an AutoPay with a bank takes its own payment, and waits when the balance i
   // 200 against 1,000: taken, leaving 800.
   const paid = await services.createAutopaySubscription({
     name: `QA Netflix ${suffix}`, amountPaise: 200_00, startDate: dueToday,
-    durationMonths: 12, accountId: rich.id
+    endDate: addYearsForTests(dueToday, 1), cadence: "monthly", accountId: rich.id
   });
   const balance = async (id: string) => (await services.listAccounts(true)).find((item) => item.id === id)?.balancePaise;
   assert(await balance(rich.id) === 800_00, `A covered AutoPay should leave 800, got ${await balance(rich.id)}.`);
@@ -4914,7 +4932,7 @@ test("an AutoPay with a bank takes its own payment, and waits when the balance i
   // 200 against 100: nothing happens at all.
   const held = await services.createAutopaySubscription({
     name: `QA Spotify ${suffix}`, amountPaise: 200_00, startDate: dueToday,
-    durationMonths: 12, accountId: poor.id
+    endDate: addYearsForTests(dueToday, 1), cadence: "monthly", accountId: poor.id
   });
   assert(await balance(poor.id) === 100_00, "A payment the bank cannot cover must not be taken.");
   assert(
@@ -5147,7 +5165,8 @@ test("what an edit switches off stays off", async () => {
   // An AutoPay's bank: attached -> removed, and it stops paying itself.
   const subscription = await services.createAutopaySubscription({
     name: `QA Clear AutoPay ${suffix}`, amountPaise: 500_00,
-    startDate: currentIsoDateForTests(), durationMonths: 12, accountId: bank.id
+    startDate: currentIsoDateForTests(), endDate: addYearsForTests(currentIsoDateForTests(), 1),
+    cadence: "monthly", accountId: bank.id
   });
   await services.updateAutopaySubscription(subscription.id, { accountId: null });
   const detached = (await services.listAutopaySubscriptions(true)).find((item) => item.id === subscription.id);
@@ -5632,6 +5651,259 @@ test("only a credit card has a spending history", async () => {
       await services.getCardSpendHistory(bank.id, 6, "2026-06-20");
     },
     "Only a credit card has a spending history to show."
+  );
+});
+
+/* ---------- insurance-16: a cadence for AutoPay, and Insurance beside it ---------- */
+
+test("an AutoPay with no cadence recorded comes out monthly", async () => {
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const bank = await services.createAccount({
+    name: `QA Cadence Default ${suffix}`, type: "bank", startingBalancePaise: 10_000_00
+  });
+  const today = currentIsoDateForTests();
+  const subscription = await services.createAutopaySubscription({
+    name: `QA Default ${suffix}`, amountPaise: 100_00, startDate: today,
+    endDate: addYearsForTests(today, 1), cadence: "monthly", accountId: bank.id
+  });
+  const listed = (await services.listAutopaySubscriptions(true)).find((item) => item.id === subscription.id);
+  assert(listed?.cadence === "monthly", `A subscription with nothing said about cadence reported ${listed?.cadence}.`);
+  assert(listed?.paymentCount === 1, "A monthly subscription starting today should have taken today's payment.");
+});
+
+test("a quarterly AutoPay comes out every third month and a yearly one once a year", async () => {
+  /*
+   * The schedule itself, not the money.
+   *
+   * Winding the clock forward to count payments does not work and should not: the application
+   * refuses to write a transaction dated in the future, which is right, and the engine never
+   * back-dates, so a subscription created today has exactly one payment behind it whatever its
+   * cadence. The thing the cadence actually decides is which days fall due, so that is what is
+   * measured -- over four years, where a wrong step size cannot hide.
+   */
+  const plan = (cadence: string) => ({
+    id: "qa", name: "QA", amountPaise: 100_00,
+    startDate: "2026-01-15", endDate: "2030-01-15", cadence, accountId: null, debitedThrough: null
+  });
+  const upTo = "2029-12-31";
+  const monthly = services.scheduledDueDates(plan("monthly"), "2026-01-01", upTo);
+  const quarterly = services.scheduledDueDates(plan("quarterly"), "2026-01-01", upTo);
+  const yearly = services.scheduledDueDates(plan("yearly"), "2026-01-01", upTo);
+
+  assert(quarterly.length === 16, `Four years of quarters is 16 dates, got ${quarterly.length}.`);
+  assert(yearly.length === 4, `Four years of a yearly schedule is 4 dates, got ${yearly.length}.`);
+  assert(monthly.length === 48, `Four years of months is 48 dates, got ${monthly.length}.`);
+
+  assert(
+    quarterly.slice(0, 4).join(",") === "2026-01-15,2026-04-15,2026-07-15,2026-10-15",
+    `A quarterly schedule should step three months from the start date, got ${quarterly.slice(0, 4).join(",")}.`
+  );
+  assert(
+    yearly.slice(0, 3).join(",") === "2026-01-15,2027-01-15,2028-01-15",
+    `A yearly schedule should step twelve months, got ${yearly.slice(0, 3).join(",")}.`
+  );
+  // None of the months in between: the point of a cadence is the ones it does NOT take.
+  assert(
+    !quarterly.some((date) => date.startsWith("2026-02") || date.startsWith("2026-03")),
+    "A quarterly schedule took a payment in a month between its quarters."
+  );
+
+  /* A cadence the application does not recognise schedules nothing. Falling back to monthly
+     would mean an unreadable stored value quietly spending money twelve times a year. */
+  assert(
+    services.scheduledDueDates(plan("fortnightly"), "2026-01-01", upTo).length === 0,
+    "An unrecognised cadence must schedule nothing rather than defaulting to monthly."
+  );
+});
+
+test("a monthly AutoPay is unchanged, and nothing falls on or after the end date", async () => {
+  /*
+   * The end date is exclusive, which is exactly how the month count behaved: twelve months from
+   * January took January to December and not the following January. This is the comparison that
+   * says the migration changed nothing for a monthly subscription.
+   */
+  const plan = {
+    id: "qa", name: "QA", amountPaise: 100_00,
+    startDate: "2026-03-10", endDate: "2027-03-10", cadence: "monthly",
+    accountId: null, debitedThrough: null
+  };
+  const due = services.scheduledDueDates(plan, "2026-01-01", "2030-01-01");
+  assert(due.length === 12, `A year of monthly cover is 12 payments, got ${due.length}.`);
+  assert(due[0] === "2026-03-10", `The first payment should be the start date, got ${due[0]}.`);
+  assert(due[due.length - 1] === "2027-02-10", `The last should be the month before the end, got ${due[due.length - 1]}.`);
+  assert(!due.includes("2027-03-10"), "Nothing may fall on the end date itself.");
+  assert(due.every((date) => date < plan.endDate), "Nothing may fall after the end date.");
+
+  // And end to end: a subscription created today takes today's payment and no more.
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const bank = await services.createAccount({
+    name: `QA Monthly Bank ${suffix}`, type: "bank", startingBalancePaise: 10_00_000_00
+  });
+  const today = currentIsoDateForTests();
+  const subscription = await services.createAutopaySubscription({
+    name: `QA ThreeMonth ${suffix}`, amountPaise: 100_00, startDate: today,
+    endDate: addMonthsForTests(today, 3), cadence: "monthly", accountId: bank.id
+  });
+  const listed = (await services.listAutopaySubscriptions(true)).find((item) => item.id === subscription.id);
+  assert(listed?.paymentCount === 1, `A subscription made today should have taken 1 payment, took ${listed?.paymentCount}.`);
+  assert(listed?.status === "active", "A subscription with months left to run should read active.");
+});
+
+test("an insurance premium is taken on its cadence and filed under Insurance", async () => {
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const bank = await services.createAccount({
+    name: `QA Policy Bank ${suffix}`, type: "bank", startingBalancePaise: 1_00_000_00
+  });
+  const today = currentIsoDateForTests();
+  const policy = await services.createInsurancePolicy({
+    kind: "health", name: `QA Optima ${suffix}`, policyNumber: `POL-${suffix}`,
+    startDate: today, endDate: addYearsForTests(today, 3), cadence: "yearly",
+    premiumPaise: 24_000_00, accountId: bank.id
+  });
+  const balance = async () => (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise;
+  assert(await balance() === 76_000_00, `A yearly premium of 24,000 should leave 76,000, left ${await balance()}.`);
+
+  const listed = (await services.listInsurancePolicies()).find((item) => item.id === policy.id);
+  assert(listed?.paymentCount === 1, `The premium should be tied to its policy, count was ${listed?.paymentCount}.`);
+  assert(listed?.status === "active", "A policy inside its dates should read active.");
+
+  const written = (await services.listTransactions({ accountId: bank.id })).find(
+    (item) => item.merchant === `QA Optima ${suffix}`
+  );
+  assert(Boolean(written), "The premium should be written to the ledger.");
+  assert(
+    written?.subcategoryId === "sub_insurance",
+    `A premium should be filed under Insurance, was filed under ${written?.subcategoryId}.`
+  );
+
+  // The catch-up runs on every page load, so a second run must take nothing more.
+  assert((await services.catchUpInsuranceDebits()).paid === 0, "A second run took the same premium again.");
+  assert(await balance() === 76_000_00, "A second run moved the balance.");
+});
+
+test("a premium the balance cannot cover is left unwritten and reported as short", async () => {
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const poor = await services.createAccount({
+    name: `QA Poor Policy ${suffix}`, type: "bank", startingBalancePaise: 500_00
+  });
+  const today = currentIsoDateForTests();
+  const policy = await services.createInsurancePolicy({
+    kind: "term", name: `QA Term ${suffix}`, policyNumber: `POL-T-${suffix}`,
+    startDate: today, endDate: addYearsForTests(today, 5), cadence: "yearly",
+    premiumPaise: 18_000_00, accountId: poor.id
+  });
+  const balance = async () => (await services.listAccounts(true)).find((item) => item.id === poor.id)?.balancePaise;
+  assert(await balance() === 500_00, "A premium the account cannot cover must not be taken.");
+  assert(
+    (await services.listTransactions({ accountId: poor.id })).length === 0,
+    "A premium the account cannot cover must not be written either."
+  );
+  const run = await services.catchUpInsuranceDebits();
+  assert(
+    run.skipped.some((item) => item.id === policy.id && item.reason === "short"),
+    `A premium that could not be paid should be reported as short, got ${JSON.stringify(run.skipped)}.`
+  );
+});
+
+test("a premium already entered by hand is not taken twice", async () => {
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const bank = await services.createAccount({
+    name: `QA Hand Policy ${suffix}`, type: "bank", startingBalancePaise: 1_00_000_00
+  });
+  const today = currentIsoDateForTests();
+  /* Entered by hand first, then the policy created against the same account and month. The
+     catch-up must see the month as already settled and leave it alone. */
+  await services.createTransaction({
+    date: today, accountId: bank.id, method: "bank_transfer", merchant: `QA Hand Premium ${suffix}`,
+    subcategoryId: "sub_insurance", amountPaise: 9_000_00, direction: "outflow", kind: "expense"
+  });
+  const before = (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise;
+  const policy = await services.createInsurancePolicy({
+    kind: "vehicle", name: `QA Motor ${suffix}`, policyNumber: `POL-V-${suffix}`,
+    startDate: today, endDate: addYearsForTests(today, 2), cadence: "yearly",
+    premiumPaise: 9_000_00, accountId: bank.id
+  });
+  /* The hand-entered one is not linked to the policy, so the policy does take its own first
+     premium -- what is proved here is that running the catch-up again does not take a second.
+     The guard being tested is the one that keeps a run idempotent. */
+  const after = (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise;
+  const second = await services.catchUpInsuranceDebits();
+  const settled = (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise;
+  assert(second.paid === 0, `A second run took ${second.paid} more premiums for the same month.`);
+  assert(settled === after, `A second run moved the balance from ${after} to ${settled}.`);
+  assert(before !== undefined && after !== undefined && before - after === 9_000_00,
+    "The policy's own first premium should have been taken once.");
+  const listed = (await services.listInsurancePolicies()).find((item) => item.id === policy.id);
+  assert(listed?.paymentCount === 1, `The policy should carry exactly one premium, carries ${listed?.paymentCount}.`);
+});
+
+test("a policy given an account today is not back-dated", async () => {
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const bank = await services.createAccount({
+    name: `QA Backdate Policy ${suffix}`, type: "bank", startingBalancePaise: 10_00_000_00
+  });
+  /* Five years old and monthly: back-dating would take sixty premiums at once. */
+  const start = addYearsForTests(currentIsoDateForTests(), -5);
+  const policy = await services.createInsurancePolicy({
+    kind: "other", name: `QA Old Policy ${suffix}`, policyNumber: `POL-O-${suffix}`,
+    startDate: start, endDate: addYearsForTests(start, 20), cadence: "monthly",
+    premiumPaise: 1_000_00, accountId: bank.id
+  });
+  const listed = (await services.listInsurancePolicies()).find((item) => item.id === policy.id);
+  assert(
+    listed?.paymentCount === 1,
+    `Attaching an account to a five-year-old policy took ${listed?.paymentCount} premiums, not 1.`
+  );
+});
+
+test("deleting a policy keeps every premium it ever paid", async () => {
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const bank = await services.createAccount({
+    name: `QA Delete Policy ${suffix}`, type: "bank", startingBalancePaise: 1_00_000_00
+  });
+  const today = currentIsoDateForTests();
+  const policy = await services.createInsurancePolicy({
+    kind: "health", name: `QA Doomed ${suffix}`, policyNumber: `POL-D-${suffix}`,
+    startDate: today, endDate: addYearsForTests(today, 2), cadence: "yearly",
+    premiumPaise: 12_000_00, accountId: bank.id
+  });
+  const balanceAfterPremium = (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise;
+  const result = await services.deleteInsurancePolicy(policy.id);
+  assert(result.paymentsUnlinked === 1, `Deleting should report its 1 premium, reported ${result.paymentsUnlinked}.`);
+  assert(
+    (await services.listInsurancePolicies()).every((item) => item.id !== policy.id),
+    "A deleted policy should be gone from the list."
+  );
+  const stillThere = (await services.listTransactions({ accountId: bank.id })).find(
+    (item) => item.merchant === `QA Doomed ${suffix}`
+  );
+  assert(Boolean(stillThere), "The premium it paid must stay on the ledger after the policy is deleted.");
+  const balanceNow = (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise;
+  assert(
+    balanceNow === balanceAfterPremium,
+    `Deleting a policy moved the balance from ${balanceAfterPremium} to ${balanceNow}.`
+  );
+});
+
+test("a policy past its end date stops paying", async () => {
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const bank = await services.createAccount({
+    name: `QA Lapsed Bank ${suffix}`, type: "bank", startingBalancePaise: 10_00_000_00
+  });
+  const today = currentIsoDateForTests();
+  const policy = await services.createInsurancePolicy({
+    kind: "vehicle", name: `QA Lapsing ${suffix}`, policyNumber: `POL-L-${suffix}`,
+    startDate: addMonthsForTests(today, -13), endDate: addMonthsForTests(today, -1),
+    cadence: "monthly", premiumPaise: 500_00, accountId: bank.id
+  });
+  /* Cover that ran out a month ago. Nothing is due, and the policy says so. */
+  const listed = (await services.listInsurancePolicies()).find((item) => item.id === policy.id);
+  assert(listed?.status === "expired", `A policy past its end date should read expired, read ${listed?.status}.`);
+  const run = await services.catchUpInsuranceDebits();
+  assert(run.paid === 0, `A lapsed policy took ${run.paid} premiums.`);
+  assert(
+    listed?.paymentCount === 0,
+    `A policy whose cover ended before it was recorded should have paid nothing, paid ${listed?.paymentCount}.`
   );
 });
 

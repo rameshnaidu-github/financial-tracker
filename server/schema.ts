@@ -63,6 +63,38 @@ CREATE TABLE IF NOT EXISTS autopay_payments (
   UNIQUE (user_id, transaction_id)
 );
 
+CREATE TABLE IF NOT EXISTS insurance_payments (
+  id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  policy_id TEXT NOT NULL,
+  transaction_id TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
+  PRIMARY KEY (id, user_id),
+  UNIQUE (user_id, transaction_id)
+);
+
+-- A policy, and the premium it takes. Shaped on autopay_subscriptions deliberately: the money
+-- comes out the same way, so the engine that takes it can be one engine. What a policy has that
+-- a subscription does not is a kind, a number and an insurer's idea of when cover stops.
+CREATE TABLE IF NOT EXISTS insurance_policies (
+  id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  name CITEXT NOT NULL,
+  policy_number TEXT NOT NULL,
+  start_date TEXT NOT NULL,
+  end_date TEXT NOT NULL,
+  cadence TEXT NOT NULL DEFAULT 'yearly',
+  premium_paise BIGINT NOT NULL CHECK (premium_paise > 0),
+  -- The account it is taken from, and how far it has been taken. A policy with no account pays
+  -- nothing; one that is given an account pays from that day on, never back-dated.
+  account_id TEXT,
+  debited_through TEXT,
+  created_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
+  updated_at TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
+  PRIMARY KEY (id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS autopay_subscriptions (
   id TEXT NOT NULL,
   name CITEXT NOT NULL,
@@ -559,6 +591,71 @@ ALTER TABLE autopay_subscriptions ADD CONSTRAINT fk_autopay_subscriptions_accoun
   FOREIGN KEY (account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT;
 CREATE INDEX IF NOT EXISTS idx_autopay_subscriptions_account ON autopay_subscriptions(account_id);
 
+-- ---------------------------------------------------------------------------------------------
+-- A cadence, and an end date where there used to be a count of months.
+--
+-- The count and the date say the same thing while everything is monthly, and stop saying it the
+-- moment a subscription comes out quarterly. So "end_date" is added, backfilled from the count
+-- that is already stored, and becomes the thing the application reads.
+--
+-- "duration_months" is deliberately NOT dropped. It is the owner's real money in this database,
+-- the drop is irreversible, and keeping the column costs a few bytes a row. It is kept in step
+-- with "end_date" by the service that writes one, so a rollback to the previous build still
+-- finds the value it expects rather than a NULL it will divide by.
+--
+-- The backfill uses the same arithmetic the application used to compute an expiry from a count,
+-- so every row that existed before this runs expires on exactly the day it expired before. That
+-- is not asserted here; it is measured, in insurance-16 leaf-1.1.1:G1.
+ALTER TABLE autopay_subscriptions ADD COLUMN IF NOT EXISTS cadence TEXT NOT NULL DEFAULT 'monthly';
+ALTER TABLE autopay_subscriptions ADD COLUMN IF NOT EXISTS end_date TEXT;
+--
+-- The arithmetic has to be JavaScript's, not Postgres's.
+--
+-- Written the obvious way -- to_date(start) + interval -- this clamps: 31 January plus one
+-- month is 28 February. The application's own month arithmetic rolls over instead, because
+-- that is what "new Date(y, m + 1, 31)" does, and 31 January plus one month has been 3 March
+-- in every expiry this application has ever shown. Five of seven month-end start dates came
+-- out on a different day under the clamping version, which would have quietly moved when a
+-- real subscription stops.
+--
+-- So the month is added to the FIRST of the start month, where no clamping can happen, and the
+-- day of the month is added back afterwards as plain days -- which rolls, exactly as the
+-- application does. Checked pair by pair in insurance-16 leaf-1.1.1:G1.
+UPDATE autopay_subscriptions
+   SET end_date = to_char(
+         date_trunc('month', to_date(start_date, 'YYYY-MM-DD'))
+           + (duration_months || ' months')::interval
+           + ((extract(day from to_date(start_date, 'YYYY-MM-DD'))::int - 1) || ' days')::interval,
+         'YYYY-MM-DD')
+ WHERE end_date IS NULL;
+
+-- The insurance tables, on a database that predates them.
+ALTER TABLE insurance_policies DROP CONSTRAINT IF EXISTS fk_insurance_policies_user;
+ALTER TABLE insurance_policies ADD CONSTRAINT fk_insurance_policies_user
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE insurance_policies DROP CONSTRAINT IF EXISTS fk_insurance_policies_account;
+ALTER TABLE insurance_policies ADD CONSTRAINT fk_insurance_policies_account
+  FOREIGN KEY (account_id, user_id) REFERENCES accounts(id, user_id) ON DELETE RESTRICT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_insurance_policies_id_owner ON insurance_policies(id, user_id);
+CREATE INDEX IF NOT EXISTS idx_insurance_policies_owner ON insurance_policies(user_id);
+CREATE INDEX IF NOT EXISTS idx_insurance_policies_account ON insurance_policies(account_id);
+
+ALTER TABLE insurance_payments DROP CONSTRAINT IF EXISTS fk_insurance_payments_user;
+ALTER TABLE insurance_payments ADD CONSTRAINT fk_insurance_payments_user
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+-- Cascading from the policy is what lets a policy be deleted while its premiums stay: the link
+-- row goes, the transaction it pointed at does not, because the link lives in a table of its own
+-- rather than in a column on the transaction.
+ALTER TABLE insurance_payments DROP CONSTRAINT IF EXISTS fk_insurance_payments_policy;
+ALTER TABLE insurance_payments ADD CONSTRAINT fk_insurance_payments_policy
+  FOREIGN KEY (policy_id, user_id) REFERENCES insurance_policies(id, user_id) ON DELETE CASCADE;
+ALTER TABLE insurance_payments DROP CONSTRAINT IF EXISTS fk_insurance_payments_transaction;
+ALTER TABLE insurance_payments ADD CONSTRAINT fk_insurance_payments_transaction
+  FOREIGN KEY (transaction_id, user_id) REFERENCES transactions(id, user_id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_insurance_payments_owner ON insurance_payments(user_id);
+CREATE INDEX IF NOT EXISTS idx_insurance_payments_policy ON insurance_payments(policy_id);
+CREATE INDEX IF NOT EXISTS idx_insurance_payments_transaction ON insurance_payments(transaction_id);
+
 -- A holding that pays money back at an interval, on a database that predates post office schemes.
 ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_frequency TEXT;
 ALTER TABLE investments ADD COLUMN IF NOT EXISTS payout_amount_paise BIGINT;
@@ -595,6 +692,8 @@ ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE autopay_payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE autopay_subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE insurance_payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE insurance_policies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE budget_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE category_types ENABLE ROW LEVEL SECURITY;
 ALTER TABLE entry_batches ENABLE ROW LEVEL SECURITY;

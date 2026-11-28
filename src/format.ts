@@ -79,6 +79,21 @@ export function todayISO() {
   return localISODate(new Date());
 }
 
+/**
+ * The same day a year or more later, for a form that has to suggest an end date.
+ *
+ * Built from the parts rather than by adding 365 days, so a leap year does not shift it, and
+ * clamped by `Date` itself for the one case where the day does not exist in the target month --
+ * there is no 29 February 2027, and the browser rolls it to 1 March, which is the ordinary
+ * convention and the one the server's own month arithmetic follows.
+ */
+export function addYearsToISO(isoDate: string, years: number) {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const moved = new Date(year + years, month - 1, day);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${moved.getFullYear()}-${pad(moved.getMonth() + 1)}-${pad(moved.getDate())}`;
+}
+
 export function currentMonth() {
   const today = new Date();
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
