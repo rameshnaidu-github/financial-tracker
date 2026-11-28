@@ -364,3 +364,15 @@ export function formatMonthShort(month: string) {
   const name = new Date(year, monthNumber - 1, 1).toLocaleDateString("en-IN", { month: "short" }).slice(0, 3);
   return `${name} ${String(year).slice(-2)}`;
 }
+
+/**
+ * Which formatter a counting figure animates with, so it ends on its own label.
+ *
+ * The figure that counts up and the hidden label beside it are two renderings of one amount. The
+ * rule here used to be "a decimal point in the label means paise", which a compact lakh figure
+ * like "Rs 18.50 L" breaks: it would count up to "Rs 18,50,000". So the formatter is the one whose
+ * output for this amount is the label, and the full figure is the fallback when none is.
+ */
+export function countFormatterFor(label: string, paise: number): (value: number) => string {
+  return [formatINRWhole, formatINRCompact, formatINR].find((format) => format(paise) === label) ?? formatINR;
+}

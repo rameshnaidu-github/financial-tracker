@@ -6365,6 +6365,18 @@ test("ten failed sign-ins lock that email for a while, wherever the attempts lan
   assert((await auth.signIn(email, "right-horse-battery")) !== undefined, "old failures still locked the account");
 });
 
+/* ---------- review fix 8: a counting figure lands on its own label ---------- */
+
+test("a counting tile ends on exactly the text its label carries, in every format", async () => {
+  const { countFormatterFor, formatINR, formatINRWhole, formatINRCompact } = await import("../src/format.ts");
+  const paise = 1_85_00_000; // Rs 1,85,000
+  for (const label of [formatINRWhole(paise), formatINR(paise + 37), formatINRCompact(paise * 10)]) {
+    const amount = label === formatINR(paise + 37) ? paise + 37 : label === formatINRCompact(paise * 10) ? paise * 10 : paise;
+    const landed = countFormatterFor(label, amount)(amount);
+    assert(landed === label, `a tile labelled "${label}" would count up to "${landed}"`);
+  }
+});
+
 let failed = 0;
 let ran = 0;
 

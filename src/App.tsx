@@ -66,6 +66,7 @@ import {
   outstandingSplit,
   parseAmountToPaise,
   strictAmountToPaise,
+  countFormatterFor,
   parseSignedAmount,
   signedAmount,
   splitMonth,
@@ -11398,7 +11399,7 @@ function CountUp({ paise, label }: { paise: number; label: string }) {
    * The precision now comes from the label: no decimal point in it, no decimals in the count.
    * Whatever the caller formatted is what the tile ends on, which is what was always promised.
    */
-  useCountUp(ref, paise, label.includes(".") ? formatINR : formatINRWhole);
+  useCountUp(ref, paise, countFormatterFor(label, paise));
   return (
     <>
       <span className="visually-hidden">{label}</span>
