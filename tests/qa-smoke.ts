@@ -7,7 +7,15 @@ import { DatabaseSync } from "node:sqlite";
 import ExcelJS from "exceljs";
 import { cashflowPartsFromTypes } from "../src/report-cashflow.ts";
 import { formatINR, formatINRWhole, loanIsClosed, outstandingSpendLabel, outstandingSplit, splitLoansByStanding, todayISO } from "../src/format.ts";
-import { INFLOW_BEHAVIORS, SELF_TRANSFER_SUBCATEGORY_ID, cardEmiSettlementPaise } from "../shared/finance.ts";
+import {
+  INFLOW_BEHAVIORS,
+  SELF_TRANSFER_SUBCATEGORY_ID,
+  cardEmiSettlementPaise,
+  insuranceReminderDaysFromSettings,
+  policyExpiry,
+  policyExpiryLabel
+} from "../shared/finance.ts";
+import { attentionItems } from "../src/attention.ts";
 import {
   NAV_ORDER,
   SIMPLE_MODE_PAGES,
@@ -5904,6 +5912,106 @@ test("a policy past its end date stops paying", async () => {
   assert(
     listed?.paymentCount === 0,
     `A policy whose cover ended before it was recorded should have paid nothing, paid ${listed?.paymentCount}.`
+  );
+});
+
+/* ---------- expiry-17: a policy says when it is about to lapse ---------- */
+
+test("a policy counts down to its last day of cover and then reads lapsed", () => {
+  /*
+   * The boundary is the whole of this.
+   *
+   * `endDate` is exclusive everywhere in this application: cover ends on that day, no premium
+   * falls on it, and the policy reads expired from it. So a policy whose end date is today has
+   * already lapsed -- it does not have one day left -- and the last day it is actually covered
+   * is the day before. Every case below is one step across that line.
+   */
+  const today = "2026-06-01";
+  const at = (endDate: string) => policyExpiry(endDate, today, 30);
+
+  assert(at("2026-12-01").state === "fine", "Six months out should not be warning yet.");
+  assert(at("2026-07-02").state === "fine", "Thirty-one days out is outside a thirty-day window.");
+  assert(at("2026-07-01").state === "soon", "Thirty days out is inside a thirty-day window.");
+  assert(at("2026-07-01").daysLeft === 30, `Thirty days out should count 30, counted ${at("2026-07-01").daysLeft}.`);
+  assert(at("2026-06-02").state === "soon", "The last day of cover is still cover.");
+  assert(at("2026-06-02").daysLeft === 1, `Tomorrow should count 1, counted ${at("2026-06-02").daysLeft}.`);
+  assert(at("2026-06-01").state === "lapsed", "A policy whose end date is today has lapsed, not one day left.");
+  assert(at("2026-06-01").daysLeft === 0, `An end date of today should count 0, counted ${at("2026-06-01").daysLeft}.`);
+  assert(at("2026-05-25").state === "lapsed", "A week past the end date is lapsed.");
+  assert(at("2026-05-25").daysLeft === -7, `A week past should count -7, counted ${at("2026-05-25").daysLeft}.`);
+
+  /* The wording the card and the bell share, so the two cannot disagree about one policy. */
+  assert(policyExpiryLabel(at("2026-06-02")) === "Last day of cover", policyExpiryLabel(at("2026-06-02")));
+  assert(policyExpiryLabel(at("2026-06-01")) === "Cover ended today", policyExpiryLabel(at("2026-06-01")));
+  assert(policyExpiryLabel(at("2026-05-31")) === "Cover ended 1 day ago", policyExpiryLabel(at("2026-05-31")));
+  assert(policyExpiryLabel(at("2026-07-01")) === "30 days of cover left", policyExpiryLabel(at("2026-07-01")));
+
+  /* Across a month end and a leap day, where counting by month would drift. */
+  assert(policyExpiry("2026-03-01", "2026-02-01", 30).daysLeft === 28, "February 2026 is 28 days.");
+  assert(policyExpiry("2024-03-01", "2024-02-01", 30).daysLeft === 29, "February 2024 is 29 days.");
+});
+
+test("an expiring policy and a lapsed one reach the bell, and a healthy one does not", () => {
+  const today = "2026-06-01";
+  const policy = (id: string, name: string, endDate: string) => ({
+    id, kind: "vehicle", name, policyNumber: "X", startDate: "2020-01-01", endDate,
+    cadence: "yearly", premiumPaise: 100_00, paymentCount: 1,
+    status: (today >= endDate ? "expired" : "active") as "active" | "expired",
+    accountId: null, accountName: null
+  });
+  const items = attentionItems({
+    accounts: [], loans: [], subscriptions: [],
+    policies: [
+      policy("healthy", "QA Healthy", "2027-06-01"),
+      policy("soon", "QA Expiring", "2026-06-15"),
+      policy("lapsed", "QA Lapsed", "2026-05-01")
+    ],
+    uncategorizedCount: 0, cardAlertPercent: 30, insuranceReminderDays: 30, today
+  });
+  const ids = items.map((item) => item.id);
+  assert(ids.includes("insurance-soon"), `An expiring policy should reach the bell, got ${JSON.stringify(ids)}.`);
+  assert(ids.includes("insurance-lapsed"), `A lapsed policy should reach the bell, got ${JSON.stringify(ids)}.`);
+  assert(!ids.includes("insurance-healthy"), "A policy with a year to run should not be in the bell.");
+
+  const lapsed = items.find((item) => item.id === "insurance-lapsed");
+  const soon = items.find((item) => item.id === "insurance-soon");
+  assert(lapsed?.tone === "danger", `A lapsed policy should be the loud one, was ${lapsed?.tone}.`);
+  assert(soon?.tone === "warning", `A policy two weeks out should warn, not alarm, was ${soon?.tone}.`);
+  assert(lapsed?.page === "insurance" && soon?.page === "insurance", "Both should lead to the Insurance page.");
+  assert(/lapsed/i.test(lapsed?.label ?? ""), `The lapsed one should say so: "${lapsed?.label}".`);
+  assert(/14 days/.test(soon?.label ?? ""), `Two weeks out should name the days: "${soon?.label}".`);
+
+  /* A policy inside the window on one setting is outside it on another -- which is the whole
+     point of the setting being a setting. */
+  const narrow = attentionItems({
+    accounts: [], loans: [], subscriptions: [],
+    policies: [policy("soon", "QA Expiring", "2026-06-15")],
+    uncategorizedCount: 0, cardAlertPercent: 30, insuranceReminderDays: 7, today
+  });
+  assert(narrow.length === 0, "At a seven-day window, a policy two weeks out must not warn yet.");
+});
+
+test("the insurance reminder window is a setting, and a bad one falls back to thirty days", async () => {
+  assert(insuranceReminderDaysFromSettings(undefined) === 30, "No settings at all should mean thirty days.");
+  assert(insuranceReminderDaysFromSettings({}) === 30, "An unset reminder should mean thirty days.");
+  assert(insuranceReminderDaysFromSettings({ insurance_reminder_days: "45" }) === 45, "A stored 45 should be read back.");
+  /* Everything the application did not write. A NaN here would compare false against every
+     policy and switch the reminder off with nothing on screen to say why. */
+  for (const bad of ["", " ", "soon", "0", "-5", "400", "12.5.6"]) {
+    const got = insuranceReminderDaysFromSettings({ insurance_reminder_days: bad });
+    assert(got === 30, `A stored "${bad}" should fall back to 30, gave ${got}.`);
+  }
+
+  // And it round-trips through the server.
+  await services.updateAppSettings({ insuranceReminderDays: 45 });
+  assert(
+    insuranceReminderDaysFromSettings(await services.getSettings()) === 45,
+    "A saved reminder window should come back from the settings."
+  );
+  await services.updateAppSettings({ insuranceReminderDays: 30 });
+  assert(
+    insuranceReminderDaysFromSettings(await services.getSettings()) === 30,
+    "And it should be changeable again."
   );
 });
 

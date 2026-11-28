@@ -116,13 +116,18 @@ import type {
   UserProfile,
   WealthSummary,
 } from "./types";
+import { attentionItems, cardUsagePercent, type AttentionItem } from "./attention.ts";
 import {
   PAYMENT_CADENCES,
   cadenceLabel,
   cadenceMonths,
   INSURANCE_KINDS,
+  INSURANCE_REMINDER_DEFAULT_DAYS,
   insuranceKindIcon,
   insuranceKindLabel,
+  insuranceReminderDaysFromSettings,
+  policyExpiry,
+  policyExpiryLabel,
   AUTOPAY_SUBCATEGORY_ID,
   MUTUAL_FUNDS_SUBCATEGORY_ID,
   ADJUSTMENT_SUBCATEGORY_ID,
@@ -1093,6 +1098,19 @@ export default function App() {
     }
   }, [profileDraft, showNotice]);
 
+  const saveInsuranceReminder = useCallback(
+    async (days: number) => {
+      try {
+        const settings = await Api.updateSettings({ insuranceReminderDays: days });
+        setBootstrap((current) => (current ? { ...current, settings } : current));
+        showNotice("Policy reminder saved.");
+      } catch (err) {
+        showNotice(err instanceof Error ? err.message : "Could not save the setting.");
+      }
+    },
+    [showNotice]
+  );
+
   const saveCardAlert = useCallback(
     async (percent: number) => {
       try {
@@ -1230,12 +1248,15 @@ export default function App() {
 
   /* What needs attention, worked out from what the shell already holds. The list is the rule's
      output: nothing qualifying means an empty list, and the control says so rather than hiding. */
+  const insuranceReminderDays = insuranceReminderDaysFromSettings(bootstrap?.settings);
   const attention = attentionItems({
     accounts: activeAccounts,
     loans: [...loans, ...cardEmis],
     subscriptions,
+    policies: insurancePolicies,
     uncategorizedCount: shellOverview?.summary.uncategorizedCount ?? 0,
     cardAlertPercent,
+    insuranceReminderDays,
     today: todayISO()
   });
 
@@ -1495,6 +1516,7 @@ export default function App() {
         <InsurancePage
                       policies={insurancePolicies}
                       accounts={activeAccounts}
+                      reminderDays={insuranceReminderDays}
                       refresh={refresh}
                       showNotice={showNotice}
                       requestConfirm={requestConfirm}
@@ -1539,9 +1561,11 @@ export default function App() {
                       theme={theme}
                       saving={profileSaving}
                       cardAlertPercent={cardAlertPercent}
+                      insuranceReminderDays={insuranceReminderDays}
                       onProfileChange={setProfileDraft}
                       onSaveProfile={saveProfile}
                       onSaveCardAlert={saveCardAlert}
+                      onSaveInsuranceReminder={saveInsuranceReminder}
                       holdingGrouping={holdingGrouping}
                       simpleMode={simpleMode}
                       onSaveHoldingGrouping={saveHoldingGrouping}
@@ -6498,133 +6522,8 @@ export function accountTotals(accounts: Account[]) {
 }
 
 /** How much of its limit a card is using, as a whole percent. A card with no limit uses none. */
-/** One thing asking to be looked at, and where looking at it happens. */
-export type AttentionItem = {
-  id: string;
-  label: string;
-  detail: string;
-  page: Page;
-  tone: "warning" | "danger" | "neutral";
-};
 
-/**
- * What actually needs attention, in the order it deserves it.
- *
- * The reference's shell has a bell on it. A bell that is always lit, or lit by nothing, is
- * decoration -- so this is a rule rather than a list: each item is a condition that is either
- * true of the data or absent entirely. Nothing needing attention produces nothing, and the
- * control says so rather than showing an empty tray.
- *
- * Three conditions, each one the owner can act on today:
- *   - transactions with no category, which quietly fall out of every report and budget
- *   - a bill due in the next week: a card's payment, a loan's instalment, a subscription's debit
- *   - a card past the utilisation the owner themselves set as the line
- *
- * `today` is passed rather than read, so the same data gives the same answer on any day a test
- * cares to ask about.
- */
-export function attentionItems({
-  accounts,
-  loans,
-  subscriptions,
-  uncategorizedCount,
-  cardAlertPercent,
-  today
-}: {
-  accounts: Account[];
-  loans: Loan[];
-  subscriptions: AutopaySubscription[];
-  uncategorizedCount: number;
-  cardAlertPercent: number;
-  today: string;
-}): AttentionItem[] {
-  const items: AttentionItem[] = [];
-  const day = Number(today.slice(8, 10));
-  const daysInMonth = new Date(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 0).getDate();
-  /* "Within the next week" has to wrap: on the 28th, a bill on the 2nd is four days off, not
-     twenty-six days behind. A day already past this month is not due again until next month. */
-  const daysAway = (dueDay: number) => (dueDay >= day ? dueDay - day : dueDay + daysInMonth - day);
-  const soon = (dueDay: number | null) => dueDay !== null && dueDay >= 1 && daysAway(dueDay) <= 7;
-  const live = accounts.filter((account) => !account.isArchived);
 
-  if (uncategorizedCount > 0) {
-    items.push({
-      id: "uncategorized",
-      label: `${uncategorizedCount} transaction${uncategorizedCount === 1 ? "" : "s"} need${
-        uncategorizedCount === 1 ? "s" : ""
-      } a category`,
-      detail: "Until they have one they are missing from reports and budgets.",
-      page: "transactions",
-      tone: "warning"
-    });
-  }
-
-  for (const account of live) {
-    if (account.type !== "credit_card" || account.outstandingPaise <= 0) continue;
-    if (!soon(account.paymentDueDay)) continue;
-    const away = daysAway(account.paymentDueDay as number);
-    items.push({
-      id: `card-due-${account.id}`,
-      label: `${account.name} bill due ${away === 0 ? "today" : away === 1 ? "tomorrow" : `in ${away} days`}`,
-      detail: `${formatINRWhole(account.outstandingPaise)} outstanding.`,
-      page: "accounts",
-      tone: away <= 1 ? "danger" : "warning"
-    });
-  }
-
-  for (const loan of loans) {
-    if (loan.isArchived || loan.outstandingPaise <= 0 || !soon(loan.emiDueDay)) continue;
-    const away = daysAway(loan.emiDueDay as number);
-    items.push({
-      id: `emi-due-${loan.id}`,
-      label: `${loan.name} instalment due ${away === 0 ? "today" : away === 1 ? "tomorrow" : `in ${away} days`}`,
-      detail: `${formatINRWhole(loan.monthlyEmiPaise)} a month.`,
-      page: "loans",
-      tone: away <= 1 ? "danger" : "warning"
-    });
-  }
-
-  for (const subscription of subscriptions) {
-    if (subscription.isArchived || subscription.status !== "active") continue;
-    const debitDay = Number(subscription.startDate.slice(8, 10));
-    if (!soon(debitDay)) continue;
-    const away = daysAway(debitDay);
-    items.push({
-      id: `autopay-${subscription.id}`,
-      label: `${subscription.name} debits ${away === 0 ? "today" : away === 1 ? "tomorrow" : `in ${away} days`}`,
-      detail: `${formatINRWhole(subscription.amountPaise)}${
-        subscription.accountName ? ` from ${subscription.accountName}` : ", with no account to take it from"
-      }.`,
-      page: "subscriptions",
-      tone: subscription.accountName ? "neutral" : "warning"
-    });
-  }
-
-  for (const account of live) {
-    if (account.type !== "credit_card") continue;
-    const used = cardUsagePercent(account);
-    if (used < cardAlertPercent) continue;
-    items.push({
-      id: `card-usage-${account.id}`,
-      label: `${account.name} is ${used}% used`,
-      detail: `Your alert is set at ${cardAlertPercent}%.`,
-      page: "accounts",
-      tone: used >= 90 ? "danger" : "warning"
-    });
-  }
-
-  // Worst first, so the control's own count and its first line agree about what matters.
-  const weight = { danger: 0, warning: 1, neutral: 2 } as const;
-  return items.sort((a, b) => weight[a.tone] - weight[b.tone]);
-}
-
-export function cardUsagePercent(account: Account): number {
-  const limit = account.creditLimitPaise ?? 0;
-  if (limit <= 0) {
-    return 0;
-  }
-  return Math.round((Math.max(account.outstandingPaise, 0) / limit) * 100);
-}
 
 /**
  * Where an account stands, or null when it stands against nothing.
@@ -8438,12 +8337,15 @@ function VacationForm({
 function InsurancePage({
   policies,
   accounts,
+  reminderDays,
   refresh,
   showNotice,
   requestConfirm
 }: {
   policies: InsurancePolicy[];
   accounts: Account[];
+  /** How many days before cover ends a policy starts saying so. */
+  reminderDays: number;
   refresh: () => Promise<void>;
   showNotice: (message: string) => void;
   requestConfirm: (request: ConfirmRequest) => void;
@@ -8514,7 +8416,7 @@ function InsurancePage({
           <h2 className="account-group-title">{group.title}</h2>
           <div className="budget-grid accounts-grid">
             {group.policies.map((policy) => (
-              <InsuranceCard key={policy.id} policy={policy} onEdit={setEditing} onDelete={remove} />
+              <InsuranceCard key={policy.id} policy={policy} reminderDays={reminderDays} onEdit={setEditing} onDelete={remove} />
             ))}
           </div>
         </section>
@@ -8557,15 +8459,18 @@ function InsurancePage({
 
 function InsuranceCard({
   policy,
+  reminderDays,
   onEdit,
   onDelete
 }: {
   policy: InsurancePolicy;
+  reminderDays: number;
   onEdit: (policy: InsurancePolicy) => void;
   onDelete: (policy: InsurancePolicy) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const expired = policy.status !== "active";
+  const expiry = policyExpiry(policy.endDate, todayISO(), reminderDays);
   return (
     /*
      * The same bones as a subscription card, class for class.
@@ -8602,6 +8507,23 @@ function InsuranceCard({
           </button>
         </div>
       </div>
+
+      {/*
+        * The reminder, on the card and not only in the bell.
+        *
+        * It replaces nothing: the date below stays, because "expires in 12 days" and "28 Nov
+        * 2027" answer different questions and a card that gives only the countdown leaves you
+        * working out the date to put in a calendar. `role="status"` rather than `alert`, since
+        * it is there when the page opens rather than arriving while you read.
+        */}
+      {expiry.state !== "fine" && (
+        <p className={`policy-expiry-note ${expiry.state === "lapsed" ? "is-lapsed" : "is-soon"}`} role="status">
+          <CircleAlert size={15} />
+          {expiry.state === "lapsed"
+            ? `${policyExpiryLabel(expiry)} — renew it, or change the end date if you already have`
+            : `${policyExpiryLabel(expiry)} — time to renew`}
+        </p>
+      )}
 
       {/* Cover ending is the figure on the front of the card. Everything else about a policy
           can wait for the fold; the day it stops cannot. */}
@@ -10549,6 +10471,8 @@ export function ProfilePage({
   onProfileChange,
   onSaveProfile,
   onSaveCardAlert,
+  insuranceReminderDays,
+  onSaveInsuranceReminder,
   onSaveHoldingGrouping,
   onSaveSimpleMode,
   onDownloadReport,
@@ -10572,6 +10496,8 @@ export function ProfilePage({
   onProfileChange: (profile: UserProfile) => void;
   onSaveProfile: () => Promise<void> | void;
   onSaveCardAlert: (percent: number) => Promise<void> | void;
+  insuranceReminderDays: number;
+  onSaveInsuranceReminder: (days: number) => Promise<void> | void;
   onSaveHoldingGrouping: (grouping: HoldingGrouping) => Promise<void> | void;
   onSaveSimpleMode: (next: boolean) => Promise<void> | void;
   onDownloadReport: () => void;
@@ -10588,10 +10514,15 @@ export function ProfilePage({
     age: false
   });
   const [cardAlertDraft, setCardAlertDraft] = useState(String(cardAlertPercent));
+  const [reminderDraft, setReminderDraft] = useState(String(insuranceReminderDays));
 
   useEffect(() => {
     setCardAlertDraft(String(cardAlertPercent));
   }, [cardAlertPercent]);
+
+  useEffect(() => {
+    setReminderDraft(String(insuranceReminderDays));
+  }, [insuranceReminderDays]);
 
   const displayName = profile.name.trim() || "Your profile";
   const displayEmail = profile.email.trim() || "No email yet";
@@ -10613,6 +10544,12 @@ export function ProfilePage({
   const draftIsValid = Number.isInteger(draftValue) && draftValue >= 1 && draftValue <= 100;
   const cardAlertProblem =
     cardAlertDraft.trim().length === 0 || draftIsValid ? null : "A whole number between 1 and 100.";
+  const reminderValue = Number.parseInt(reminderDraft, 10);
+  /* A year is the ceiling: a reminder with more notice than the policy has life is a reminder
+     that is always on, which is the same as not having one. */
+  const reminderIsValid = Number.isInteger(reminderValue) && reminderValue >= 1 && reminderValue <= 365;
+  const reminderProblem =
+    reminderDraft.trim().length === 0 || reminderIsValid ? null : "A whole number of days between 1 and 365.";
 
   return (
     <div className="profile-page">
@@ -10813,6 +10750,31 @@ export function ProfilePage({
                 className="secondary-action"
                 disabled={!draftIsValid || draftValue === cardAlertPercent}
                 onClick={() => void onSaveCardAlert(draftValue)}
+              >
+                Save
+              </button>
+            </div>
+          </SettingsRow>
+          <SettingsRow
+            label="Policy reminder"
+            hint={reminderProblem ?? "How long before cover ends a policy starts warning you, on its card and in the alerts."}
+          >
+            <div className="card-alert-controls">
+              <input
+                aria-label="Days before a policy expires to start reminding"
+                aria-invalid={reminderProblem ? true : undefined}
+                inputMode="numeric"
+                value={reminderDraft}
+                onChange={(event) => setReminderDraft(event.target.value)}
+              />
+              <span className="card-alert-suffix" aria-hidden="true">
+                days
+              </span>
+              <button
+                type="button"
+                className="secondary-action"
+                disabled={!reminderIsValid || reminderValue === insuranceReminderDays}
+                onClick={() => void onSaveInsuranceReminder(reminderValue)}
               >
                 Save
               </button>

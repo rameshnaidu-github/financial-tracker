@@ -440,6 +440,9 @@ export async function updateAppSettings(input: UpdateSettingsInput) {
   if (parsed.cardUtilizationAlertPercent !== undefined) {
     await setSetting("card_utilization_alert_percent", String(parsed.cardUtilizationAlertPercent));
   }
+  if (parsed.insuranceReminderDays !== undefined) {
+    await setSetting("insurance_reminder_days", String(parsed.insuranceReminderDays));
+  }
   if (parsed.holdingGrouping !== undefined) {
     await setSetting("holding_grouping", parsed.holdingGrouping);
   }
