@@ -6246,6 +6246,52 @@ test("an amount that cannot be read is refused with its own text, never saved as
   }
 });
 
+/* ---------- review fix 5: one person's preferences are not everyone's ---------- */
+
+test("simple mode, holding grouping and the policy reminder belong to the person who set them", async () => {
+  const owner = dbModule.currentUserId();
+  const other = randomUUID();
+  const later = new Date(Date.now() + 2 * 86_400_000).toISOString().replace("T", " ").slice(0, 19);
+  await dbModule.db
+    .prepare("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)")
+    .run(other, `prefs-${other.slice(0, 8)}@example.test`, "x", later);
+  await dbModule.seedPerson(other);
+
+  // The owner changes all three.
+  await services.updateAppSettings({ simpleMode: true, holdingGrouping: "month", insuranceReminderDays: 45 });
+  const mine = await services.getSettings();
+  assert(mine.simple_mode === "1" && mine.holding_grouping === "month" && mine.insurance_reminder_days === "45",
+    `the owner's own changes did not stick: ${JSON.stringify(mine)}`);
+
+  // The other person sees none of them.
+  const theirs = await dbModule.runAsUserAsync(other, () => services.getSettings());
+  for (const key of ["simple_mode", "holding_grouping", "insurance_reminder_days"]) {
+    assert(theirs[key] === undefined, `${key} leaked to another account: it reads ${JSON.stringify(theirs[key])}.`);
+  }
+
+  // Put the owner back, so later tests see the default.
+  await services.updateAppSettings({ simpleMode: false, holdingGrouping: "year", insuranceReminderDays: 30 });
+  assert(dbModule.currentUserId() === owner, "the test left the wrong person in scope");
+});
+
+test("a preference left in the shared table moves to the owner and leaves the shared table", async () => {
+  /* What a database from before this fix holds: the value in app_settings, read by everyone. */
+  const owner = await dbModule.ownerId();
+  await dbModule.db.prepare("DELETE FROM user_settings WHERE user_id = ? AND key = 'simple_mode'").run(owner);
+  await dbModule.db.prepare(
+    "INSERT INTO app_settings (key, value) VALUES ('simple_mode', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+  ).run();
+  await dbModule.movePerPersonSettingsToOwner();
+  await dbModule.movePerPersonSettingsToOwner(); // safe twice
+
+  const shared = await dbModule.db.prepare("SELECT value FROM app_settings WHERE key = 'simple_mode'").get();
+  assert(shared === undefined, "the shared copy is still there for everyone to read");
+  const owned = (await dbModule.db
+    .prepare("SELECT value FROM user_settings WHERE user_id = ? AND key = 'simple_mode'").get(owner)) as { value: string } | undefined;
+  assert(owned?.value === "1", `the owner lost their setting in the move: ${JSON.stringify(owned)}`);
+  await services.updateAppSettings({ simpleMode: false });
+});
+
 let failed = 0;
 let ran = 0;
 
