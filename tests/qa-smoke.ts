@@ -6050,6 +6050,71 @@ test("the loan form does not call the opening balance what the card calls the cu
   );
 });
 
+/* ---------- review fix 1: an AutoPay's end date is the one the app always computed ---------- */
+
+test("the end-date backfill uses the app's own month arithmetic, which clamps a month end", async () => {
+  /*
+   * The oracle is the application's own addMonthsToIsoDate, imported, not a re-implementation.
+   * A re-implementation is exactly how this went wrong: a helper written for the check rolled
+   * 31 January + 1 month to 3 March, the app clamps it to 28 February, and the check certified a
+   * migration that gave month-end subscriptions one extra debit.
+   */
+  const { SCHEMA_SQL } = await import("../server/schema.ts");
+  const backfill = /UPDATE autopay_subscriptions\s+SET end_date[\s\S]*?WHERE end_date IS NULL;/.exec(SCHEMA_SQL);
+  assert(backfill, "no end_date backfill found in schema.ts");
+  const owner = dbModule.currentUserId();
+  const cases = [["2026-01-31", 1], ["2026-01-31", 3], ["2024-02-29", 12], ["2026-08-31", 6], ["2026-12-31", 2], ["2026-07-01", 36]] as const;
+  for (const [index, [start, months]] of cases.entries()) {
+    await dbModule.db.prepare(
+      `INSERT INTO autopay_subscriptions (id, name, amount_paise, start_date, duration_months, end_date, cadence, user_id)
+       VALUES (?, ?, 100, ?, ?, NULL, 'monthly', ?)`
+    ).run(`qa-fix1-${index}`, `QA fix1 ${index}`, start, months, owner);
+  }
+  await dbModule.db.exec(backfill![0]);
+  for (const [index, [start, months]] of cases.entries()) {
+    const row = (await dbModule.db.prepare("SELECT end_date FROM autopay_subscriptions WHERE id = ? AND user_id = ?").get(`qa-fix1-${index}`, owner)) as { end_date: string };
+    const want = services.addMonthsToIsoDate(start, months);
+    assert(row.end_date === want, `${start} + ${months} months: the app says ${want}, the backfill wrote ${row.end_date}.`);
+  }
+});
+
+test("rows the rolling backfill already moved are put back, and nothing else is touched", async () => {
+  /*
+   * Production ran the rolling version once. Those rows carry end_date = start + duration
+   * ROLLED, where the clamped date differs. The repair moves exactly those back. A row whose end
+   * date was chosen by hand after the deploy never matches that pattern -- its duration_months
+   * is computed from its own end date -- so it is left as it is.
+   */
+  const { SCHEMA_SQL } = await import("../server/schema.ts");
+  const repair = /-- repair:start([\s\S]*?)-- repair:end/.exec(SCHEMA_SQL);
+  assert(repair, "no repair statement found in schema.ts");
+  const statement = repair![1];
+  const owner = dbModule.currentUserId();
+  const moved = [["2026-01-31", 1, "2026-03-03"], ["2024-02-29", 12, "2025-03-01"], ["2026-08-31", 6, "2027-03-03"]] as const;
+  for (const [index, [start, months, rolled]] of moved.entries()) {
+    await dbModule.db.prepare(
+      `INSERT INTO autopay_subscriptions (id, name, amount_paise, start_date, duration_months, end_date, cadence, user_id)
+       VALUES (?, ?, 100, ?, ?, ?, 'monthly', ?)`
+    ).run(`qa-fix1r-${index}`, `QA fix1r ${index}`, start, months, rolled, owner);
+  }
+  // Chosen by hand after the deploy: 31 Jan to 3 Mar is two months by the app's own count.
+  await dbModule.db.prepare(
+    `INSERT INTO autopay_subscriptions (id, name, amount_paise, start_date, duration_months, end_date, cadence, user_id)
+     VALUES ('qa-fix1r-hand', 'QA fix1r hand', 100, '2026-01-31', 2, '2026-03-03', 'monthly', ?)`
+  ).run(owner);
+
+  await dbModule.db.exec(statement);
+  await dbModule.db.exec(statement); // and again: it must be safe to run on every start
+
+  for (const [index, [start, months]] of moved.entries()) {
+    const row = (await dbModule.db.prepare("SELECT end_date FROM autopay_subscriptions WHERE id = ? AND user_id = ?").get(`qa-fix1r-${index}`, owner)) as { end_date: string };
+    const want = services.addMonthsToIsoDate(start, months);
+    assert(row.end_date === want, `${start} + ${months}: repaired to ${row.end_date}, the app says ${want}.`);
+  }
+  const hand = (await dbModule.db.prepare("SELECT end_date FROM autopay_subscriptions WHERE id = 'qa-fix1r-hand' AND user_id = ?").get(owner)) as { end_date: string };
+  assert(hand.end_date === "2026-03-03", `A hand-chosen end date was rewritten to ${hand.end_date}.`);
+});
+
 let failed = 0;
 let ran = 0;
 

@@ -609,25 +609,29 @@ CREATE INDEX IF NOT EXISTS idx_autopay_subscriptions_account ON autopay_subscrip
 ALTER TABLE autopay_subscriptions ADD COLUMN IF NOT EXISTS cadence TEXT NOT NULL DEFAULT 'monthly';
 ALTER TABLE autopay_subscriptions ADD COLUMN IF NOT EXISTS end_date TEXT;
 --
--- The arithmetic has to be JavaScript's, not Postgres's.
+-- Postgres adds months by clamping a month end -- 31 January + 1 month is 28 February -- and
+-- so does the application's addMonthsToIsoDate, which is what computed every expiry before this
+-- column existed. So the plain interval is the right arithmetic.
 --
--- Written the obvious way -- to_date(start) + interval -- this clamps: 31 January plus one
--- month is 28 February. The application's own month arithmetic rolls over instead, because
--- that is what "new Date(y, m + 1, 31)" does, and 31 January plus one month has been 3 March
--- in every expiry this application has ever shown. Five of seven month-end start dates came
--- out on a different day under the clamping version, which would have quietly moved when a
--- real subscription stops.
---
--- So the month is added to the FIRST of the start month, where no clamping can happen, and the
--- day of the month is added back afterwards as plain days -- which rolls, exactly as the
--- application does. Checked pair by pair in insurance-16 leaf-1.1.1:G1.
+-- A version of this backfill that rolled instead (31 January + 1 month = 3 March) shipped for a
+-- while, certified by a check whose oracle was a re-implementation rather than the application's
+-- own function. It moved month-end subscriptions' end dates a few days later, which let one more
+-- due date in before them: one extra debit at the end of the term.
 UPDATE autopay_subscriptions
-   SET end_date = to_char(
-         date_trunc('month', to_date(start_date, 'YYYY-MM-DD'))
-           + (duration_months || ' months')::interval
-           + ((extract(day from to_date(start_date, 'YYYY-MM-DD'))::int - 1) || ' days')::interval,
-         'YYYY-MM-DD')
+   SET end_date = to_char((to_date(start_date, 'YYYY-MM-DD') + (duration_months || ' months')::interval), 'YYYY-MM-DD')
  WHERE end_date IS NULL;
+
+-- repair:start
+-- Puts back the rows that rolling backfill moved. They are exactly the rows whose end date equals
+-- start + duration rolled, where that differs from start + duration clamped. A row whose end date
+-- was chosen by hand never matches: its duration_months is computed from that end date, so the
+-- rolled date it would need is always a different day. Safe to run on every start -- once a row
+-- is repaired it no longer matches.
+UPDATE autopay_subscriptions
+   SET end_date = to_char((to_date(start_date, 'YYYY-MM-DD') + (duration_months || ' months')::interval), 'YYYY-MM-DD')
+ WHERE end_date = to_char(date_trunc('month', to_date(start_date, 'YYYY-MM-DD')) + (duration_months || ' months')::interval + ((extract(day from to_date(start_date, 'YYYY-MM-DD'))::int - 1) || ' days')::interval, 'YYYY-MM-DD')
+   AND to_char(date_trunc('month', to_date(start_date, 'YYYY-MM-DD')) + (duration_months || ' months')::interval + ((extract(day from to_date(start_date, 'YYYY-MM-DD'))::int - 1) || ' days')::interval, 'YYYY-MM-DD') <> to_char((to_date(start_date, 'YYYY-MM-DD') + (duration_months || ' months')::interval), 'YYYY-MM-DD');
+-- repair:end
 
 -- The insurance tables, on a database that predates them.
 ALTER TABLE insurance_policies DROP CONSTRAINT IF EXISTS fk_insurance_policies_user;

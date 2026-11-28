@@ -7144,7 +7144,7 @@ function monthEndDate(month: string) {
   return localIsoDate(new Date(year, monthIndex, 0));
 }
 
-function addMonthsToIsoDate(isoDate: string, count: number) {
+export function addMonthsToIsoDate(isoDate: string, count: number) {
   const [year, monthIndex, day] = isoDate.split("-").map(Number);
   const target = new Date(year, monthIndex - 1 + count, 1);
   const daysInTargetMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
