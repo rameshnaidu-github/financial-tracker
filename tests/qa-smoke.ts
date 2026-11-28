@@ -6115,6 +6115,84 @@ test("rows the rolling backfill already moved are put back, and nothing else is 
   assert(hand.end_date === "2026-03-03", `A hand-chosen end date was rewritten to ${hand.end_date}.`);
 });
 
+/* ---------- review fix 2: two page loads at once must not pay one instalment twice ---------- */
+/*
+ * Every automatic money run fires on page load, and two loads at the same moment -- a phone and
+ * a laptop, two tabs -- each read the same instalment as due before either wrote it down. Each
+ * case below makes exactly one instalment due, starts two runs together, and counts the money.
+ */
+const dayBeforeForTests = (iso: string) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  const moved = new Date(y, m - 1, d - 1);
+  return `${moved.getFullYear()}-${String(moved.getMonth() + 1).padStart(2, "0")}-${String(moved.getDate()).padStart(2, "0")}`;
+};
+
+test("two AutoPay runs at once take one instalment, not two", async () => {
+  const suffix = Math.random().toString(36).slice(2, 7);
+  const today = currentIsoDateForTests();
+  const bank = await services.createAccount({ name: `QA Race AP ${suffix}`, type: "bank", startingBalancePaise: 10_000_00 });
+  const sub = await services.createAutopaySubscription({
+    name: `QA Race AP ${suffix}`, amountPaise: 499_00, startDate: today,
+    endDate: addYearsForTests(today, 1), cadence: "monthly"
+  });
+  await dbModule.db.prepare("UPDATE autopay_subscriptions SET account_id = ?, debited_through = NULL WHERE id = ? AND user_id = ?")
+    .run(bank.id, sub.id, dbModule.currentUserId());
+  await Promise.all([services.catchUpAutopayDebits(), services.catchUpAutopayDebits()]);
+  const count = (await services.listAutopaySubscriptions(true)).find((item) => item.id === sub.id)?.paymentCount;
+  const balance = (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise;
+  assert(count === 1, `One due instalment was paid ${count} times.`);
+  assert(balance === 10_000_00 - 499_00, `The bank should be down 499 once, it is at ${balance}.`);
+});
+
+test("two insurance runs at once take one premium, not two", async () => {
+  const suffix = Math.random().toString(36).slice(2, 7);
+  const today = currentIsoDateForTests();
+  const bank = await services.createAccount({ name: `QA Race INS ${suffix}`, type: "bank", startingBalancePaise: 1_00_000_00 });
+  const policy = await services.createInsurancePolicy({
+    kind: "health", name: `QA Race INS ${suffix}`, policyNumber: `R-${suffix}`,
+    startDate: today, endDate: addYearsForTests(today, 2), cadence: "yearly", premiumPaise: 20_000_00
+  });
+  await dbModule.db.prepare("UPDATE insurance_policies SET account_id = ?, debited_through = NULL WHERE id = ? AND user_id = ?")
+    .run(bank.id, policy.id, dbModule.currentUserId());
+  await Promise.all([services.catchUpInsuranceDebits(), services.catchUpInsuranceDebits()]);
+  const count = (await services.listInsurancePolicies()).find((item) => item.id === policy.id)?.paymentCount;
+  assert(count === 1, `One due premium was paid ${count} times.`);
+});
+
+test("two SIP runs at once take one instalment, not two", async () => {
+  const suffix = Math.random().toString(36).slice(2, 7);
+  const today = currentIsoDateForTests();
+  const poor = await services.createAccount({ name: `QA Race SIP poor ${suffix}`, type: "bank", startingBalancePaise: 1_00 });
+  const rich = await services.createAccount({ name: `QA Race SIP rich ${suffix}`, type: "bank", startingBalancePaise: 10_000_00 });
+  // Set up on a bank that cannot cover it, so nothing is taken at creation, then moved.
+  const fund = await services.createInvestment({
+    type: "mutual_funds", name: `QA Race SIP ${suffix}`, investedPaise: 1_000_00, currentValuePaise: 1_000_00,
+    purchaseDate: today, sipAmountPaise: 2_000_00, sipDay: Number(today.slice(8, 10)), sipAccountId: poor.id
+  });
+  await dbModule.db.prepare("UPDATE investments SET sip_account_id = ?, sip_through = ? WHERE id = ? AND user_id = ?")
+    .run(rich.id, dayBeforeForTests(today), fund.id, dbModule.currentUserId());
+  await Promise.all([services.catchUpSipInstalments(), services.catchUpSipInstalments()]);
+  const balance = (await services.listAccounts(true)).find((item) => item.id === rich.id)?.balancePaise;
+  assert(balance === 10_000_00 - 2_000_00, `The bank should be down one 2,000 instalment, it is at ${balance}.`);
+});
+
+test("two payout runs at once credit one payout, not two", async () => {
+  const suffix = Math.random().toString(36).slice(2, 7);
+  const today = currentIsoDateForTests();
+  const bank = await services.createAccount({ name: `QA Race PO ${suffix}`, type: "bank", startingBalancePaise: 0 });
+  const deposit = await services.createInvestment({
+    type: "fd", name: `QA Race PO ${suffix}`, investedPaise: 1_00_000_00,
+    purchaseDate: services.addMonthsToIsoDate(today, -1),
+    payoutFrequency: "monthly", payoutAmountPaise: 1_000_00, payoutDay: Number(today.slice(8, 10)),
+    payoutAccountId: bank.id, payoutEndDate: addYearsForTests(today, 2)
+  });
+  await dbModule.db.prepare("UPDATE investments SET payout_through = ? WHERE id = ? AND user_id = ?")
+    .run(dayBeforeForTests(today), deposit.id, dbModule.currentUserId());
+  await Promise.all([services.catchUpPayoutCredits(), services.catchUpPayoutCredits()]);
+  const balance = (await services.listAccounts(true)).find((item) => item.id === bank.id)?.balancePaise;
+  assert(balance === 1_000_00, `The bank should have one 1,000 payout, it has ${balance}.`);
+});
+
 let failed = 0;
 let ran = 0;
 
