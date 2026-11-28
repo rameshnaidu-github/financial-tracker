@@ -6193,6 +6193,31 @@ test("two payout runs at once credit one payout, not two", async () => {
   assert(balance === 1_000_00, `The bank should have one 1,000 payout, it has ${balance}.`);
 });
 
+/* ---------- review fix 3: the server's "today" is the owner's today ---------- */
+
+test("a server on a UTC host still dates the day in India", () => {
+  /*
+   * Vercel runs functions in UTC, and nothing pinned the time zone, so between midnight and
+   * 5:30 am in India the server's today was still yesterday. A phone defaulting a new entry to
+   * today was then refused with "cannot be dated in the future", and the debits ran a day late.
+   *
+   * A child process started with TZ=UTC -- the host Vercel gives -- loads the server and is asked
+   * which day 20:00 UTC on 30 November is. In India that is 1:30 am on 1 December.
+   */
+  const probe = `
+    await import(${JSON.stringify(new URL("../server/services.ts", import.meta.url).href)});
+    const instant = new Date("2026-11-30T20:00:00Z");
+    console.log(instant.getFullYear() + "-" + String(instant.getMonth() + 1).padStart(2, "0") + "-" + String(instant.getDate()).padStart(2, "0"));
+  `;
+  const run = spawnSync(process.execPath, ["--no-warnings", "--input-type=module", "-e", probe], {
+    env: { ...process.env, TZ: "UTC" },
+    encoding: "utf8"
+  });
+  const day = (run.stdout || "").trim().split("\n").pop();
+  assert(run.status === 0, `the probe did not run: ${run.stderr}`);
+  assert(day === "2026-12-01", `On a UTC host the server dated 1:30 am IST as ${day}, not 2026-12-01.`);
+});
+
 let failed = 0;
 let ran = 0;
 

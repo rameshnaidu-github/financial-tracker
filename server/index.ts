@@ -1,3 +1,4 @@
+import "./timezone.ts";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
