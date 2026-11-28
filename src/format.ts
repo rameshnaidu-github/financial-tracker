@@ -45,6 +45,28 @@ export function parseAmountToPaise(value: string) {
 }
 
 /**
+ * An amount from a field that accepts zero, read at save time: refused if it cannot be read.
+ *
+ * parseAmountToPaise turns anything unreadable into 0, which is harmless where zero is refused
+ * downstream and dangerous where it is not. A loan's opening outstanding typed as "4,54,548.5O" --
+ * a capital O for a zero -- saved as 0 and the loan read "Paid off". So the fields that accept zero
+ * read through this instead, and an unreadable figure stops the save with the field's own name
+ * and the text that was typed. Empty is still zero: those fields are optional.
+ *
+ * parseAmountToPaise stays for live previews, which run while the user is mid-way through typing
+ * and must not throw.
+ */
+export function strictAmountToPaise(value: string, field: string) {
+  const normalized = value.replace(/[₹,\s]/g, "");
+  if (!normalized) return 0;
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw new Error(`${field}: "${value.trim()}" isn't an amount. Use digits only, like 4,54,548.50.`);
+  }
+  return Math.round(amount * 100);
+}
+
+/**
  * A typed correction, as paise and a direction. `null` when it is not a usable figure.
  *
  * Separate from parseAmountToPaise, which floors a negative at zero because every other amount

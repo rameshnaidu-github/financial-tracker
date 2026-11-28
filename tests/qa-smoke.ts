@@ -6218,6 +6218,34 @@ test("a server on a UTC host still dates the day in India", () => {
   assert(day === "2026-12-01", `On a UTC host the server dated 1:30 am IST as ${day}, not 2026-12-01.`);
 });
 
+/* ---------- review fix 4: an unreadable amount is an error, not a zero ---------- */
+
+test("an amount that cannot be read is refused with its own text, never saved as zero", async () => {
+  const { strictAmountToPaise } = await import("../src/format.ts");
+  // The one that started this: a capital O for a zero.
+  for (const typo of ["4,54,548.5O", "5l", "5 lakh", "abc", "-200"]) {
+    let message = "";
+    try { strictAmountToPaise(typo, "Opening outstanding"); } catch (error) { message = (error as Error).message; }
+    assert(message.includes("Opening outstanding"), `"${typo}" was not refused, or the refusal did not name the field: "${message}"`);
+    assert(message.includes(typo), `the refusal for "${typo}" did not quote what was typed: "${message}"`);
+  }
+  assert(strictAmountToPaise("4,54,548.50", "x") === 45454850, "a well-formed lakh figure should still read");
+  assert(strictAmountToPaise("₹ 1,000", "x") === 100000, "a rupee sign and spaces should still be accepted");
+  assert(strictAmountToPaise("", "x") === 0, "an empty optional field should still be zero");
+
+  /* And the fields that accept zero use it at save time. These are the ones where a silent zero
+     went straight into the record: a loan's opening balance, an account's balance and limit and
+     minimum, a holding's invested and current value. */
+  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  for (const field of [
+    "strictAmountToPaise(outstanding", "strictAmountToPaise(invested", "strictAmountToPaise(currentValue",
+    "strictAmountToPaise(starting", "strictAmountToPaise(limit", "strictAmountToPaise(minimumBalance",
+    "strictAmountToPaise(draft.opening", "strictAmountToPaise(draft.limit", "strictAmountToPaise(draft.minimum"
+  ]) {
+    assert(app.includes(field), `a zero-accepting field still saves without the strict parser: ${field}`);
+  }
+});
+
 let failed = 0;
 let ran = 0;
 

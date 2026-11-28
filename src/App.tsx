@@ -65,6 +65,7 @@ import {
   outstandingSpendLabel,
   outstandingSplit,
   parseAmountToPaise,
+  strictAmountToPaise,
   parseSignedAmount,
   signedAmount,
   splitMonth,
@@ -7045,7 +7046,7 @@ function LoanForm({
         name,
         subcategoryId,
         principalAmountPaise: parseAmountToPaise(principal),
-        startingOutstandingPaise: parseAmountToPaise(outstanding),
+        startingOutstandingPaise: strictAmountToPaise(outstanding, "Opening outstanding"),
         startMonth,
         annualInterestRateBps: parseRateToBps(interestRate),
         tenureMonths: Number.parseInt(tenureMonths, 10),
@@ -7805,10 +7806,10 @@ function InvestmentForm({
       const payload = {
         type,
         name: name.trim(),
-        investedPaise: parseAmountToPaise(invested),
+        investedPaise: strictAmountToPaise(invested, "Invested"),
         // A paying holding's current value is its principal plus what it has credited, which the
         // server works out from the credits themselves; sending a figure would only fight it.
-        currentValuePaise: pays ? undefined : parseAmountToPaise(currentValue),
+        currentValuePaise: pays ? undefined : strictAmountToPaise(currentValue, "Current value"),
         shares: shares ?? off,
         purchaseDate: purchaseDate || off,
         payoutFrequency: pays ? payoutFrequency : off,
@@ -9352,12 +9353,12 @@ function AccountForm({ onCreated, onCancel }: { onCreated: () => Promise<void>; 
       await Api.createAccount({
         name,
         type,
-        startingBalancePaise: parseAmountToPaise(starting),
-        creditLimitPaise: type === "credit_card" ? parseAmountToPaise(limit) : undefined,
+        startingBalancePaise: strictAmountToPaise(starting, "Starting balance"),
+        creditLimitPaise: type === "credit_card" ? strictAmountToPaise(limit, "Credit limit") : undefined,
         paymentDueDay: type === "credit_card" && dueDay.trim() ? Number.parseInt(dueDay, 10) : null,
         // A card has an outstanding rather than a balance, so it never carries a minimum.
         minimumBalancePaise:
-          type === "credit_card" || !minimumBalance.trim() ? undefined : parseAmountToPaise(minimumBalance)
+          type === "credit_card" || !minimumBalance.trim() ? undefined : strictAmountToPaise(minimumBalance, "Minimum balance")
       });
       setName("");
       setStarting("");
@@ -10878,8 +10879,17 @@ export function AccountEditDialog({
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    const openingPaise = parseAmountToPaise(draft.opening || "0");
-    const limitPaise = isCard ? parseAmountToPaise(draft.limit || "0") : undefined;
+    let openingPaise: number;
+    let limitPaise: number | undefined;
+    let minimumPaise: number | undefined;
+    try {
+      openingPaise = strictAmountToPaise(draft.opening, isCard ? "Outstanding" : "Opening balance");
+      limitPaise = isCard ? strictAmountToPaise(draft.limit, "Credit limit") : undefined;
+      minimumPaise = isCard ? undefined : strictAmountToPaise(draft.minimum, "Minimum balance");
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "That amount could not be read.");
+      return;
+    }
     if (draft.name.trim().length < 2) {
       onError("Give the account a name of at least 2 characters.");
       return;
@@ -10894,7 +10904,6 @@ export function AccountEditDialog({
       onError("Payment due day must be a day of the month, 1 to 31.");
       return;
     }
-    const minimumPaise = isCard ? undefined : parseAmountToPaise(draft.minimum || "0");
     if (minimumPaise !== undefined && minimumPaise < 0) {
       onError("A minimum balance can't be negative.");
       return;
