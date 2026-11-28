@@ -80,7 +80,7 @@ import { NewsList } from "./whats-new-view";
 import { adjustmentDirection, adjustmentShiftPaise } from "./adjustment";
 import { flushSync } from "react-dom";
 import { prefersReducedMotion, useCountUp, useScrollReveal } from "./motion";
-import { cashflowPartsFromTypes, INFLOW_BEHAVIORS, type CashflowPart } from "./report-cashflow";
+import { INFLOW_BEHAVIORS } from "./report-cashflow";
 import type {
   Account,
   AutopaySubscription,
@@ -4878,7 +4878,6 @@ function ReportsPage({
             <p className="helper-text report-range">
               {formatShortDate(report.start)} to {formatShortDate(report.end)}
             </p>
-            <CashflowSummary types={report.types} />
             <div className="report-chart-grid">
               <OutflowMixChart
                 types={report.types}
@@ -9507,56 +9506,6 @@ type BarCategory = {
 // Report buckets for "Other", uncategorised, or card lines don't map to one real filter.
 function isDrillableId(id: string | undefined) {
   return Boolean(id) && !id!.includes(":") && id !== "uncategorized" && id !== "other-chart-segments";
-}
-
-function CashflowSummary({ types }: { types: MonthlyReport["types"] }) {
-  const inflowParts = cashflowPartsFromTypes(types, "in");
-  const outflowParts = cashflowPartsFromTypes(types, "out");
-  const inflowPaise = inflowParts.reduce((sum, part) => sum + part.amountPaise, 0);
-  const outflowPaise = outflowParts.reduce((sum, part) => sum + part.amountPaise, 0);
-  const savingsPaise = inflowPaise - outflowPaise;
-
-  return (
-    <div className="cashflow-summary" aria-label="Inflow, outflow and savings breakdown">
-      <div className="cashflow-summary-row cashflow-section">
-        <div className="cashflow-formula-left" aria-label="Inflow minus outflow">
-          <div className="cashflow-summary-line inflow">
-            <div className="cashflow-summary-head">
-              <span>Inflow</span>
-              <strong className="amount-in">{formatINR(inflowPaise)}</strong>
-            </div>
-          </div>
-          <span className="cashflow-summary-operator">−</span>
-          <div className="cashflow-summary-line outflow">
-            <div className="cashflow-summary-head">
-              <span>Outflow</span>
-              <strong className="amount-out">{formatINR(outflowPaise)}</strong>
-            </div>
-          </div>
-        </div>
-        <span className="cashflow-summary-operator">=</span>
-        <div className="cashflow-summary-line savings">
-          <div className="cashflow-summary-head">
-            <span>Savings</span>
-            <strong className={savingsPaise >= 0 ? "amount-in" : "amount-out"}>
-              {signedImpact(savingsPaise)}
-            </strong>
-          </div>
-        </div>
-      </div>
-
-      {/*
-        * The two rows that used to sit here are gone.
-        *
-        * They broke each total into its parts and then restated the total: "Salary = Inflow",
-        * "Expense = Outflow". Measured on one screen, that put the same two figures on the page
-        * six times each -- twelve printings of two numbers, read before the first chart. Where
-        * a flow really does have several parts, the composition is not lost: the mix below
-        * shows exactly that, as a donut for the outflow and a ranked list for the SubTypes,
-        * with the Income and Expense toggle covering the other side.
-        */}
-    </div>
-  );
 }
 
 function OutflowMixChart({
