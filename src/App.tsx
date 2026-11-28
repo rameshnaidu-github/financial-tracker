@@ -2132,8 +2132,7 @@ function OverviewPage({
  * when the window changes, and a tablet turned on its side is the ordinary case rather than the
  * exotic one.
  */
-function usePhoneWidth(): boolean {
-  const query = "(max-width: 1120px)";
+function usePhoneWidth(query = "(max-width: 1120px)"): boolean {
   const [isPhone, setIsPhone] = useState(
     () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches
   );
@@ -2144,7 +2143,9 @@ function usePhoneWidth(): boolean {
     update();
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
-  }, []);
+    /* The query is a dependency now that it is an argument. Left at `[]`, a caller passing a
+       different breakpoint would be watched at whichever one happened to mount first. */
+  }, [query]);
   return isPhone;
 }
 
@@ -3369,6 +3370,25 @@ function TransactionsPage({
     }
   }
 
+  /*
+   * 720px, not the 1120px the sidebar uses.
+   *
+   * Those are two different questions. 1120px is where the sidebar steps in and the content
+   * column narrows; 720px is where this page's own stylesheet already folds the filters behind
+   * one button. Opening a sheet at a width where the stylesheet still expects an inline grid
+   * would give a tablet both.
+   */
+  const filtersOnASheet = usePhoneWidth("(max-width: 720px)");
+
+  function applyFilters() {
+    if (!rangeIsValid) {
+      showNotice("Choose a valid date range.");
+      return;
+    }
+    loadPage();
+    setFiltersOpen(false);
+  }
+
   return (
     <div className="page-grid transactions-page">
       <PageHeader
@@ -3459,67 +3479,67 @@ function TransactionsPage({
             type="button"
             className="secondary-action filters-toggle"
             aria-expanded={filtersOpen}
-            aria-controls="transaction-filters"
+            /* `aria-controls` must name something that is on the page. With the sheet it does
+               not exist until the press, so the button says it opens a dialog instead. */
+            aria-controls={filtersOnASheet ? undefined : "transaction-filters"}
+            aria-haspopup={filtersOnASheet ? "dialog" : undefined}
             onClick={() => setFiltersOpen((open) => !open)}
           >
             <SlidersHorizontal size={16} />
             Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
           </button>
-          <div id="transaction-filters" className={`filter-extra${filtersOpen ? " open" : ""}`}>
-          <label className="control-field toolbar-control">
-            <span className="control-label">Type</span>
-            <select
-              value={typeId}
-              onChange={(event) => {
-                setTypeId(event.target.value);
-                setSubcategoryId("");
-              }}
-            >
-              <option value="">All types</option>
-              {categoryTypes.map((type) => (
-                <option key={type.id} value={type.id}>
-                  {type.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="control-field toolbar-control">
-            <span className="control-label">SubType</span>
-            <select
-              value={subcategoryId}
-              onChange={(event) => setSubcategoryId(event.target.value)}
-              disabled={!selectedFilterType}
-            >
-              <option value="">All SubTypes</option>
-              {(selectedFilterType?.subcategories ?? categories).map((subcategory) => (
-                <option key={subcategory.id} value={subcategory.id}>
-                  {subcategory.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="control-field toolbar-control">
-            <span className="control-label">From</span>
-            <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={from} onChange={(event) => setFrom(event.target.value)} />
-          </label>
-          <label className="control-field toolbar-control">
-            <span className="control-label">To</span>
-            <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={to} onChange={(event) => setTo(event.target.value)} />
-          </label>
-          <button
-            onClick={() => {
-              if (!rangeIsValid) {
-                showNotice("Choose a valid date range.");
-                return;
-              }
-              loadPage();
-              setFiltersOpen(false);
-            }}
-          >
-            Apply
-          </button>
-          </div>
-          {hasActiveFilters && (
+          {/*
+            * On a laptop the filters unfold along the toolbar, where there is room for six
+            * tracks. On a phone they are a sheet, and this is not rendered at all -- an inline
+            * panel and a sheet holding the same four fields would be two sources of the same
+            * truth, and the one off screen would be the one a test found.
+            */}
+          {!filtersOnASheet && (
+            <div id="transaction-filters" className={`filter-extra${filtersOpen ? " open" : ""}`}>
+            <label className="control-field toolbar-control">
+              <span className="control-label">Type</span>
+              <select
+                value={typeId}
+                onChange={(event) => {
+                  setTypeId(event.target.value);
+                  setSubcategoryId("");
+                }}
+              >
+                <option value="">All types</option>
+                {categoryTypes.map((type) => (
+                  <option key={type.id} value={type.id}>
+                    {type.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="control-field toolbar-control">
+              <span className="control-label">SubType</span>
+              <select
+                value={subcategoryId}
+                onChange={(event) => setSubcategoryId(event.target.value)}
+                disabled={!selectedFilterType}
+              >
+                <option value="">All SubTypes</option>
+                {(selectedFilterType?.subcategories ?? categories).map((subcategory) => (
+                  <option key={subcategory.id} value={subcategory.id}>
+                    {subcategory.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="control-field toolbar-control">
+              <span className="control-label">From</span>
+              <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={from} onChange={(event) => setFrom(event.target.value)} />
+            </label>
+            <label className="control-field toolbar-control">
+              <span className="control-label">To</span>
+              <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={to} onChange={(event) => setTo(event.target.value)} />
+            </label>
+              <button onClick={applyFilters}>Apply</button>
+            </div>
+          )}
+          {!filtersOnASheet && hasActiveFilters && (
             <button type="button" className="secondary-action" onClick={clearFilters}>
               <RotateCcw size={16} />
               Clear filters
@@ -3527,6 +3547,84 @@ function TransactionsPage({
           )}
         </div>
       </div>
+
+      {/*
+        * The phone's filters.
+        *
+        * Outside the toolbar, and outside the panel's flow entirely: it is portalled onto the
+        * body by the dialog itself. What that buys, beyond not pushing the ledger down the
+        * page, is everything the application already decided an overlay must do -- Escape, a
+        * backdrop, a Tab trap, a scroll lock a phone browser honours, and focus handed back to
+        * the button that opened it. None of that was true of the panel this replaces.
+        */}
+      {filtersOnASheet && filtersOpen && (
+        <FormDialog
+          title="Filter transactions"
+          sheet
+          onClose={() => setFiltersOpen(false)}
+          footer={
+            <>
+              {/* Clear empties the fields and leaves the sheet open: you are usually not done
+                  filtering, you are starting again. Apply is the one that closes. */}
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={clearFilters}
+                disabled={!hasActiveFilters}
+              >
+                <RotateCcw size={16} />
+                Clear
+              </button>
+              <button type="button" className="primary-action" onClick={applyFilters}>
+                Apply
+              </button>
+            </>
+          }
+        >
+          <div className="filter-sheet-fields">
+            <label className="control-field toolbar-control">
+              <span className="control-label">Type</span>
+              <select
+                value={typeId}
+                onChange={(event) => {
+                  setTypeId(event.target.value);
+                  setSubcategoryId("");
+                }}
+              >
+                <option value="">All types</option>
+                {categoryTypes.map((type) => (
+                  <option key={type.id} value={type.id}>
+                    {type.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="control-field toolbar-control">
+              <span className="control-label">SubType</span>
+              <select
+                value={subcategoryId}
+                onChange={(event) => setSubcategoryId(event.target.value)}
+                disabled={!selectedFilterType}
+              >
+                <option value="">All SubTypes</option>
+                {(selectedFilterType?.subcategories ?? categories).map((subcategory) => (
+                  <option key={subcategory.id} value={subcategory.id}>
+                    {subcategory.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="control-field toolbar-control">
+              <span className="control-label">From</span>
+              <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={from} onChange={(event) => setFrom(event.target.value)} />
+            </label>
+            <label className="control-field toolbar-control">
+              <span className="control-label">To</span>
+              <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={to} onChange={(event) => setTo(event.target.value)} />
+            </label>
+          </div>
+        </FormDialog>
+      )}
 
       {statusFilter === "uncategorized" && (
         <div className="filter-chips">
@@ -10739,12 +10837,26 @@ function FormDialog({
   title,
   onClose,
   wide = false,
+  sheet = false,
+  footer,
   children
 }: {
   title: string;
   onClose: () => void;
   /** For a form laid out in columns -- the entry form has four, and 560px gives it one. */
   wide?: boolean;
+  /**
+   * Sit on the bottom edge of a phone instead of in the middle of it.
+   *
+   * Only below 720px, and only for the dialogs that ask: everything else in this application is
+   * a centred card that grows from whatever opened it, and one overlay behaving differently for
+   * no reason is worse than a thumb reaching a little further. The ledger's filters ask for it
+   * because they are a control you work and re-work with one hand while reading the list, which
+   * is the case a sheet is actually for.
+   */
+  sheet?: boolean;
+  /** Actions that stay on screen while the fields scroll past them. */
+  footer?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const titleId = useId();
@@ -10874,7 +10986,7 @@ function FormDialog({
      put the first version of this dialog a page and a half above the top of the screen. */
   const content = (
     <div
-      className="modal-backdrop form-dialog-backdrop"
+      className={`modal-backdrop form-dialog-backdrop${sheet ? " is-sheet-backdrop" : ""}`}
       role="presentation"
       /* mousedown rather than click: a drag that starts on a field and ends on the backdrop
          should not throw the form away. */
@@ -10883,7 +10995,7 @@ function FormDialog({
       }}
     >
       <div
-        className={`form-dialog${wide ? " is-wide" : ""}`}
+        className={`form-dialog${wide ? " is-wide" : ""}${sheet ? " is-sheet" : ""}${footer ? " has-footer" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -10897,6 +11009,7 @@ function FormDialog({
           </button>
         </div>
         <div className="form-dialog-body">{children}</div>
+        {footer && <div className="form-dialog-footer">{footer}</div>}
       </div>
     </div>
   );

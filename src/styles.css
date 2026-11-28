@@ -4398,6 +4398,31 @@ a {
   padding: 18px;
 }
 
+/*
+ * A dialog that carries actions keeps them out of the scroll.
+ *
+ * Without this row the dialog is a header and a body, and a footer put inside the body scrolls
+ * away with the last field -- which on a phone means reaching Apply by scrolling past four
+ * controls you have just finished setting.
+ */
+.form-dialog.has-footer {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.form-dialog-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding: 14px 18px;
+}
+
+.form-dialog-footer > button {
+  flex: 1 1 0;
+  justify-content: center;
+  min-height: 44px;
+}
+
 @media (max-width: 720px) {
   .form-dialog-backdrop {
     padding: 12px;
@@ -4411,6 +4436,43 @@ a {
     padding-left: 14px;
     padding-right: 14px;
   }
+
+  /*
+   * The sheet: on the bottom edge, the full width, and only below this breakpoint.
+   *
+   * `place-items: end stretch` is the whole of the move -- `end` on the block axis is the
+   * bottom of the grid, `stretch` on the inline axis is the full width of it. Written as
+   * `place-items: end` alone it would have centred the sheet horizontally and taken its own
+   * width, which is the trap this codebase has hit before: `end` means a different edge
+   * depending on which axis is asking.
+   */
+  .form-dialog-backdrop.is-sheet-backdrop {
+    padding: 0;
+    place-items: end stretch;
+  }
+
+  .form-dialog.is-sheet {
+    width: 100%;
+    /* Short enough that the ledger is still visible above it, so the sheet reads as something
+       over the list rather than as a new page. */
+    max-height: min(78dvh, calc(100dvh - 64px));
+    border-width: 1px 0 0;
+    border-radius: 16px 16px 0 0;
+  }
+
+  /* The home indicator sits under the last 34px of an iPhone's screen, and a button under it
+     is a button you cannot press. */
+  .form-dialog.is-sheet .form-dialog-footer {
+    padding-bottom: calc(14px + var(--safe-bottom));
+  }
+}
+
+/* One field to a line. The four of them are a Type, its SubType and two dates, and pairing them
+   up at 320px gives a date input 130px for a control that wants about 150. */
+.filter-sheet-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
 }
 
 /* ---------- What's new ---------- */
