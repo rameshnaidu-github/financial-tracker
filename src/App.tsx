@@ -9581,9 +9581,14 @@ function OutflowMixChart({
 
   return (
     <div className="report-analytics outflow-mix-analytics">
+      {/* The total stays in the header as well as in the ring. Dropping it as a duplicate
+          left the outflow heading alone above the chart while SubType mix beside it kept its
+          figure, and the pair stopped matching -- which on this page is worse than printing a
+          number twice. */}
       <div className="report-chart-header">
         <div>
           <span>Outflow mix</span>
+          <strong>{formatINR(outflowPaise)}</strong>
         </div>
       </div>
       <div className="pie-panel">
@@ -9658,34 +9663,31 @@ function ReportTypeAnalytics({
         </div>
       </div>
       {/*
-        * A ranked list, where there used to be a second donut.
+        * A ring, like the outflow beside it.
         *
-        * Two rings of identical size answered the same kind of question twice -- measured, both
-        * were exactly 228 by 228 -- so neither led, and a page whose whole job is one chart had
-        * no main chart. The outflow keeps the ring, because a share of a whole is what a ring
-        * is for. The SubTypes are better as a list: it puts them in order, which a ring cannot,
-        * and it still reads at twenty rows, where a ring stops at about six.
-        *
-        * The ring is still a tap away on the switch. This decides what it opens on, not what
-        * it can show.
+        * This was briefly a ranked list, on the argument that two rings of identical size
+        * answer the same kind of question twice and so neither leads. The owner looked at it
+        * and said no: on this page the two mixes are read together, and a list beside a ring
+        * reads as two different kinds of thing rather than as one comparison. The symmetry is
+        * the point here, and that is theirs to decide.
         */}
       <div className="pie-panel">
-        <MixChart
-          segments={chartSegments}
-          totalPaise={selected.amountPaise}
-          ariaLabel={`${selected.name} SubType mix`}
-          onSegmentClick={
-            onSubTypeClick && isDrillableId(selected.typeId)
-              ? (segment) => onSubTypeClick(selected.typeId, segment.id)
-              : undefined
-          }
-          centerLabel="Total"
-          centerValue={formatINRWhole(selected.amountPaise)}
-          centerCountPaise={selected.amountPaise}
-          className="report-donut-chart"
-          emptyText="No SubType breakdown for this period."
-          defaultMode="bar"
-        />
+        <div className="pie-chart">
+          <DonutChart
+            segments={chartSegments}
+            totalPaise={selected.amountPaise}
+            ariaLabel={`${selected.name} SubType percentage chart`}
+            onSegmentClick={
+              onSubTypeClick && isDrillableId(selected.typeId)
+                ? (segment) => onSubTypeClick(selected.typeId, segment.id)
+                : undefined
+            }
+            centerLabel="Total"
+            centerValue={formatINRWhole(selected.amountPaise)}
+            centerCountPaise={selected.amountPaise}
+            className="report-donut-chart"
+          />
+        </div>
       </div>
     </div>
   );
@@ -9842,7 +9844,6 @@ function MixChart({
   centerCountPaise,
   className = "",
   emptyText,
-  defaultMode,
   onSegmentClick
 }: {
   segments: DonutSegment[];
@@ -9854,8 +9855,6 @@ function MixChart({
   centerCountPaise?: number;
   className?: string;
   emptyText: string;
-  /** Which view it opens on, where the caller knows better than the limits rule below. */
-  defaultMode?: "pie" | "bar";
   onSegmentClick?: (segment: DonutSegment) => void;
 }) {
   /*
@@ -9868,7 +9867,7 @@ function MixChart({
    * is the one the title promises.
    */
   const hasLimits = segments.some((segment) => segment.maxPaise !== undefined && segment.maxPaise > 0);
-  const [mode, setMode] = useState<"pie" | "bar">(defaultMode ?? (hasLimits ? "bar" : "pie"));
+  const [mode, setMode] = useState<"pie" | "bar">(hasLimits ? "bar" : "pie");
 
   if (segments.length === 0 || totalPaise <= 0) {
     return <EmptyState text={emptyText} />;
