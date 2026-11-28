@@ -10,6 +10,7 @@ import type {
   BudgetPlan,
   CategoryType,
   CreateTransactionPayload,
+  InsurancePolicy,
   Investment,
   InvestmentType,
   PayoutFrequency,
@@ -207,7 +208,8 @@ export const Api = {
     name: string;
     amountPaise: number;
     startDate: string;
-    durationMonths: number;
+    endDate: string;
+    cadence: string;
     accountId?: string;
   }) => api<AutopaySubscription>("/api/subscriptions", { method: "POST", body }),
   updateSubscription: (
@@ -216,7 +218,8 @@ export const Api = {
       name: string;
       amountPaise: number;
       startDate: string;
-      durationMonths: number;
+      endDate: string;
+      cadence: string;
       /** The bank it is taken from; null detaches it and it stops paying itself. */
       accountId: string | null;
       isArchived: boolean;
@@ -224,6 +227,33 @@ export const Api = {
   ) => api<AutopaySubscription>(`/api/subscriptions/${id}`, { method: "PATCH", body }),
   deleteSubscription: (id: string) =>
     api<{ ok: true; mode: "archived" }>(`/api/subscriptions/${id}`, { method: "DELETE" }),
+  insurancePolicies: () => api<InsurancePolicy[]>("/api/insurance"),
+  createInsurancePolicy: (body: {
+    kind: string;
+    name: string;
+    policyNumber: string;
+    startDate: string;
+    endDate: string;
+    cadence: string;
+    premiumPaise: number;
+    accountId?: string;
+  }) => api<InsurancePolicy>("/api/insurance", { method: "POST", body }),
+  updateInsurancePolicy: (
+    id: string,
+    body: Partial<{
+      kind: string;
+      name: string;
+      policyNumber: string;
+      startDate: string;
+      endDate: string;
+      cadence: string;
+      premiumPaise: number;
+      /** The account it is taken from; null detaches it and it stops paying itself. */
+      accountId: string | null;
+    }>
+  ) => api<InsurancePolicy>(`/api/insurance/${id}`, { method: "PATCH", body }),
+  deleteInsurancePolicy: (id: string) =>
+    api<{ ok: true; mode: "deleted"; paymentsUnlinked: number }>(`/api/insurance/${id}`, { method: "DELETE" }),
   investments: () => api<Investment[]>("/api/investments"),
   createInvestment: (body: InvestmentPayload) =>
     api<Investment>("/api/investments", { method: "POST", body }),

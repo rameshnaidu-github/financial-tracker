@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   BarChart3,
   CalendarClock,
+  ShieldCheck,
   CalendarDays,
   Check,
   CircleHelp,
@@ -67,6 +68,7 @@ import {
   parseSignedAmount,
   signedAmount,
   splitMonth,
+  addYearsToISO,
   todayISO,
   yearChoices,
   splitLoansByStanding,
@@ -91,6 +93,7 @@ import type {
   CategoryType,
   CreateTransactionPayload,
   Investment,
+  InsurancePolicy,
   InvestmentType,
   PayoutFrequency,
   Vacation,
@@ -114,7 +117,12 @@ import type {
   WealthSummary,
 } from "./types";
 import {
-  AUTOPAY_DURATION_MONTH_OPTIONS,
+  PAYMENT_CADENCES,
+  cadenceLabel,
+  cadenceMonths,
+  INSURANCE_KINDS,
+  insuranceKindIcon,
+  insuranceKindLabel,
   AUTOPAY_SUBCATEGORY_ID,
   MUTUAL_FUNDS_SUBCATEGORY_ID,
   ADJUSTMENT_SUBCATEGORY_ID,
@@ -194,6 +202,7 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Home; group?: Na
   { page: "reports", label: "Reports", icon: BarChart3, group: "Daily" },
   { page: "budgets", label: "Budget Planner", icon: Target, group: "Plan" },
   { page: "subscriptions", label: "AutoPay", icon: CalendarClock, group: "Plan" },
+  { page: "insurance", label: "Insurance", icon: ShieldCheck, group: "Plan" },
   { page: "vacations", label: "Vacations", icon: Plane, group: "Plan" },
   { page: "accounts", label: "Accounts", icon: WalletCards, group: "Own & owe" },
   { page: "loans", label: "Loans", icon: Landmark, group: "Own & owe" },
@@ -613,6 +622,7 @@ const PAGES_WITH_OWN_HEADER: Page[] = [
   "investments",
   "vacations",
   "subscriptions",
+  "insurance",
   "categories"
 ];
 const THEME_KEY = "finance-theme";
@@ -704,6 +714,7 @@ const pagePaths: Record<Page, string> = {
   cardEmis: "/emi",
   vacations: "/vacations",
   subscriptions: "/subscriptions",
+  insurance: "/insurance",
   categories: "/categories",
   whatsNew: "/whats-new",
   faq: "/faq",
@@ -1099,6 +1110,7 @@ export default function App() {
   const loans = bootstrap?.loans ?? [];
   const cardEmis = bootstrap?.cardEmis ?? [];
   const subscriptions = bootstrap?.subscriptions ?? [];
+  const insurancePolicies = bootstrap?.insurancePolicies ?? [];
   const investments = bootstrap?.investments ?? [];
   const vacations = bootstrap?.vacations ?? [];
   const categoryTypes = bootstrap?.categoryTypes ?? [];
@@ -1472,6 +1484,16 @@ export default function App() {
         return (
         <SubscriptionsPage
                       subscriptions={subscriptions}
+                      accounts={activeAccounts}
+                      refresh={refresh}
+                      showNotice={showNotice}
+                      requestConfirm={requestConfirm}
+                    />
+        );
+      case "insurance":
+        return (
+        <InsurancePage
+                      policies={insurancePolicies}
                       accounts={activeAccounts}
                       refresh={refresh}
                       showNotice={showNotice}
@@ -8405,6 +8427,350 @@ function VacationForm({
   );
 }
 
+/* ---------- Insurance ----------
+ *
+ * Laid out as AutoPay is, because it is the same shape of thing: a list of cards, grouped by
+ * whether they are still running, each one a commitment that takes money out by itself. What a
+ * policy says that a subscription does not is what it covers, whose number it is, and the day
+ * cover stops -- and that last one is the figure on the card, because a policy you think is
+ * live and is not is the expensive kind of wrong.
+ */
+function InsurancePage({
+  policies,
+  accounts,
+  refresh,
+  showNotice,
+  requestConfirm
+}: {
+  policies: InsurancePolicy[];
+  accounts: Account[];
+  refresh: () => Promise<void>;
+  showNotice: (message: string) => void;
+  requestConfirm: (request: ConfirmRequest) => void;
+}) {
+  const [editing, setEditing] = useState<InsurancePolicy | null>(null);
+  const [adding, setAdding] = useState(false);
+  const debitAccounts = accounts.filter(
+    (account) => !account.isArchived && (account.type === "bank" || account.type === "credit_card")
+  );
+
+  const inForce = policies.filter((policy) => policy.status === "active");
+  /* Spread over the months each cadence covers, so a yearly policy does not read as its whole
+     premium every month. The same arithmetic the AutoPay tile does, for the same reason. */
+  const monthlyTotal = inForce.reduce((sum, policy) => {
+    const months = cadenceMonths(policy.cadence);
+    return sum + (months > 0 ? Math.round(policy.premiumPaise / months) : 0);
+  }, 0);
+
+  const groups = [
+    { key: "in-force", title: "In force", policies: inForce },
+    { key: "expired", title: "Expired", policies: policies.filter((policy) => policy.status !== "active") }
+  ].filter((group) => group.policies.length > 0);
+
+  function remove(policy: InsurancePolicy) {
+    requestConfirm({
+      message: `Delete ${policy.name}?`,
+      detail:
+        "The policy goes and stops being counted. Every premium it has already paid stays on your transactions, and your balances do not change.",
+      confirmLabel: "Delete",
+      tone: "danger",
+      onConfirm: async () => {
+        try {
+          await Api.deleteInsurancePolicy(policy.id);
+          if (editing?.id === policy.id) setEditing(null);
+          await refresh();
+          showNotice("Policy deleted. Its premiums are still on your transactions.");
+        } catch (err) {
+          showNotice(err instanceof Error ? err.message : "Could not delete policy.");
+        }
+      }
+    });
+  }
+
+  return (
+    <div className="page-grid loans-page">
+      <PageHeader
+        title="Insurance"
+        actions={
+          <button type="button" className="primary-action" onClick={() => setAdding(true)}>
+            <Plus size={17} />
+            Add policy
+          </button>
+        }
+      />
+      <section className="summary-grid mini loan-summary-grid">
+        <SummaryCard label="Policies in force" value={String(inForce.length)} icon={<ShieldCheck />} />
+        <SummaryCard
+          label="Monthly total"
+          value={formatINRWhole(monthlyTotal)}
+          countPaise={monthlyTotal}
+          icon={<ArrowDownUp />}
+          tone="warning"
+        />
+      </section>
+
+      {groups.map((group) => (
+        <section className="account-group" key={group.key}>
+          <h2 className="account-group-title">{group.title}</h2>
+          <div className="budget-grid accounts-grid">
+            {group.policies.map((policy) => (
+              <InsuranceCard key={policy.id} policy={policy} onEdit={setEditing} onDelete={remove} />
+            ))}
+          </div>
+        </section>
+      ))}
+
+      {groups.length === 0 && <EmptyState text="No policies yet. Add one to keep its dates and premiums in view." />}
+
+      {adding && (
+        <FormDialog title="Add policy" onClose={() => setAdding(false)}>
+          <InsuranceForm
+            policy={null}
+            debitAccounts={debitAccounts}
+            onCancel={() => setAdding(false)}
+            onSaved={async (message) => {
+              setAdding(false);
+              await refresh();
+              showNotice(message);
+            }}
+          />
+        </FormDialog>
+      )}
+
+      {editing && (
+        <FormDialog title={`Edit ${editing.name}`} onClose={() => setEditing(null)}>
+          <InsuranceForm
+            policy={editing}
+            debitAccounts={debitAccounts}
+            onCancel={() => setEditing(null)}
+            onSaved={async (message) => {
+              setEditing(null);
+              await refresh();
+              showNotice(message);
+            }}
+          />
+        </FormDialog>
+      )}
+    </div>
+  );
+}
+
+function InsuranceCard({
+  policy,
+  onEdit,
+  onDelete
+}: {
+  policy: InsurancePolicy;
+  onEdit: (policy: InsurancePolicy) => void;
+  onDelete: (policy: InsurancePolicy) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const expired = policy.status !== "active";
+  return (
+    /*
+     * The same bones as a subscription card, class for class.
+     *
+     * The first draft invented its own -- loan-card-head, loan-card-title, loan-card-sub -- and
+     * none of them exist in the stylesheet, so the card laid itself out as unstyled blocks and
+     * pushed the page 90px wider than the phone. Reusing the real structure is not only less
+     * code; it is the only way this page stays in step with that one when either is changed.
+     */
+    <article className="loan-card">
+      <div className="loan-card-header">
+        <div className="loan-title">
+          <span className="loan-icon" style={{ color: "#0284c7", background: "#0284c714" }}>
+            <IconGlyph name={insuranceKindIcon(policy.kind)} size={18} />
+          </span>
+          <div>
+            <strong>{policy.name}</strong>
+            <span>{insuranceKindLabel(policy.kind)} · {formatINR(policy.premiumPaise)} {cadenceLabel(policy.cadence).toLowerCase()}</span>
+          </div>
+        </div>
+        <div className="loan-header-actions">
+          {policy.accountName && <span className="loan-bank">{policy.accountName}</span>}
+          <span className={`subscription-status ${expired ? "expired" : "active"}`}>
+            {expired ? "Expired" : "In force"}
+          </span>
+          <button
+            type="button"
+            className={`icon-button disclosure-toggle ${expanded ? "expanded" : ""}`}
+            aria-label={expanded ? `Collapse ${policy.name}` : `Expand ${policy.name}`}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            <ChevronDown size={18} />
+          </button>
+        </div>
+      </div>
+
+      {/* Cover ending is the figure on the front of the card. Everything else about a policy
+          can wait for the fold; the day it stops cannot. */}
+      <div className="loan-card-quick">
+        <span>Cover ends</span>
+        <strong>{formatDateWithYear(policy.endDate)}</strong>
+        <small>{policy.paymentCount} premium{policy.paymentCount === 1 ? "" : "s"} paid</small>
+      </div>
+
+      {expanded && <>
+      <div className="subscription-meta">
+        <div>
+          <span>Policy number</span>
+          <strong>{policy.policyNumber}</strong>
+        </div>
+        <div>
+          <span>Started</span>
+          <strong>{formatDateWithYear(policy.startDate)}</strong>
+        </div>
+        <div>
+          <span>Comes out</span>
+          <strong>{cadenceLabel(policy.cadence)}</strong>
+        </div>
+        <div>
+          <span>Premiums paid</span>
+          <strong>{policy.paymentCount}</strong>
+        </div>
+      </div>
+
+      <div className="loan-actions">
+        <button type="button" className="secondary-action" onClick={() => onEdit(policy)}>
+          <Pencil size={16} />
+          Edit
+        </button>
+        <button type="button" className="secondary-action danger" onClick={() => onDelete(policy)}>
+          <Trash2 size={16} />
+          Delete
+        </button>
+      </div>
+      </>}
+    </article>
+  );
+}
+
+function InsuranceForm({
+  policy,
+  debitAccounts,
+  onSaved,
+  onCancel
+}: {
+  policy: InsurancePolicy | null;
+  debitAccounts: Account[];
+  onSaved: (message: string) => Promise<void>;
+  onCancel?: () => void;
+}) {
+  const [kind, setKind] = useState(policy?.kind ?? "health");
+  const [name, setName] = useState(policy?.name ?? "");
+  const [policyNumber, setPolicyNumber] = useState(policy?.policyNumber ?? "");
+  const [startDate, setStartDate] = useState(policy?.startDate ?? todayISO());
+  const [endDate, setEndDate] = useState(policy?.endDate ?? addYearsToISO(todayISO(), 1));
+  /* Yearly by default: most policies in this country are, and a default that is usually right
+     is worth more than a neutral one nobody can leave alone. */
+  const [cadence, setCadence] = useState(policy?.cadence ?? "yearly");
+  const [premium, setPremium] = useState(policy ? amountInputFromPaise(policy.premiumPaise) : "");
+  const [accountId, setAccountId] = useState(policy?.accountId ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const payload = {
+        kind,
+        name,
+        policyNumber,
+        startDate,
+        endDate,
+        cadence,
+        premiumPaise: parseAmountToPaise(premium)
+      };
+      if (policy) {
+        await Api.updateInsurancePolicy(policy.id, { ...payload, accountId: accountId || null });
+        await onSaved("Policy updated.");
+      } else {
+        await Api.createInsurancePolicy({ ...payload, ...(accountId ? { accountId } : {}) });
+        setName("");
+        setPolicyNumber("");
+        setPremium("");
+        setStartDate(todayISO());
+        setEndDate(addYearsToISO(todayISO(), 1));
+        await onSaved("Policy added.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save policy.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="stack-form loan-form" onSubmit={submit}>
+      <label>
+        Cover
+        <select value={kind} onChange={(event) => setKind(event.target.value)} required>
+          {INSURANCE_KINDS.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Name
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="HDFC Ergo Optima" required />
+      </label>
+      <label>
+        Policy number
+        <input value={policyNumber} onChange={(event) => setPolicyNumber(event.target.value)} placeholder="As printed on the policy" required />
+      </label>
+      <label>
+        Premium
+        <input value={premium} onChange={(event) => setPremium(event.target.value)} placeholder="₹0" inputMode="decimal" required />
+      </label>
+      <label>
+        Comes out
+        <select value={cadence} onChange={(event) => setCadence(event.target.value)} required>
+          {PAYMENT_CADENCES.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Start date
+        <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={startDate} onChange={(event) => setStartDate(event.target.value)} required />
+      </label>
+      <label>
+        Cover ends
+        <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={endDate} onChange={(event) => setEndDate(event.target.value)} required />
+      </label>
+      <label>
+        Paid from
+        <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
+          <option value="">Just remind me</option>
+          {debitAccounts.map((account) => (
+            <option key={account.id} value={account.id}>
+              {account.name} · {accountTypeLabel(account.type)}
+            </option>
+          ))}
+        </select>
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <div className="entry-form-actions">
+        <button type="submit" className="primary-action" disabled={saving}>
+          {saving ? "Saving..." : policy ? "Save policy" : "Add policy"}
+        </button>
+        {onCancel && (
+          <button type="button" className="secondary-action" onClick={onCancel}>
+            Cancel
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}
+
 function SubscriptionsPage({
   subscriptions,
   accounts,
@@ -8427,9 +8793,20 @@ function SubscriptionsPage({
   );
   const active = subscriptions.filter((subscription) => !subscription.isArchived);
   const activeCount = active.filter((subscription) => subscription.status === "active").length;
+  /*
+   * What it costs a month, which is no longer the same as adding the amounts up.
+   *
+   * Before cadences existed every subscription came out monthly and the sum of the amounts was
+   * the monthly figure. A yearly subscription of twelve thousand added to that sum would read
+   * as twelve thousand a month. Each amount is therefore spread over the months its cadence
+   * covers, which is what the tile has always claimed to show.
+   */
   const monthlyTotal = active
     .filter((subscription) => subscription.status === "active")
-    .reduce((sum, subscription) => sum + subscription.amountPaise, 0);
+    .reduce((sum, subscription) => {
+      const months = cadenceMonths(subscription.cadence);
+      return sum + (months > 0 ? Math.round(subscription.amountPaise / months) : 0);
+    }, 0);
 
   /* Running and finished, the way the accounts page groups banks and cards: a heading only
      where something sits under it. "Expired" is the subscription's own word for a term that has
@@ -8591,7 +8968,7 @@ function SubscriptionCard({
       <div className="loan-card-quick">
         <span>Payments made</span>
         <strong>{subscription.paymentCount}</strong>
-        <small>Renews until {formatDateWithYear(subscription.expiryDate)}</small>
+        <small>{cadenceLabel(subscription.cadence)} until {formatDateWithYear(subscription.endDate)}</small>
       </div>
 
       {expanded && <>
@@ -8601,12 +8978,15 @@ function SubscriptionCard({
           <strong>{formatDateWithYear(subscription.startDate)}</strong>
         </div>
         <div>
-          <span>Expires</span>
-          <strong>{formatDateWithYear(subscription.expiryDate)}</strong>
+          <span>Ends</span>
+          <strong>{formatDateWithYear(subscription.endDate)}</strong>
         </div>
         <div>
-          <span>Duration</span>
-          <strong>{subscription.durationMonths} months</strong>
+          {/* The cadence, where the month count used to be. The count answered "how long"
+              twice -- the end date already says it -- and never answered "how often", which
+              is the thing you cannot work out from the other three figures. */}
+          <span>Comes out</span>
+          <strong>{cadenceLabel(subscription.cadence)}</strong>
         </div>
         <div>
           <span>Payments made</span>
@@ -8648,7 +9028,8 @@ function SubscriptionForm({
   const [name, setName] = useState(subscription?.name ?? "");
   const [amount, setAmount] = useState(subscription ? amountInputFromPaise(subscription.amountPaise) : "");
   const [startDate, setStartDate] = useState(subscription?.startDate ?? todayISO());
-  const [durationMonths, setDurationMonths] = useState(String(subscription?.durationMonths ?? 12));
+  const [endDate, setEndDate] = useState(subscription?.endDate ?? addYearsToISO(todayISO(), 1));
+  const [cadence, setCadence] = useState(subscription?.cadence ?? "monthly");
   const [accountId, setAccountId] = useState(subscription?.accountId ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -8663,7 +9044,8 @@ function SubscriptionForm({
         name,
         amountPaise: parseAmountToPaise(amount),
         startDate,
-        durationMonths: Number.parseInt(durationMonths, 10)
+        endDate,
+        cadence
       };
 
       if (subscription) {
@@ -8676,7 +9058,8 @@ function SubscriptionForm({
         setName("");
         setAmount("");
         setStartDate(todayISO());
-        setDurationMonths("12");
+        setEndDate(addYearsToISO(todayISO(), 1));
+        setCadence("monthly");
         await onSaved("Subscription added.");
       }
     } catch (err) {
@@ -8701,11 +9084,17 @@ function SubscriptionForm({
         <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={startDate} onChange={(event) => setStartDate(event.target.value)} required />
       </label>
       <label>
-        Duration
-        <select value={durationMonths} onChange={(event) => setDurationMonths(event.target.value)} required>
-          {AUTOPAY_DURATION_MONTH_OPTIONS.map((months) => (
-            <option key={months} value={months}>
-              {months} {months === 1 ? "month" : "months"}
+        {/* The day it stops, not a count of months. With a quarterly or yearly cadence a count
+            no longer tells you when, and a date does not have to be read twice. */}
+        End date
+        <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={endDate} onChange={(event) => setEndDate(event.target.value)} required />
+      </label>
+      <label>
+        Comes out
+        <select value={cadence} onChange={(event) => setCadence(event.target.value)} required>
+          {PAYMENT_CADENCES.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.label}
             </option>
           ))}
         </select>
@@ -11065,9 +11454,20 @@ function SummaryCard({
 /** A money figure that counts up to its value when it first appears or changes. */
 function CountUp({ paise, label }: { paise: number; label: string }) {
   const ref = useRef<HTMLSpanElement>(null);
-  /* The full amount, which is also what the hidden label beside it says, so the two cannot
-     disagree about what this tile is worth. */
-  useCountUp(ref, paise, formatINR);
+  /*
+   * The figure that counts up has to land on the label beside it.
+   *
+   * The comment here used to claim the two could not disagree, and they did. The label is
+   * whatever the caller formatted -- whole rupees, for every headline tile in this app -- while
+   * the animation always used `formatINR`, which shows paise whenever the amount has any. So a
+   * tile asked for "Rs 2,21,380" and painted "Rs 2,21,379.79", and the rounding the ledger
+   * totals were given months ago reached the screen reader and not the screen. The owner
+   * reported that figure twice and I twice called it a stale bundle.
+   *
+   * The precision now comes from the label: no decimal point in it, no decimals in the count.
+   * Whatever the caller formatted is what the tile ends on, which is what was always promised.
+   */
+  useCountUp(ref, paise, label.includes(".") ? formatINR : formatINRWhole);
   return (
     <>
       <span className="visually-hidden">{label}</span>

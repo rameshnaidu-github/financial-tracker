@@ -16,6 +16,7 @@ import { CaretDown } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { CaretLeft } from "@phosphor-icons/react/dist/csr/CaretLeft";
 import { CaretRight } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { ChartBar } from "@phosphor-icons/react/dist/csr/ChartBar";
+import { ShieldCheck as PhShieldCheck } from "@phosphor-icons/react/dist/csr/ShieldCheck";
 import { Check as PhCheck } from "@phosphor-icons/react/dist/csr/Check";
 import { CircleNotch } from "@phosphor-icons/react/dist/csr/CircleNotch";
 import { CreditCard as PhCreditCard } from "@phosphor-icons/react/dist/csr/CreditCard";
@@ -62,6 +63,9 @@ function wrap(Glyph: PhosphorIcon, name: string): UiIcon {
 }
 
 export const Archive = wrap(PhArchive, "Archive");
+/* Insurance: cover that is in force. The tick is the whole point -- a bare shield reads as
+   security or privacy, which this application also has opinions about. */
+export const ShieldCheck = wrap(PhShieldCheck, "ShieldCheck");
 export const Megaphone = wrap(PhMegaphone, "Megaphone");
 export const ArrowDownUp = wrap(ArrowsDownUp, "ArrowDownUp");
 /* Money leaving, money arriving, and the balance between them -- the ledger's three totals. */

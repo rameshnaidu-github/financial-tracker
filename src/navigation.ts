@@ -17,6 +17,7 @@ export type Page =
   | "cardEmis"
   | "vacations"
   | "subscriptions"
+  | "insurance"
   | "categories"
   | "whatsNew"
   | "faq"
@@ -29,6 +30,7 @@ export const NAV_ORDER: Page[] = [
   "reports",
   "budgets",
   "subscriptions",
+  "insurance",
   "vacations",
   "accounts",
   "loans",
@@ -104,6 +106,7 @@ const mobileLabels: Record<Page, string> = {
   cardEmis: "EMI",
   vacations: "Trips",
   subscriptions: "Auto",
+  insurance: "Cover",
   categories: "Cats",
   whatsNew: "New",
   faq: "FAQ",

@@ -151,8 +151,10 @@ export type AutopaySubscription = {
   name: string;
   amountPaise: number;
   startDate: string;
-  durationMonths: number;
-  expiryDate: string;
+  /** Exclusive: nothing is taken on this day or after it. */
+  endDate: string;
+  /** "monthly", "quarterly" or "yearly" -- how often the amount comes out. */
+  cadence: string;
   paymentCount: number;
   status: "active" | "expired";
   /** The bank it is taken from. Without one it only reminds; with one it pays itself. */
@@ -201,8 +203,34 @@ export type Bootstrap = {
   loans: Loan[];
   cardEmis: Loan[];
   subscriptions: AutopaySubscription[];
+  insurancePolicies: InsurancePolicy[];
   investments: Investment[];
   vacations: Vacation[];
+};
+
+/**
+ * A policy, and the premium it takes.
+ *
+ * Shaped like an AutoPay on purpose -- the money leaves the same way and the same engine takes
+ * it. What a policy adds is the kind of cover, the insurer's number for it, and a date cover
+ * actually stops on rather than a schedule that happens to run out.
+ */
+export type InsurancePolicy = {
+  id: string;
+  /** "health", "term", "vehicle" or "other". */
+  kind: string;
+  name: string;
+  policyNumber: string;
+  startDate: string;
+  /** Exclusive: cover ends on this day and no premium falls on it. */
+  endDate: string;
+  cadence: string;
+  premiumPaise: number;
+  paymentCount: number;
+  status: "active" | "expired";
+  /** The account it is taken from. Without one it only reminds. */
+  accountId: string | null;
+  accountName: string | null;
 };
 
 export type UserProfile = {

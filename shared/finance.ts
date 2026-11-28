@@ -4,6 +4,15 @@ export const CURRENCY = "INR";
 export const CURRENCY_SYMBOL = "₹";
 export const WEEK_START = "monday";
 export const AUTOPAY_SUBCATEGORY_ID = "sub_autopay";
+/**
+ * Where an insurance premium is filed.
+ *
+ * Not a new SubType: "Insurance" has been in the seeded list since the beginning, with its own
+ * shield and its own colour, and premiums entered by hand have been going there all along. The
+ * ones this application takes by itself go to the same place, so a year's insurance is one line
+ * on Reports whoever entered it.
+ */
+export const INSURANCE_SUBCATEGORY_ID = "sub_insurance";
 export const MUTUAL_FUNDS_SUBCATEGORY_ID = "sub_invest_mutual_funds";
 /** Where money a holding pays back is filed: interest earned, not a sale and not odd income. */
 export const INTEREST_SUBCATEGORY_ID = "sub_income_interest";
@@ -101,6 +110,52 @@ export function investmentTypeLabel(type: string | undefined) {
 
 export function payoutMonths(frequency: string) {
   return PAYOUT_FREQUENCIES.find((item) => item.id === frequency)?.months ?? 0;
+}
+
+/**
+ * How often a thing that pays itself comes out.
+ *
+ * Taken from the list above rather than written again, so "quarterly is three months" is stated
+ * once in this application instead of twice and drifting. Half-yearly is left out because the
+ * owner asked for three; it is one filter away if it is ever wanted, and the month step for it
+ * already exists.
+ */
+export const PAYMENT_CADENCES = PAYOUT_FREQUENCIES.filter((item) => item.id !== "half_yearly");
+
+export const PAYMENT_CADENCE_IDS = PAYMENT_CADENCES.map((item) => item.id) as [string, ...string[]];
+
+/** Months between one payment and the next. Zero for a cadence this application does not know,
+    which callers must treat as "do not schedule anything" rather than as "every month". */
+export function cadenceMonths(cadence: string) {
+  return PAYMENT_CADENCES.find((item) => item.id === cadence)?.months ?? 0;
+}
+
+export function cadenceLabel(cadence: string) {
+  return PAYMENT_CADENCES.find((item) => item.id === cadence)?.label ?? "Monthly";
+}
+
+/**
+ * What a policy covers.
+ *
+ * Four kinds and no more, because the owner named four. "Other" is not a gap in the list, it is
+ * the honest answer for a policy that is none of the three -- travel, home, pet -- and giving it
+ * a name stops the list growing every time one of those turns up.
+ */
+export const INSURANCE_KINDS = [
+  { id: "health", label: "Health", icon: "heart-pulse" },
+  { id: "term", label: "Term", icon: "shield" },
+  { id: "vehicle", label: "Vehicle", icon: "car" },
+  { id: "other", label: "Other", icon: "receipt" }
+] as const;
+
+export const INSURANCE_KIND_IDS = INSURANCE_KINDS.map((item) => item.id) as [string, ...string[]];
+
+export function insuranceKindLabel(kind: string) {
+  return INSURANCE_KINDS.find((item) => item.id === kind)?.label ?? "Other";
+}
+
+export function insuranceKindIcon(kind: string) {
+  return INSURANCE_KINDS.find((item) => item.id === kind)?.icon ?? "receipt";
 }
 
 export const INVESTMENT_TYPE_IDS = INVESTMENT_TYPES.map((type) => type.id) as [string, ...string[]];
@@ -509,25 +564,93 @@ export const updateLoanSchema = z
   })
   .refine((value) => Object.keys(value).length > 0, "No loan changes provided.");
 
-export const createAutopaySubscriptionSchema = z.object({
-  name: z.string().trim().min(2).max(90),
-  amountPaise: positivePaiseSchema,
-  startDate: dateSchema,
-  durationMonths: z.number().int().positive().max(600),
-  /** The bank it is taken from. Without one it is a reminder; with one it pays itself. */
-  accountId: idSchema.optional()
-});
+export const paymentCadenceSchema = z.enum(PAYMENT_CADENCE_IDS);
+
+/**
+ * An end date, where there used to be a count of months.
+ *
+ * The count was fine while everything was monthly: twelve months and twelve payments were the
+ * same statement. With a quarterly or a yearly cadence they stop being the same, and "runs for
+ * 36 months" has to be read twice to learn when it stops. A date says it once. Policies were
+ * described with a start and an end from the beginning, so this is now one rule for both.
+ *
+ * `endDate` is exclusive: nothing is taken on it or after it, which is how the month count
+ * behaved -- a twelve-month subscription starting in January took January to December and not
+ * the following January.
+ */
+export const createAutopaySubscriptionSchema = z
+  .object({
+    name: z.string().trim().min(2).max(90),
+    amountPaise: positivePaiseSchema,
+    startDate: dateSchema,
+    endDate: dateSchema,
+    cadence: paymentCadenceSchema.default("monthly"),
+    /** The bank it is taken from. Without one it is a reminder; with one it pays itself. */
+    accountId: idSchema.optional()
+  })
+  .refine((value) => value.endDate > value.startDate, {
+    message: "The end date has to be after the start date.",
+    path: ["endDate"]
+  });
 
 export const updateAutopaySubscriptionSchema = z
   .object({
     name: z.string().trim().min(2).max(90).optional(),
     amountPaise: positivePaiseSchema.optional(),
     startDate: dateSchema.optional(),
-    durationMonths: z.number().int().positive().max(600).optional(),
+    endDate: dateSchema.optional(),
+    cadence: paymentCadenceSchema.optional(),
     accountId: clearable(idSchema),
     isArchived: z.boolean().optional()
   })
-  .refine((value) => Object.keys(value).length > 0, "No subscription changes provided.");
+  .refine((value) => Object.keys(value).length > 0, "No subscription changes provided.")
+  /* Only when both are being set at once. One of them alone is checked against the stored
+     other, which this schema cannot see; the service does that. */
+  .refine((value) => !value.startDate || !value.endDate || value.endDate > value.startDate, {
+    message: "The end date has to be after the start date.",
+    path: ["endDate"]
+  });
+
+/**
+ * A policy.
+ *
+ * The policy number is the one field here that is not a figure or a date, and it is not
+ * validated beyond a length: insurers number policies in every format there is, and a rule
+ * guessed from three examples would reject the fourth.
+ */
+export const createInsurancePolicySchema = z
+  .object({
+    kind: z.enum(INSURANCE_KIND_IDS),
+    name: z.string().trim().min(2).max(90),
+    policyNumber: z.string().trim().min(1).max(60),
+    startDate: dateSchema,
+    endDate: dateSchema,
+    cadence: paymentCadenceSchema.default("yearly"),
+    premiumPaise: positivePaiseSchema,
+    /** As with an AutoPay: no account means it only reminds. */
+    accountId: idSchema.optional()
+  })
+  .refine((value) => value.endDate > value.startDate, {
+    message: "The end date has to be after the start date.",
+    path: ["endDate"]
+  });
+
+export const updateInsurancePolicySchema = z
+  .object({
+    kind: z.enum(INSURANCE_KIND_IDS).optional(),
+    name: z.string().trim().min(2).max(90).optional(),
+    policyNumber: z.string().trim().min(1).max(60).optional(),
+    startDate: dateSchema.optional(),
+    endDate: dateSchema.optional(),
+    cadence: paymentCadenceSchema.optional(),
+    premiumPaise: positivePaiseSchema.optional(),
+    accountId: clearable(idSchema)
+  })
+  .refine((value) => Object.keys(value).length > 0, "No policy changes provided.")
+  .refine((value) => !value.startDate || !value.endDate || value.endDate > value.startDate, {
+    message: "The end date has to be after the start date.",
+    path: ["endDate"]
+  });
 
 export const createBudgetLineSchema = z.object({
   month: monthSchema,
@@ -975,6 +1098,10 @@ export type CreateLoanInput = z.infer<typeof createLoanSchema>;
 export type UpdateLoanInput = z.infer<typeof updateLoanSchema>;
 export type CreateAutopaySubscriptionInput = z.infer<typeof createAutopaySubscriptionSchema>;
 export type UpdateAutopaySubscriptionInput = z.infer<typeof updateAutopaySubscriptionSchema>;
+export type PaymentCadence = z.infer<typeof paymentCadenceSchema>;
+export type InsuranceKind = (typeof INSURANCE_KINDS)[number]["id"];
+export type CreateInsurancePolicyInput = z.infer<typeof createInsurancePolicySchema>;
+export type UpdateInsurancePolicyInput = z.infer<typeof updateInsurancePolicySchema>;
 export type CreateBudgetLineInput = z.infer<typeof createBudgetLineSchema>;
 export type UpdateBudgetLineInput = z.infer<typeof updateBudgetLineSchema>;
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
