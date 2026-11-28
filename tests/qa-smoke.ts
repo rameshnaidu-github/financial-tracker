@@ -6327,6 +6327,44 @@ test("upcoming payments list a yearly AutoPay only in the month it debits", asyn
   assert(await listed("2027-01-07"), "a yearly AutoPay was not listed as upcoming in its own month");
 });
 
+/* ---------- review fix 7: the sign-in limit holds across server instances ---------- */
+
+test("ten failed sign-ins lock that email for a while, wherever the attempts land", async () => {
+  /*
+   * The limit used to be counted in memory, and on Vercel every function instance keeps its own
+   * count and loses it on a cold start, so ten tries became ten per instance. Counted in the
+   * database instead, it is one count however many instances the attempts are spread over.
+   */
+  const auth = await import("../server/auth.ts");
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const email = `lockout-${suffix}@example.test`;
+  const later = new Date(Date.now() + 3 * 86_400_000).toISOString().replace("T", " ").slice(0, 19);
+  await dbModule.db.prepare("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)")
+    .run(randomUUID(), email, await auth.hashPassword("right-horse-battery"), later);
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    assert((await auth.signIn(email, `wrong-${attempt}`)) === undefined, "a wrong password signed in");
+  }
+  let status = 0;
+  try { await auth.signIn(email, "right-horse-battery"); } catch (error) { status = (error as { statusCode?: number }).statusCode ?? -1; }
+  assert(status === 429, `after ten failures the right password should be refused with 429, got ${status || "a session"}`);
+
+  // Case and spaces do not make it a different account.
+  status = 0;
+  try { await auth.signIn(`  ${email.toUpperCase()} `, "right-horse-battery"); } catch (error) { status = (error as { statusCode?: number }).statusCode ?? -1; }
+  assert(status === 429, "the lock was sidestepped by changing the email's case");
+
+  // Another account is not affected.
+  const otherEmail = `lockout-other-${suffix}@example.test`;
+  await dbModule.db.prepare("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)")
+    .run(randomUUID(), otherEmail, await auth.hashPassword("other-horse"), later);
+  assert((await auth.signIn(otherEmail, "other-horse")) !== undefined, "one locked account locked out another");
+
+  // Failures older than the window no longer count.
+  await dbModule.db.prepare("UPDATE sign_in_failures SET failed_at = '2000-01-01T00:00:00.000Z' WHERE email = ?").run(email);
+  assert((await auth.signIn(email, "right-horse-battery")) !== undefined, "old failures still locked the account");
+});
+
 let failed = 0;
 let ran = 0;
 

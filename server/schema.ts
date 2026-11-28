@@ -63,6 +63,15 @@ CREATE TABLE IF NOT EXISTS autopay_payments (
   UNIQUE (user_id, transaction_id)
 );
 
+-- Failed sign-ins, so the limit on guessing holds across server instances. Keyed by the email
+-- as typed (lower-cased), not by user, because it has to work for addresses with no account too
+-- and must not reveal which ones do. No user_id: nobody is signed in yet.
+CREATE TABLE IF NOT EXISTS sign_in_failures (
+  email TEXT NOT NULL,
+  failed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sign_in_failures_email ON sign_in_failures(email, failed_at);
+
 CREATE TABLE IF NOT EXISTS insurance_payments (
   id TEXT NOT NULL,
   user_id TEXT NOT NULL,
@@ -698,6 +707,7 @@ ALTER TABLE autopay_payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE autopay_subscriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE insurance_payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE insurance_policies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sign_in_failures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE budget_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE category_types ENABLE ROW LEVEL SECURITY;
 ALTER TABLE entry_batches ENABLE ROW LEVEL SECURITY;
