@@ -6015,6 +6015,41 @@ test("the insurance reminder window is a setting, and a bad one falls back to th
   );
 });
 
+/* ---------- loanfields-19: two figures must not share one name ---------- */
+
+test("the loan form does not call the opening balance what the card calls the current one", () => {
+  /*
+   * A label check, because the fault was a label.
+   *
+   * The edit form's balance field is bound to startingOutstandingPaise and the loan card's row
+   * is bound to outstandingPaise. Those are different figures on any loan with a recorded EMI,
+   * and they were both called "Current outstanding". Typing the card's number into the form --
+   * which is what one name for two things invites -- silently moves the loan's baseline and
+   * re-splits every payment behind it.
+   *
+   * Read out of the source because that is where a label lives; the suite cannot mount React.
+   */
+  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const form = app.slice(app.indexOf("function LoanForm("), app.indexOf("function LoanCard("));
+  const card = app.slice(app.indexOf("function LoanCard("));
+
+  assert(/setOutstanding\(event\.target\.value\)/.test(form), "the loan form's balance field was not found; this guard is checking nothing");
+  assert(/loan\.outstandingPaise/.test(card), "the loan card's current-outstanding figure was not found; this guard is checking nothing");
+
+  /* The exact words the card uses for the live balance must not appear as the form's label.
+     Comments are stripped first: this file explains the collision, and explaining it is not
+     committing it. */
+  const withoutComments = form.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  assert(
+    !/>\s*Current outstanding/.test(withoutComments) && !/\n\s*Current outstanding\s*\n/.test(withoutComments),
+    "the loan form labels its opening-balance field \"Current outstanding\", which is what the card calls a different figure."
+  );
+  assert(
+    /Opening outstanding/.test(withoutComments),
+    "the loan form's balance field lost its label; it should say what it holds."
+  );
+});
+
 let failed = 0;
 let ran = 0;
 

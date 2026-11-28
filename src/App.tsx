@@ -7119,11 +7119,30 @@ function LoanForm({
           <input value={principal} onChange={(event) => setPrincipal(event.target.value)} placeholder="₹0" inputMode="decimal" required />
         </label>
         <label>
-          Current outstanding
+          {/*
+            * "Opening outstanding", not "Current outstanding".
+            *
+            * This field is bound to `startingOutstandingPaise` -- the balance before the
+            * earliest EMI recorded here -- while the loan card has a row called "Current
+            * outstanding" bound to `outstandingPaise`, which is that balance less every
+            * payment since. Both were called the same thing.
+            *
+            * They are equal on a loan with no payments yet, which is every loan at the moment
+            * it is entered, so the collision stays invisible until the loan has been used.
+            * Measured on a loan with three EMIs recorded: the card said Rs 4,54,548.50 and
+            * this field said Rs 5,00,000. Typing the card's figure in here -- which is what
+            * the old label invited -- moved the outstanding to Rs 4,07,719.78, added
+            * Rs 46,828.72 to principal paid and Rs 13,141.31 to interest paid, and took three
+            * months off the remaining term. All of it silent, on a record of real money.
+            */}
+          Opening outstanding
           <input value={outstanding} onChange={(event) => setOutstanding(event.target.value)} placeholder="₹0" inputMode="decimal" required />
         </label>
       </div>
-      <small className="field-hint">Planning to add past EMIs too? Enter the outstanding before the earliest one.</small>
+      <small className="field-hint">
+        The balance this loan started at, before the earliest EMI recorded here — not the
+        balance today, which the card works out for you and shows as Current outstanding.
+      </small>
       <div className="form-pair form-pair-tight">
         <label>
           Month and year taken
