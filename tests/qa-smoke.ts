@@ -6377,6 +6377,17 @@ test("a counting tile ends on exactly the text its label carries, in every forma
   }
 });
 
+/* ---------- review fix 9: the form's default end date is the date the server would compute ---------- */
+
+test("a year on from a leap day is the day the server says, in the form as on the server", async () => {
+  const { addYearsToISO } = await import("../src/format.ts");
+  // The oracle is the server's own month arithmetic, not a re-implementation of it.
+  for (const [start, years] of [["2024-02-29", 1], ["2024-02-29", 4], ["2026-01-31", 1], ["2026-11-28", 1]] as const) {
+    const server = services.addMonthsToIsoDate(start, years * 12);
+    assert(addYearsToISO(start, years) === server, `${start} + ${years} year: the form says ${addYearsToISO(start, years)}, the server ${server}.`);
+  }
+});
+
 let failed = 0;
 let ran = 0;
 
