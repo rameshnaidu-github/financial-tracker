@@ -4842,20 +4842,17 @@ function ReportsPage({
   return (
     <div className="page-grid">
       <Panel
-        title="Category Report"
-        action={
-          <div className="report-filters">
-            <label>
-              From
-              <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={from} onChange={(event) => setFrom(event.target.value)} />
-            </label>
-            <label>
-              To
-              <input type="date" min={EARLIEST_DATE} max={LATEST_DATE} value={to} onChange={(event) => setTo(event.target.value)} />
-            </label>
-          </div>
-        }
+        title="By category"
       >
+        {/*
+          * One period, one place to set it.
+          *
+          * There were three: a pair of date inputs in the panel header, a month stepper, and
+          * four preset pills -- all writing the same two values, stacked one above the other,
+          * and together the reason the first figure on a phone sat 600px down the page. The
+          * presets and the stepper cover what is actually asked for; the exact range is behind
+          * the last pill, one tap away, for the fortnight nobody has a preset for.
+          */}
         <ReportPeriodBar
           from={from}
           to={to}
@@ -5277,9 +5274,19 @@ function TrendChart({
       <line className="trend-axis" x1={pad.left} x2={width - pad.right} y1={baseline} y2={baseline} />
 
       {variant === "bar" ? (
-        centers.map((point) => {
+        centers.map((point, index) => {
           const barWidth = Math.min(step * 0.55, 52);
           const barHeight = Math.max(baseline - point.y, point.amountPaise > 0 ? 2 : 0);
+          /*
+           * One accent, on the month being spent in now.
+           *
+           * Every bar was the accent -- counted, twenty-two of them in one shade across two
+           * charts -- and an accent on everything marks nothing. The month you are in is the
+           * one you can still do something about, so it keeps the colour and the rest step
+           * back to a neutral. The shape still carries the comparison; the colour now carries
+           * where you are in it.
+           */
+          const isLatest = index === centers.length - 1;
           return (
             <g key={point.label}>
               <title>{`${point.label}: ${formatINR(point.amountPaise)}`}</title>
@@ -5289,7 +5296,8 @@ function TrendChart({
                 width={barWidth}
                 height={barHeight}
                 rx={5}
-                fill={color}
+                className={isLatest ? "trend-bar is-latest" : "trend-bar"}
+                fill={isLatest ? color : undefined}
               />
             </g>
           );
@@ -9537,45 +9545,16 @@ function CashflowSummary({ types }: { types: MonthlyReport["types"] }) {
         </div>
       </div>
 
-      <CashflowEquation label="Inflow" total={inflowPaise} parts={inflowParts} tone="in" />
-      <CashflowEquation label="Outflow" total={outflowPaise} parts={outflowParts} tone="out" />
-    </div>
-  );
-}
-
-function CashflowEquation({
-  label,
-  total,
-  parts,
-  tone
-}: {
-  label: string;
-  total: number;
-  parts: CashflowPart[];
-  tone: "in" | "out";
-}) {
-  return (
-    <div className={`cashflow-equation-row cashflow-section ${tone}`}>
-      <div className="cashflow-equation-parts" aria-label={`${label} components`}>
-        {parts.length === 0 ? (
-          <span className="cashflow-equation-empty">Nothing yet</span>
-        ) : (
-          parts.map((part, index) => (
-            <span className="cashflow-equation-piece" key={part.id}>
-              {index > 0 && <span className="cashflow-equation-plus">+</span>}
-              <span className="cashflow-equation-part" style={{ "--cat-color": part.color } as React.CSSProperties}>
-                <span className="cashflow-equation-name">{part.name}</span>
-                <span className="cashflow-equation-amount">{formatINR(part.amountPaise)}</span>
-              </span>
-            </span>
-          ))
-        )}
-      </div>
-      <span className="cashflow-equation-eq">=</span>
-      <div className="cashflow-equation-total-card">
-        <span>{label}</span>
-        <strong className={tone === "in" ? "amount-in" : "amount-out"}>{formatINR(total)}</strong>
-      </div>
+      {/*
+        * The two rows that used to sit here are gone.
+        *
+        * They broke each total into its parts and then restated the total: "Salary = Inflow",
+        * "Expense = Outflow". Measured on one screen, that put the same two figures on the page
+        * six times each -- twelve printings of two numbers, read before the first chart. Where
+        * a flow really does have several parts, the composition is not lost: the mix below
+        * shows exactly that, as a donut for the outflow and a ranked list for the SubTypes,
+        * with the Income and Expense toggle covering the other side.
+        */}
     </div>
   );
 }
@@ -9605,7 +9584,6 @@ function OutflowMixChart({
       <div className="report-chart-header">
         <div>
           <span>Outflow mix</span>
-          <strong>{formatINR(outflowPaise)}</strong>
         </div>
       </div>
       <div className="pie-panel">
@@ -9679,23 +9657,35 @@ function ReportTypeAnalytics({
           ))}
         </div>
       </div>
+      {/*
+        * A ranked list, where there used to be a second donut.
+        *
+        * Two rings of identical size answered the same kind of question twice -- measured, both
+        * were exactly 228 by 228 -- so neither led, and a page whose whole job is one chart had
+        * no main chart. The outflow keeps the ring, because a share of a whole is what a ring
+        * is for. The SubTypes are better as a list: it puts them in order, which a ring cannot,
+        * and it still reads at twenty rows, where a ring stops at about six.
+        *
+        * The ring is still a tap away on the switch. This decides what it opens on, not what
+        * it can show.
+        */}
       <div className="pie-panel">
-        <div className="pie-chart">
-          <DonutChart
-            segments={chartSegments}
-            totalPaise={selected.amountPaise}
-            ariaLabel={`${selected.name} SubType percentage chart`}
-            onSegmentClick={
-              onSubTypeClick && isDrillableId(selected.typeId)
-                ? (segment) => onSubTypeClick(selected.typeId, segment.id)
-                : undefined
-            }
-            centerLabel="Total"
-            centerValue={formatINRWhole(selected.amountPaise)}
-            centerCountPaise={selected.amountPaise}
-            className="report-donut-chart"
-          />
-        </div>
+        <MixChart
+          segments={chartSegments}
+          totalPaise={selected.amountPaise}
+          ariaLabel={`${selected.name} SubType mix`}
+          onSegmentClick={
+            onSubTypeClick && isDrillableId(selected.typeId)
+              ? (segment) => onSubTypeClick(selected.typeId, segment.id)
+              : undefined
+          }
+          centerLabel="Total"
+          centerValue={formatINRWhole(selected.amountPaise)}
+          centerCountPaise={selected.amountPaise}
+          className="report-donut-chart"
+          emptyText="No SubType breakdown for this period."
+          defaultMode="bar"
+        />
       </div>
     </div>
   );
@@ -9852,6 +9842,7 @@ function MixChart({
   centerCountPaise,
   className = "",
   emptyText,
+  defaultMode,
   onSegmentClick
 }: {
   segments: DonutSegment[];
@@ -9863,6 +9854,8 @@ function MixChart({
   centerCountPaise?: number;
   className?: string;
   emptyText: string;
+  /** Which view it opens on, where the caller knows better than the limits rule below. */
+  defaultMode?: "pie" | "bar";
   onSegmentClick?: (segment: DonutSegment) => void;
 }) {
   /*
@@ -9875,7 +9868,7 @@ function MixChart({
    * is the one the title promises.
    */
   const hasLimits = segments.some((segment) => segment.maxPaise !== undefined && segment.maxPaise > 0);
-  const [mode, setMode] = useState<"pie" | "bar">(hasLimits ? "bar" : "pie");
+  const [mode, setMode] = useState<"pie" | "bar">(defaultMode ?? (hasLimits ? "bar" : "pie"));
 
   if (segments.length === 0 || totalPaise <= 0) {
     return <EmptyState text={emptyText} />;
@@ -11722,6 +11715,7 @@ function ReportPeriodBar({
   to: string;
   onChange: (from: string, to: string) => void;
 }) {
+  const [customOpen, setCustomOpen] = useState(false);
   const thisMonth = todayISO().slice(0, 7);
   const anchorMonth = (from || `${thisMonth}-01`).slice(0, 7);
   const isWholeMonth = from === `${anchorMonth}-01` && to === monthEndForInput(anchorMonth);
@@ -11732,6 +11726,8 @@ function ReportPeriodBar({
     { label: "Last 3 months", from: `${shiftMonth(thisMonth, -2)}-01`, to: monthEndForInput(thisMonth) },
     { label: "This year", from: `${thisMonth.slice(0, 4)}-01-01`, to: monthEndForInput(thisMonth) }
   ];
+
+  const matchesAPreset = presets.some((preset) => preset.from === from && preset.to === to) || isWholeMonth;
 
   return (
     <div className="report-period-bar">
@@ -11769,7 +11765,47 @@ function ReportPeriodBar({
             </button>
           );
         })}
+        {/*
+          * The exact range, as the last pill rather than as two date fields above everything.
+          *
+          * It lights up on its own when the dates match no preset, so a range arrived at from
+          * a link or a back button is not silently unlabelled -- and opening it is one tap,
+          * which is the right cost for the thing asked for least.
+          */}
+        <button
+          type="button"
+          className={`filter-chip${customOpen || !matchesAPreset ? " active" : ""}`}
+          aria-pressed={customOpen || !matchesAPreset}
+          aria-expanded={customOpen}
+          onClick={() => setCustomOpen((open) => !open)}
+        >
+          Custom range
+        </button>
       </div>
+      {(customOpen || !matchesAPreset) && (
+        <div className="report-custom-range">
+          <label>
+            From
+            <input
+              type="date"
+              min={EARLIEST_DATE}
+              max={LATEST_DATE}
+              value={from}
+              onChange={(event) => onChange(event.target.value, to)}
+            />
+          </label>
+          <label>
+            To
+            <input
+              type="date"
+              min={EARLIEST_DATE}
+              max={LATEST_DATE}
+              value={to}
+              onChange={(event) => onChange(from, event.target.value)}
+            />
+          </label>
+        </div>
+      )}
     </div>
   );
 }

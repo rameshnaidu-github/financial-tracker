@@ -6439,3 +6439,28 @@ button.budget-hint-chip:focus-visible {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: color-mix(in srgb, var(--danger) 72%, var(--text));
 }
+
+/* ---------- The trend chart's one accent ---------- */
+/*
+ * Every bar used to be the accent. Twenty-two bars in one green across two charts, which is an
+ * accent spent on everything and therefore on nothing. The months that have been and gone are
+ * a neutral step -- still readable, still comparable, because the comparison is carried by the
+ * height -- and the colour is kept for the month still in progress.
+ */
+.trend-bar:not(.is-latest) {
+  fill: color-mix(in srgb, var(--muted) 46%, transparent);
+}
+
+
+/* ---------- Two charts, one of them the main one ---------- */
+/*
+ * Trends and Budget vs actual were the same size to the pixel -- both 509 by 241 -- which is
+ * two charts and no main chart. Trends answers "what has this been doing", which is the
+ * question this page exists for, so it takes the room. Budget vs actual answers a narrower one
+ * about a single SubType, and reads perfectly well in less.
+ */
+@media (min-width: 1100px) {
+  .report-panel-pair {
+    grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  }
+}
